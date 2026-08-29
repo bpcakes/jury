@@ -7,7 +7,7 @@ on:
       - "**/AGENTS.md"
       - "agent-map.md"
 
-      - "crates/**"
+      - "**"
 
       - "scripts/jig"
       - "scripts/install-jig.sh"
@@ -20,7 +20,7 @@ on:
       - "**/AGENTS.md"
       - "agent-map.md"
 
-      - "crates/**"
+      - "**"
 
       - "scripts/jig"
       - "scripts/install-jig.sh"

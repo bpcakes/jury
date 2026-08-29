@@ -4,7 +4,48 @@ on:
   pull_request:
     paths:
 
-      - "crates/**"
+
+
+      - "**"
+
+      - "**/*.rs"
+
+      - "**/.cargo/**"
+
+      - "**/.clippy.toml"
+
+      - "**/.rustfmt.toml"
+
+      - "**/Cargo.lock"
+
+      - "**/Cargo.toml"
+
+      - "**/clippy.toml"
+
+      - "**/rust-toolchain"
+
+      - "**/rust-toolchain.toml"
+
+      - "**/rustfmt.toml"
+
+      - ".cargo/**"
+
+      - ".clippy.toml"
+
+      - ".rustfmt.toml"
+
+      - "Cargo.lock"
+
+      - "Cargo.toml"
+
+      - "clippy.toml"
+
+      - "rust-toolchain"
+
+      - "rust-toolchain.toml"
+
+      - "rustfmt.toml"
+
 
       - ".jig.toml"
       - ".agent/jig-contract.json"
@@ -18,7 +59,48 @@ on:
       - "main"
     paths:
 
-      - "crates/**"
+
+
+      - "**"
+
+      - "**/*.rs"
+
+      - "**/.cargo/**"
+
+      - "**/.clippy.toml"
+
+      - "**/.rustfmt.toml"
+
+      - "**/Cargo.lock"
+
+      - "**/Cargo.toml"
+
+      - "**/clippy.toml"
+
+      - "**/rust-toolchain"
+
+      - "**/rust-toolchain.toml"
+
+      - "**/rustfmt.toml"
+
+      - ".cargo/**"
+
+      - ".clippy.toml"
+
+      - ".rustfmt.toml"
+
+      - "Cargo.lock"
+
+      - "Cargo.toml"
+
+      - "clippy.toml"
+
+      - "rust-toolchain"
+
+      - "rust-toolchain.toml"
+
+      - "rustfmt.toml"
+
 
       - ".jig.toml"
       - ".agent/jig-contract.json"
@@ -40,6 +122,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+
+
   no-mod-rs:
     name: Check for disallowed mod.rs files
     runs-on: "ubuntu-latest"
@@ -78,4 +162,6 @@ jobs:
         env:
           JIG_DEFAULT_BRANCH: "main"
         run: scripts/check-rust-file-loc.sh "$JIG_DEFAULT_BRANCH"
+
+
 

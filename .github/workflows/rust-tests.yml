@@ -4,40 +4,102 @@ on:
   pull_request:
     paths:
 
-      - "crates/**"
+      - "**"
 
+      - "**/*.rs"
+
+      - "**/.cargo/**"
+
+      - "**/.clippy.toml"
+
+      - "**/.rustfmt.toml"
+
+      - "**/Cargo.lock"
+
+      - "**/Cargo.toml"
+
+      - "**/clippy.toml"
+
+      - "**/rust-toolchain"
+
+      - "**/rust-toolchain.toml"
+
+      - "**/rustfmt.toml"
+
+      - ".cargo/**"
+
+      - ".clippy.toml"
+
+      - ".rustfmt.toml"
+
+      - "Cargo.lock"
 
       - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
+
       - "clippy.toml"
+
+      - "rust-toolchain"
+
+      - "rust-toolchain.toml"
+
+      - "rustfmt.toml"
+
+
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   push:
     branches:
       - "main"
     paths:
 
-      - "crates/**"
+      - "**"
 
+      - "**/*.rs"
+
+      - "**/.cargo/**"
+
+      - "**/.clippy.toml"
+
+      - "**/.rustfmt.toml"
+
+      - "**/Cargo.lock"
+
+      - "**/Cargo.toml"
+
+      - "**/clippy.toml"
+
+      - "**/rust-toolchain"
+
+      - "**/rust-toolchain.toml"
+
+      - "**/rustfmt.toml"
+
+      - ".cargo/**"
+
+      - ".clippy.toml"
+
+      - ".rustfmt.toml"
+
+      - "Cargo.lock"
 
       - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
+
       - "clippy.toml"
+
+      - "rust-toolchain"
+
+      - "rust-toolchain.toml"
+
+      - "rustfmt.toml"
+
+
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   merge_group:
     types:
@@ -53,7 +115,7 @@ concurrency:
 
 jobs:
   fmt:
-    name: scripts/jig check fmt
+    name: scripts/jig check api:fmt
     runs-on: "ubuntu-latest"
     defaults:
       run:
@@ -68,10 +130,10 @@ jobs:
           rustflags: ""
           components: rustfmt
       - name: Run rustfmt check
-        run: scripts/jig check fmt
+        run: scripts/jig check api:fmt
 
   clippy:
-    name: scripts/jig check clippy
+    name: scripts/jig check api:clippy
     runs-on: "ubuntu-latest"
     defaults:
       run:
@@ -89,10 +151,10 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: scripts/jig check clippy
+        run: scripts/jig check api:clippy
 
   test:
-    name: scripts/jig check test-locked
+    name: scripts/jig check api:test-locked
     runs-on: "ubuntu-latest"
     defaults:
       run:
@@ -109,4 +171,4 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
       - name: Run locked Rust tests
-        run: scripts/jig check test-locked
+        run: scripts/jig check api:test-locked

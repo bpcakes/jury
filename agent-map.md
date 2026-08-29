@@ -8,8 +8,7 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
-- [Rust workspace](./crates/AGENTS.md)
-- [Marketing site](./web/AGENTS.md)
+- [crates](./crates/AGENTS.md)
 
 ## Suggested usage pattern
 

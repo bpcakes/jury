@@ -1,72 +1,423 @@
-_commit = ""
-_src_path = "embedded:jig-sh"
-_template_mode = ""
+_commit = "2c0496fade6d9d9d8a24dadced92ed875689bfbb"
+_src_path = "https://github.com/bpcakes/jig-sh.git"
 _template_local_path = ""
-repo_name = "Jury"
-default_branch = "main"
-ci_github_runner = "ubuntu-latest"
-template_source_url = ""
-harness_footprint = "full"
-sqlx_enabled = false
-rust_crate_roots = ["crates"]
-
-schema_dump_enabled = false
-schema_docs_dir = "docs/schema"
-
-
-# Command values are project-owned. Generated Cargo defaults skip cleanly when
-# no manifests are found; with nested manifests they run each one in turn.
-# Review them against this repo's workspace layout and replace them when custom
-# orchestration is needed.
-bootstrap_command = "if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi; if [ -f web/package.json ]; then (cd web && bun install); fi"
-
-rust_fmt_check_command = "if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\\n' 'No Cargo.toml found; skipping cargo fmt.'; fi"
-rust_clippy_command = "if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --locked -- -D warnings; else printf '%s\\n' 'No Cargo.toml found; skipping cargo clippy.'; fi"
-rust_test_command = "if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\\n' 'No Cargo.toml found; skipping cargo test.'; fi"
-rust_test_locked_command = "if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi"
-web_package_manager = "bun"
+_template_mode = ""
 application_contracts_enabled = false
-frontend_workspace_roots = []
-
+ci_github_runner = "ubuntu-latest"
+default_branch = "main"
 frontend_apps = []
+frontend_workspace_roots = []
+harness_footprint = "full"
+repo_name = "Jury"
+rust_crate_roots = ["."]
+schema_docs_dir = "docs/schema"
+schema_dump_enabled = false
+sqlx_enabled = false
+template_source_url = ""
+web_package_manager = "bun"
 
-
-[vault]
-scope = "repo"
-scope_id = "01M13WV95P9XS4AB54DFWQFN3K"
-allow_global = false
+[[agent_tooling.codex.marketplaces]]
+id = "jig-skills"
+plugins = [
+    "jig-rust@jig-skills",
+    "jig-swift@jig-skills",
+    "jig-typescript@jig-skills",
+    "jig-exec-plans@jig-skills",
+]
+source = "bpcakes/jig-skills"
 
 [commands]
+api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --locked -- -D warnings; else printf '%s\n' 'No Cargo.toml found; skipping cargo clippy.'; fi'''
+api_fmt_command = '''if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\n' 'No Cargo.toml found; skipping cargo fmt.'; fi'''
+api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
+api_test_locked_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi'''
+repo_bootstrap_command = '''if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi; if [ -f web/package.json ]; then (cd web && bun install); fi'''
+repo_rust_file_loc_command = "scripts/check-rust-file-loc.sh main"
 rust_file_loc_command = "scripts/check-rust-file-loc.sh main"
 
 [dev]
-proxy_port = 1355
-https_port = 1443
-https = false
-# HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
 http2 = true
+https = false
+https_port = 1443
 lan = false
-# Must be localhost, local, test, internal, or a subdomain below one of them.
+proxy_port = 1355
 tld = "localhost"
-# Set true to discover JavaScript workspace packages that expose dev scripts.
 workspace_discovery = false
 
 [[dev.apps]]
-name = "site"
+argv = [
+    "bun",
+    "run",
+    "dev",
+]
 dir = "web"
 kind = "vite"
-argv = ["bun", "run", "dev"]
-
-
+name = "site"
 
 [execution]
-command_timeout_seconds = 1800
 command_output_limit_bytes = 67108864
+command_timeout_seconds = 1800
 
+[repository]
+affected_ignore = [
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "README.md",
+    "**/README.md",
+    "AGENTS.md",
+    "**/AGENTS.md",
+    "agent-map.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "docs/**",
+    "LICENSE",
+    "LICENSE.*",
+    ".github/**",
+]
+default_check_profile = "verify"
+
+[[repository.actions]]
+description = "Run Rust Clippy with repository policy."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = ["jig.clippy"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+command = "api_clippy_command"
+kind = "command"
+
+[repository.actions.target]
+action = "clippy"
+component = "api"
+
+[[repository.actions]]
+description = "Check Rust formatting."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = ["jig.fmt_check"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+command = "api_fmt_command"
+kind = "command"
+
+[repository.actions.target]
+action = "fmt"
+component = "api"
+
+[[repository.actions]]
+description = "Run Rust tests."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = ["jig.test"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+command = "api_test_command"
+kind = "command"
+
+[repository.actions.target]
+action = "test"
+component = "api"
+
+[[repository.actions]]
+description = "Run Rust tests using the locked dependency graph."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = ["jig.test_locked"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+command = "api_test_locked_command"
+kind = "command"
+
+[repository.actions.target]
+action = "test-locked"
+component = "api"
+
+[[repository.actions]]
+description = "Prepare repository dependencies and local tooling."
+effects = [
+    "worktree",
+    "process",
+    "external",
+]
+intent = "operate"
+legacy_aliases = ["jig.bootstrap"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+command = "repo_bootstrap_command"
+kind = "command"
+
+[repository.actions.target]
+action = "bootstrap"
+component = "repo"
+
+[[repository.actions]]
+description = "Validate the checked-in Jig repository contract."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    ".jig.toml",
+    "scripts/jig",
+]
+intent = "check"
+legacy_aliases = ["jig.contract_check"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "overridden"
+target = "inherited"
+
+[repository.actions.runner]
+kind = "native"
+operation = "jig.contract_check"
+
+[repository.actions.target]
+action = "contract"
+component = "repo"
+
+[[repository.actions]]
+description = "Enforce the changed-file Rust source size policy."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "**/*.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "scripts/check-rust-file-loc.sh",
+]
+intent = "check"
+legacy_aliases = ["jig.rust_file_loc"]
+
+[repository.actions.provenance]
+effects = "inherited"
+inputs = "inherited"
+intent = "inherited"
+legacy_aliases = "inherited"
+runner = "inferred"
+target = "inherited"
+
+[repository.actions.runner]
+command = "repo_rust_file_loc_command"
+kind = "command"
+
+[repository.actions.target]
+action = "rust-file-loc"
+component = "repo"
+
+[[repository.components]]
+adapters = ["rust"]
+description = "Primary application backend."
+id = "api"
+propagate_affected_to_dependents = true
+root = "."
+tags = ["backend"]
+
+[repository.components.provenance]
+adapters = "inferred"
+id = "inferred"
+root = "inferred"
+
+[[repository.components]]
+adapters = ["jig"]
+description = "Repository-wide Jig policy and compatibility actions."
+id = "repo"
+root = "."
+tags = ["repository"]
+
+[repository.components.provenance]
+adapters = "inherited"
+id = "inferred"
+root = "inferred"
+
+[[repository.profiles]]
+description = "Default repository verification targets."
+id = "verify"
+
+[repository.profiles.provenance]
+id = "inferred"
+targets = "inherited"
+
+[[repository.profiles.targets]]
+action = "clippy"
+component = "api"
+
+[[repository.profiles.targets]]
+action = "fmt"
+component = "api"
+
+[[repository.profiles.targets]]
+action = "test"
+component = "api"
+
+[[repository.profiles.targets]]
+action = "contract"
+component = "repo"
+
+[[repository.profiles.targets]]
+action = "rust-file-loc"
+component = "repo"
 
 [status]
 providers = []
 
+[vault]
+allow_global = false
+scope = "repo"
+scope_id = "01M13WV95P9XS4AB54DFWQFN3K"
+
+[[work.gates]]
+conclusion = "success"
+id = "verify"
+kind = "evidence"
+profile = "verify"
 
 [[work.gates]]
 id = "jig-contract"
@@ -78,33 +429,44 @@ id = "rust-file-loc"
 kind = "check"
 tool = "jig.rust_file_loc"
 
-
-
 [[work.gates]]
 id = "rust-fmt"
 kind = "check"
+paths = [
+    "crates/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+]
 tool = "jig.fmt_check"
-paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "rustfmt.toml", ".rustfmt.toml"]
 
 [[work.gates]]
 id = "rust-clippy"
 kind = "check"
+paths = [
+    "crates/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "clippy.toml",
+    ".clippy.toml",
+]
 tool = "jig.clippy"
-paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "clippy.toml", ".clippy.toml"]
 
 [[work.gates]]
 id = "rust-tests"
 kind = "check"
+paths = [
+    "crates/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain*",
+    ".cargo/**",
+    "nextest.toml",
+    ".config/nextest.toml",
+]
 tool = "jig.test"
-paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml"]
-
-
-
-
-
-
-
-[[agent_tooling.codex.marketplaces]]
-id = "jig-skills"
-source = "bpcakes/jig-skills"
-plugins = ["jig-rust@jig-skills", "jig-swift@jig-skills", "jig-typescript@jig-skills", "jig-exec-plans@jig-skills"]

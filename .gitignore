@@ -19,6 +19,8 @@ target/
 /Jury.db
 /Jury.db-*
 
+
+
 # JavaScript and TypeScript
 node_modules/
 .pnp.*
@@ -35,6 +37,7 @@ build/
 .turbo/
 .astro/
 .contract-stage-*/
+.contract-client-stage-*/
 
 # Jig local runtime cache. Keep durable agent state tracked.
 .agent/.cache/*
