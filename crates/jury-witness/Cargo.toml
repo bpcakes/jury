@@ -1,0 +1,19 @@
+[package]
+name = "jury-witness"
+description = "Self-hostable witness service for Jury"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+jury-core = { path = "../jury-core" }
+jury-protocol = { path = "../jury-protocol" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "juryd"
+path = "src/main.rs"
+

@@ -1,0 +1,110 @@
+_commit = ""
+_src_path = "embedded:jig-sh"
+_template_mode = ""
+_template_local_path = ""
+repo_name = "Jury"
+default_branch = "main"
+ci_github_runner = "ubuntu-latest"
+template_source_url = ""
+harness_footprint = "full"
+sqlx_enabled = false
+rust_crate_roots = ["crates"]
+
+schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
+
+
+# Command values are project-owned. Generated Cargo defaults skip cleanly when
+# no manifests are found; with nested manifests they run each one in turn.
+# Review them against this repo's workspace layout and replace them when custom
+# orchestration is needed.
+bootstrap_command = "if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi; if [ -f web/package.json ]; then (cd web && bun install); fi"
+
+rust_fmt_check_command = "if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\\n' 'No Cargo.toml found; skipping cargo fmt.'; fi"
+rust_clippy_command = "if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --locked -- -D warnings; else printf '%s\\n' 'No Cargo.toml found; skipping cargo clippy.'; fi"
+rust_test_command = "if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\\n' 'No Cargo.toml found; skipping cargo test.'; fi"
+rust_test_locked_command = "if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi"
+web_package_manager = "bun"
+application_contracts_enabled = false
+frontend_workspace_roots = []
+
+frontend_apps = []
+
+
+[vault]
+scope = "repo"
+scope_id = "01M13WV95P9XS4AB54DFWQFN3K"
+allow_global = false
+
+[commands]
+rust_file_loc_command = "scripts/check-rust-file-loc.sh main"
+
+[dev]
+proxy_port = 1355
+https_port = 1443
+https = false
+# HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
+http2 = true
+lan = false
+# Must be localhost, local, test, internal, or a subdomain below one of them.
+tld = "localhost"
+# Set true to discover JavaScript workspace packages that expose dev scripts.
+workspace_discovery = false
+
+[[dev.apps]]
+name = "site"
+dir = "web"
+kind = "vite"
+argv = ["bun", "run", "dev"]
+
+
+
+[execution]
+command_timeout_seconds = 1800
+command_output_limit_bytes = 67108864
+
+
+[status]
+providers = []
+
+
+[[work.gates]]
+id = "jig-contract"
+kind = "check"
+tool = "jig.contract_check"
+
+[[work.gates]]
+id = "rust-file-loc"
+kind = "check"
+tool = "jig.rust_file_loc"
+
+
+
+[[work.gates]]
+id = "rust-fmt"
+kind = "check"
+tool = "jig.fmt_check"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "rustfmt.toml", ".rustfmt.toml"]
+
+[[work.gates]]
+id = "rust-clippy"
+kind = "check"
+tool = "jig.clippy"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "clippy.toml", ".clippy.toml"]
+
+[[work.gates]]
+id = "rust-tests"
+kind = "check"
+tool = "jig.test"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml"]
+
+
+
+
+
+
+
+[[agent_tooling.codex.marketplaces]]
+id = "jig-skills"
+source = "bpcakes/jig-skills"
+plugins = ["jig-rust@jig-skills", "jig-swift@jig-skills", "jig-typescript@jig-skills", "jig-exec-plans@jig-skills"]

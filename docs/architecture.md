@@ -1,0 +1,169 @@
+# Initial architecture
+
+This document records repository boundaries, not a finished security protocol.
+Jury `0.x` is a pre-alpha witnessed-access experiment. It has no completed
+independent professional security review and must not be used for real secrets.
+
+The authoritative project sequence and protocol-design requirements are tracked
+in [jury-v1-master-plan.md](jury-v1-master-plan.md). Jig compatibility is a
+downstream concern documented separately in
+[jig-cutover-plan.md](jig-cutover-plan.md).
+
+## Product boundary
+
+The active release owns the portable vault format, identities, grants, direct
+and witnessed item access, approval workflows, offline-verifiable decision
+receipts, the self-hostable witness service, CLI, and TUI. Jury has no dependency
+on Jig; consumers such as Jig integrate through stable Jury interfaces.
+
+```text
+       +------------+   +------------+
+       |  jury CLI  |   |  jury TUI  |
+       +------+-----+   +------+-----+
+              |                |
+              +----------------+
+                               |
+                    stable use-case seams
+                               |
+                         +-----v------+
+                         | jury-core  |
+                         +------------+
+                               |
+                    bounded protocol contracts
+                               |
+                   +-----------+-----------+
+                   |                       |
+             +-----v------+          +-----v------+
+             | jury client |          |   juryd    |
+             +------------+          +------------+
+```
+
+The dependency graph must remain acyclic. Storage and CLI/TUI transport details
+must not leak into `jury-core`. Protocol types cross boundaries through bounded,
+versioned contracts; HTTP and database adapters do not enter the witness engine.
+
+## Git-backed storage boundary
+
+Jury's intended native default inside a Git worktree is the committed portable
+artifact at `<worktree-root>/.jury/vault.json`. Git is an untrusted transport
+and history layer, not an authorization or integrity mechanism. Jury validates
+the artifact's own vault identity, genesis, policy ancestry, item ancestry,
+writer signatures, suites, bounds, and retained local checkpoint before private
+work. Git authorship, commit signatures, pull-request approval, branch names,
+and merge commits never substitute for Jury principal authority.
+
+The repository contains only the portable shared artifact and public Git
+integration metadata. Private identities live in the platform data directory.
+Rollback checkpoints, local audit, locks, and recovery transaction state live
+in a platform-local state root keyed by vault ID, genesis
+fingerprint, and principal ID. Plaintext and private keys never enter the
+worktree, Git index, objects, diffs, hooks, or filters.
+
+Fresh clones have no retained rollback state. Human use therefore requires an
+explicit genesis-fingerprint trust decision before private work; non-interactive
+use requires the expected fingerprint from a trust source outside the cloned
+repository. A fingerprint committed beside the artifact is discovery metadata,
+not an independent trust anchor.
+
+`vault.json` is an opaque Git artifact. Ordinary textual conflict resolution is
+forbidden. Jury's public verifier and ancestry-aware three-way merge validate
+base, ours, and theirs independently, merge only strict descendants or
+independent-item progress, and reject policy or same-item forks. Checking out an
+older or divergent artifact is evaluated against retained local state and never
+silently lowers it.
+
+Detached and global homes remain supported for users who do not want the
+documented public policy, principal/grant, size-bucket, and revision-activity
+metadata in a repository.
+
+## Intended access modes
+
+Jury's defining `0.x` path is **witnessed open**. A request binds the exact vault,
+item, content role, revision seal, policy checkpoint, action manifest, workload,
+expiry, and request session. Current approvers sign that request only after a
+meaningful verified rendering. Independent witnesses validate the request and
+decisions, enforce replay and checkpoint rules, and return revision-scoped
+contributions. The endpoint passes only the resulting protected revision secrets
+through the guarded item-access operation.
+
+An authorized endpoint may retain a revision it was allowed to open. The
+witnessed claim is therefore fresh authorization for each later revision seal,
+not use-without-view, forgetting, universal freshness, or retroactive
+revocation.
+
+Jury also supports explicit **direct** slots for recovery, bootstrap, and
+low-assurance use. A direct recipient can open its item without witnesses and
+has unilateral access. If an item carries any usable direct slot, Jury makes no
+quorum or distributed-authority claim for that item. Direct and witnessed paths
+share the same guarded use-case interface and cannot expose raw identity keys,
+epoch roots, reusable witness contributions, or revision secrets to adapters.
+
+## Non-negotiable seams
+
+- Algorithm-tagged, versioned direct and witnessed recipient slots frozen in
+  format v1 before implementation.
+- An item-access interface independent of the CLI and transport. Direct and
+  witnessed paths release only the exact descriptor/body secrets for one
+  authenticated revision seal.
+- One authenticated cryptographic suite per vault lineage, with no negotiation,
+  fallback, or mixed active suites. Suite migration is authenticated
+  decrypt-and-re-encrypt into a new lineage.
+- Signed, canonical public policy separated from encrypted item bodies.
+- Per-item data-encryption keys and exact reader/writer grants.
+- Explicit randomness, identity, filesystem, and process boundaries for testing.
+- No secret values, private keys, decrypted payloads, or passphrases in logs,
+  errors, test names, snapshots, receipts, or telemetry.
+
+## Trust boundary
+
+Every access mode intentionally trusts the authorized endpoint with plaintext
+for the selected revision. Jury cannot make that endpoint forget it. A direct
+recipient can also retain and open every direct capsule addressed to its
+long-lived key. A witnessed endpoint may retain an already released revision,
+but the accepted J19 construction must show that retained endpoint-visible state
+cannot open a later revision seal without a fresh authorized quorum, absent an
+explicit direct path or excluded compromise threshold. Fresh clones have no
+authoritative latest-state signal beyond an external checkpoint supplied by the
+operator.
+
+## Implementation gate
+
+No `0.x` build is production cryptography. Shared and direct cryptographic
+implementation may land only after the repository contains:
+
+- a reviewable threat model and explicit nonclaims;
+- a versioned direct-slot, witnessed-slot, and storage specification;
+- a minimal machine-validated gate manifest binding the accepted suite,
+  provider revisions, and vectors;
+- algorithm and encoding choices grounded in primary standards or explicitly
+  pinned primary specifications whose non-standard status is disclosed;
+- deterministic cross-implementation test vectors;
+- rollback, recovery, rekey, and revocation semantics;
+- adversarial and failure-injection test plans.
+
+J01A freezes the shared primitive suite and direct-slot construction. J01B
+proves the selected providers and owns the minimal direct gate manifest. No
+provider dependency, cryptographic adapter, encrypted identity, item, or backup
+path may land until J01A and J01B are accepted and that gate passes. This is a
+drift-prevention control, not a security certification or substitute for
+independent review.
+
+Witnessed/distributed cryptographic implementation has an additional gate:
+J19A selects the construction and threat model; J19B freezes protocol-v1
+schemas and state machines; J19C publishes vectors and the endpoint-retention
+proof; J19D obtains independent cryptographic review of that exact corpus and
+dispositions every material finding; J19 binds the reviewed artifacts plus
+implementation/provider versions in the machine-validated gate. J20-J23 and
+witnessed portions of J05/J07/J08/J10 cannot claim implementation before this
+gate opens. The release remains blocked rather than substituting coordination,
+static share release, or self-review for the promised authority model.
+
+## Deferred research
+
+Post-quantum migrations not selected by J01A/J19, FIPS-validated deployments,
+hardware witness providers beyond the first narrow adapter, and transparency
+systems beyond the J23 release profile remain outside the initial `0.x` cut.
+
+FIPS-validated deployment is not a Jury `0.x` objective. An algorithm appearing in
+a FIPS publication is not described as a validated deployment, and no provider,
+module, platform, or operational FIPS claim is made.

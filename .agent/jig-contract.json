@@ -1,0 +1,57 @@
+{
+  "contract_version": 5,
+  "tool_namespace": "jig",
+  "required_commands": [
+    "bootstrap_command",
+    "rust_fmt_check_command",
+    "rust_clippy_command",
+    "rust_test_command",
+    "rust_test_locked_command",
+    "rust_file_loc_command"
+  ],
+  "tools": [
+    {
+      "name": "jig.bootstrap",
+      "kind": "command",
+      "description": "Run the configured project bootstrap command.",
+      "command": "bootstrap_command"
+    },
+    {
+      "name": "jig.fmt_check",
+      "kind": "command",
+      "description": "Run the configured format check command.",
+      "command": "rust_fmt_check_command"
+    },
+    {
+      "name": "jig.clippy",
+      "kind": "command",
+      "description": "Run the configured clippy command.",
+      "command": "rust_clippy_command"
+    },
+    {
+      "name": "jig.test",
+      "kind": "command",
+      "description": "Run the configured default test command.",
+      "command": "rust_test_command"
+    },
+    {
+      "name": "jig.test_locked",
+      "kind": "command",
+      "description": "Run the configured locked test command.",
+      "command": "rust_test_locked_command"
+    },
+    {
+      "name": "jig.rust_file_loc",
+      "kind": "command",
+      "description": "Enforce the changed-file Rust source size policy.",
+      "command": "rust_file_loc_command"
+    },
+
+
+    {
+      "name": "jig.contract_check",
+      "kind": "native",
+      "description": "Run the native Jig contract check."
+    }
+  ]
+}

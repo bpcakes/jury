@@ -1,0 +1,11 @@
+[package]
+name = "jury-protocol"
+description = "Versioned public protocol boundary for Jury witnesses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+

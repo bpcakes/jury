@@ -1,0 +1,14 @@
+[package]
+name = "jury"
+description = "The vault no one can open alone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+jury-core = { path = "../jury-core" }
+
+[lints]
+workspace = true
+
