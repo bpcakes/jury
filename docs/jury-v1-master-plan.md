@@ -1028,6 +1028,33 @@ The source plan named exact prerelease or rapidly moving Rust dependencies.
 
 Jury does not freeze those package versions in this project plan.
 
+J01A's post-quantum HPKE comparison starts from this exact, immutable draft
+pair:
+
+- HPKE core: `draft-ietf-hpke-hpke-04`, an active Standards Track
+  Internet-Draft published 2026-07-06 and submitted to the IESG for
+  publication. The pinned representation is
+  <https://www.ietf.org/archive/id/draft-ietf-hpke-hpke-04.txt>, whose SHA-256
+  is `7c3090db36136e58242216c04bcc744f297800a4a615680930c5a4e3ae7cd733`.
+- PQ and PQ/traditional KEM profiles: `draft-ietf-hpke-pq-05`, an active
+  Standards Track Internet-Draft published 2026-07-06. The pinned
+  representation is
+  <https://www.ietf.org/archive/id/draft-ietf-hpke-pq-05.txt>, whose SHA-256
+  is `c3afa3981c7e2aacac4912a8b58eca14a92a10c66c4fd4e9ff078195a1ac9c5d`.
+
+This selects the long-term comparison baseline, not the Jury v1 primitive
+suite or a KEM profile. The PQ draft's bibliography still normatively names
+HPKE core `-03`, but its vector procedure uses `EncapDerand`, which is defined
+by core `-04` and absent from `-03`. Core `-04` also corrects DHKEM `Npk` and
+`Nenc` definitions and adds deterministic and edge-case conformance vectors.
+Jury therefore pairs PQ `-05` with core `-04` and records the stale `-03`
+reference as draft churn rather than silently implementing the older core.
+J01A must still validate the chosen KEM profile, mode, KDF, AEAD, and every
+transitive normative draft. Replacing either pinned revision requires a new
+content hash, a semantic delta review, and complete vector and composition
+revalidation; after implementation, such a change also requires a new suite
+identifier and the authenticated lineage-migration path.
+
 The cryptographic-provider bead MUST query current upstream documentation,
 crate metadata, repository maintenance, RustSec advisories, feature trees,
 licenses, MSRV, zeroization behavior, and official test vectors immediately
@@ -1064,15 +1091,21 @@ after these minimum drift and correctness controls exist:
 - provider due diligence and official known-answer tests;
 - direct recipient-slot downgrade rules;
 - a machine-validated `docs/security/jury-v0-direct-crypto-gate.toml` binding the
-  accepted suite, provider revisions, specification hashes, and vector hashes;
+  exact J01A suite artifact and canonical shared/direct preimage corpus,
+  provider revisions, specification hashes, and vector hashes;
 - recovery semantics for lost identities;
 - executable negative and failure-injection tests;
 - prominent experimental/no-independent-review/non-production nonclaims.
 
-J01A owns the shared primitive and direct-slot requirements. J01B owns provider due
-diligence, wrapper proof, and the minimal gate manifest. J02 protected primitives
-and J03 non-cryptographic domain types may precede it. J04 and every encrypted
-identity, direct item, or backup path depend on the accepted J01A/J01B gate.
+J01A owns the shared primitive and direct-slot requirements, including every
+canonical shared/direct cryptographic preimage. J01B owns provider due diligence,
+wrapper proof, and the minimal gate manifest. J05 consumes the J01A-owned direct
+preimages and J19-owned witnessed preimages byte-for-byte while owning only the
+outer bounded vault representation. J02 protected primitives and J03
+representation types may precede the gate; J03's security-relevant generator
+follows accepted J01A requirements and the J02 seam. J04 and every encrypted
+identity, direct item, or backup path depend on the accepted J01A/J01B gate and
+the applicable accepted J05 format.
 
 Before any direct cryptographic target is admitted, a repository-owned CI
 check must reject a missing, malformed, stale, or hash-mismatched gate manifest.
@@ -2213,16 +2246,36 @@ The matrix records, for every candidate construction:
 - CPU, memory, startup, backup, and migration cost on supported platforms;
 - portability, hardware/provider constraints, and operational failure modes.
 
+Every `yes` or `conditional` security-property cell names the exact security
+notion, attacker model, assumptions, and scope. It pins the exact public
+analysis or proof supporting that claim, including a revision and content hash
+for mutable documents, then supplies the Jury-specific composition argument
+showing that the complete construction and its canonical preimages preserve the
+property. A normative algorithm specification or parameter table is not treated
+as proof of a composition property merely because it names the primitive. If no
+applicable public analysis and complete composition argument exist, the cell is
+`no` or `unproven/not claimed`, never `yes` by inference.
+
 At minimum J01A compares:
 
 - storage AEAD: AES-256-GCM-SIV, one-key/one-seal RFC 8439
   ChaCha20-Poly1305, and XChaCha20-Poly1305 pinned to the exact expired draft;
 - recipient wrapping: classical RFC 9180 HPKE, pure ML-KEM HPKE, and
   X25519+ML-KEM-768 hybrid HPKE pinned to the exact active IETF draft;
-- strict Ed25519 and a publicly specified and analyzed hybrid-signature alternative if post-quantum
-  authenticity is required;
-- the complete KDF schedule, password KDF, device-factor combiner, randomness,
-  and all size/count/resource limits.
+- strict Ed25519 and a publicly specified and analyzed hybrid-signature
+  alternative if post-quantum authenticity is required;
+- the complete KDF schedule; the exact MAC algorithm, tag length, key
+  derivation, domain separation, canonical input, and verification behavior;
+  the password KDF; the device-factor combiner; randomness; and all
+  size/count/resource limits.
+
+The HPKE core specification and revision, KEM profile, mode, KDF, and AEAD are
+joint construction inputs rather than independently interchangeable labels. A
+selected KEM must not be composed with an HPKE mode that its pinned profile does
+not define. If a selected PQ or PQ/traditional KEM does not provide
+`AuthEncap`/`AuthDecap`, sender authenticity comes only from the exact outer
+signed policy or transcript construction; it is never inferred from HPKE or
+recovered through a classical fallback.
 
 The HNDL trade is explicit. Hybrid X25519+ML-KEM-768 preserves the classical
 component if the PQ component fails and provides PQ confidentiality if ML-KEM
@@ -2323,7 +2376,33 @@ revision-scoped witnessed capsule that uses one.
 
 ### 10.4 Key identifiers and fingerprints
 
-Each principal gets a random ULID principal ID.
+J03 owns the representation contract for `VaultId`, `PrincipalId`, and `ItemId`:
+each is a nonzero 32-byte value, public JSON uses exactly 64 lowercase
+hexadecimal characters, and cryptographic preimages use the exact 32 native
+bytes. Alternate text, byte lengths, and the all-zero value are rejected rather
+than normalized. Fallible constructors from exact bytes remain valid for
+parsing, imported artifacts, and fixed conformance vectors; they are not a
+generation API.
+
+J01A owns the generation contract. New native vaults, principals, and items use
+separate uniformly random identifiers from the OS cryptographic random source;
+they are never derived from names, timestamps, paths, keys, fingerprints, or one
+another, and normal creation does not accept a caller-selected identifier. J01A
+freezes full-width sampling, finite all-zero resampling, typed value-free entropy
+and retry-exhaustion failures, and the rule that no partial object or signed
+state escapes on failure. After J01A is accepted, J02 supplies the fallible
+randomness seam and J03 implements one shared generator used by J04 for
+`PrincipalId`, J06 for `VaultId`, and J07 for `ItemId`; import and deterministic
+vector paths remain explicitly typed and separate.
+
+Collision handling belongs to the state owner rather than the RNG primitive.
+J06 rejects reuse of any principal or item identifier present anywhere in the
+lineage history, including replaced, revoked, deleted, and tombstoned entries.
+J07 checks the complete lineage before encryption and retries a colliding
+`ItemId` only within the J01A-bounded attempt limit. No global `VaultId` registry
+exists: global uniqueness is a probabilistic nonclaim, while creation,
+migration, and import reject collisions among every source and destination
+lineage actually available to the operation.
 
 Jury public descriptors admit exactly one application-level encoding for the
 selected suite's recipient public-key bundle. J01A freezes its component order,
@@ -6036,14 +6115,37 @@ Scope:
 - compare classical RFC 9180 HPKE, pure ML-KEM HPKE, and
   X25519+ML-KEM-768 hybrid HPKE using exact key/ciphertext sizes, performance,
   portability, provider maturity, vector quality, and draft churn;
+- use the exact core `draft-ietf-hpke-hpke-04` plus PQ
+  `draft-ietf-hpke-pq-05` bytes and hashes frozen in section 0.21 as the
+  post-quantum HPKE comparison baseline; do not substitute a newer draft or
+  the stale core `-03` bibliography reference without a semantic delta review
+  and complete vector and composition revalidation;
+- pin one mutually compatible HPKE core specification/revision, KEM profile,
+  mode, KDF, and AEAD; define the exact outer sender-authentication composition
+  when the selected KEM has no `AuthEncap`/`AuthDecap`, with no inferred
+  authentication or classical fallback;
 - compare AES-256-GCM-SIV, one-key/one-seal RFC 8439
   ChaCha20-Poly1305, and the exact expired XChaCha Internet-Draft profile for
   storage; do not equate larger nonces with misuse resistance;
-- compare strict Ed25519 with a publicly specified and analyzed hybrid-signature alternative if PQ
-  authenticity is required;
-- freeze exact KEM/HPKE mode, AEADs, KDFs and contexts, hash/signature rules,
-  Argon2id profiles, device-factor combiner, randomness treatment, encodings,
-  limits, and error behavior;
+- compare strict Ed25519 with a publicly specified and analyzed hybrid-signature
+  alternative if PQ authenticity is required;
+- freeze exact KEM/HPKE mode, AEADs, KDFs and contexts, MAC algorithm, MAC tag
+  length and key/context schedule, hash/signature rules, Argon2id profiles,
+  device-factor combiner, randomness treatment, encodings, limits, and error
+  behavior;
+- freeze every shared/direct cryptographic preimage byte-for-byte, including its
+  domain prefix, field order, type and length encoding, integer encoding, suite
+  identifier, KDF labels and inputs, HPKE `info`, every AAD, signature/hash/MAC
+  input, and direct-slot component encoding; J05 must consume these bytes
+  verbatim and may not redefine them;
+- use the J03-owned representation contract in every cryptographic preimage:
+  `VaultId`, `PrincipalId`, and `ItemId` contribute their exact nonzero 32 native
+  bytes, never a ULID or their public hexadecimal JSON text;
+- freeze the separate J01A identifier-generation contract: independent OS-CSPRNG
+  full-width generation, no derivation or caller choice during ordinary
+  creation, finite all-zero retry behavior, typed value-free entropy/retry
+  failure, state-owner collision handling, the global-`VaultId` uniqueness
+  nonclaim, and no partial object or signed-state publication;
 - freeze which inputs and intermediate states are secret for each primitive,
   the required constant-time behavior, accepted provider/platform caveats, and
   the local or remote attacker observation model;
@@ -6057,10 +6159,14 @@ Scope:
 
 Tests:
 
-- independently recompute every size and security-property table entry from
-  pinned primary specifications;
+- independently recompute every size, algorithm identifier, and canonical
+  encoding entry from pinned normative primary specifications;
+- for every security-property cell, reproduce its exact security notion,
+  attacker model, assumptions, pinned public analysis or proof, and the
+  Jury-specific composition argument; unsupported properties remain explicitly
+  unproven and unclaimed;
 - demonstrate that every claimed property follows from the complete suite and
-  that one weaker slot or fallback defeats the claim;
+  canonical preimages, and that one weaker slot or fallback defeats the claim;
 - specify positive, negative, fault, migration, and cross-provider vectors that
   J01B, J19, and J25 must realize;
 - review nonce/key reuse, malformed-key/ciphertext, entropy failure, KDF
@@ -6071,9 +6177,31 @@ Acceptance:
 
 - the matrix has no “broadly sound” or unstated property cells: each is yes, no,
   conditional with assumptions, or not required with rationale;
+- every yes or conditional property cell pins an applicable public analysis or
+  proof by exact revision and content hash when mutable and states the exact
+  security notion, attacker model, assumptions, and complete-suite composition
+  argument; absent support is recorded as unproven and unclaimed;
 - HNDL resistance and PQ authenticity are explicit independent decisions;
-- one exact suite and all constructions, contexts, encodings, and limits are
-  frozen or J01A remains open;
+- one exact suite and every J01A-owned shared or direct construction, context,
+  encoding, and limit are frozen or J01A remains open; J19-owned witnessed
+  constructions remain out of scope and may not weaken the frozen invariants;
+- the J01A artifact contains the complete byte-exact shared/direct cryptographic
+  preimage corpus and vectors that J01B binds; J05 only embeds those bytes and
+  any change reopens the direct gate;
+- the selected HPKE core revision, KEM profile, mode, KDF, AEAD, and outer
+  sender-authentication composition are jointly specified and mutually
+  compatible;
+- the suite freezes the exact MAC algorithm, tag length, key derivation, domain
+  separation, canonical input, comparison, and failure behavior used by local
+  audit, checkpoint, and receipt authentication;
+- every cryptographic preimage uses the exact J03 32-byte native identifier
+  encoding and rejects ULID, hexadecimal-text, or other identifier
+  substitutions;
+- identifier generation is independently OS-random, non-derived, unavailable to
+  ordinary caller choice, bounded on zero and state-known collision retries, and
+  fail-closed on entropy or retry exhaustion without partial publication; one
+  J03 generator is shared by all native ID types and global `VaultId` uniqueness
+  is explicitly not claimed;
 - every secret-bearing operation has an explicit constant-time/side-channel
   requirement or a bounded nonclaim with an attacker-observation rationale;
 - every RFC, FIPS, or draft dependency is named with exact status and revision;
@@ -6083,12 +6211,14 @@ Acceptance:
 - no production provider dependency, adapter, or cryptographic implementation
   lands.
 - a verifier other than the artifact author cites the exact revision and reruns
-  the primary-source/size calculations before closure; a solo rerun is recorded
-  honestly and does not count as independent verification.
+  both the specification/size/encoding calculations and every
+  claim-to-analysis/composition trace before closure; this is a reproducibility
+  check, not independent cryptographic review. A solo rerun is recorded honestly
+  and does not count as independent verification.
 
 Dependencies: none.
 
-Unblocks: J01B, J05.
+Unblocks: J01B, J03, J05.
 
 ### J01B — Select and prove the cryptographic provider set
 
@@ -6121,8 +6251,9 @@ Scope:
 - define thin typed wrapper contracts and forbid raw provider calls outside
   those modules;
 - record rejected alternatives and the anticipated minimal dependency tree;
-- write `docs/security/jury-v0-direct-crypto-gate.toml`, binding the accepted
-  suite, provider revisions, specification hashes, and vector hashes while
+- write `docs/security/jury-v0-direct-crypto-gate.toml`, binding the exact J01A
+  suite artifact revision and content hash, canonical shared/direct preimage
+  corpus and vector hashes, provider revisions, and specification hashes while
   stating that the result is experimental and not independently reviewed;
 - run isolated upstream checks without linking a provider into a Jury product
   target.
@@ -6151,7 +6282,9 @@ Acceptance:
 - selected providers implement exactly one J01A direct suite with no runtime fallback;
 - independent implementations agree on accepted outputs and rejection semantics, or differences are normalized and tested;
 - the dependency tree excludes unrelated plugin, SSH, PEM, legacy, and hazmat surfaces;
-- the minimal direct-crypto gate binds the exact suite, provider revisions, specifications, and vectors;
+- the minimal direct-crypto gate binds the exact J01A artifact revision and
+  content hash, canonical shared/direct preimage corpus, provider revisions,
+  specifications, and vectors;
 - no provider dependency, adapter, or cryptographic implementation lands before the J01A/J01B direct gate is accepted, and no witnessed implementation lands before J19's additional exact-artifact gate;
 - no certification or independent-review claim is made;
 - J19 consumes the exact pinned provider behavior and vectors; no witnessed implementation may treat this direct gate as a substitute for J19 verification and binding.
@@ -6207,7 +6340,8 @@ Scope:
   plaintext staging files in the worktree;
 - harden the separate platform state root and cross-worktree lock against
   symlink, hard-link, reparse-point, containment, and alias attacks;
-- add explicit clock/randomness hooks where needed for later tests;
+- add explicit clock/randomness hooks where needed for later tests, including the
+  fallible OS-randomness seam consumed by the J03 native-ID generator;
 - remove Jig homes, environment variables, error types, and URI selectors;
 - document platform guarantees and gaps.
 
@@ -6222,6 +6356,7 @@ Tests:
   worktree/state-root overlap cases;
 - race replacement between validation and use;
 - atomic output crash points;
+- injected randomness failure with typed value-free errors and no returned bytes;
 - secret-free error snapshots;
 - Linux, macOS, and Windows platform gates where supported.
 
@@ -6240,11 +6375,13 @@ Acceptance:
   that proves the complete native-memory contract, J02 blocks pending an
   explicit source-backed architecture decision, threat-model update, and
   adversarial tests;
+- the shared fallible randomness seam exposes entropy failure without returning
+  partial random bytes and is consumable by J03 without a Jig dependency;
 - generic fixtures contain no private names or paths.
 
 Dependencies: none.
 
-Unblocks: J04, J07, J08, J12.
+Unblocks: J03, J04, J07, J08, J12.
 
 ### J03 — Implement native domain identifiers and the external adapter seam
 
@@ -6256,13 +6393,19 @@ translate project-specific references outside the security domain.
 
 Outcome:
 
-Jury has bounded semantic domain types and no stored URI or Jig routing syntax.
+Jury has bounded semantic domain types, one shared fallible native-identifier
+generator, and no stored URI or Jig routing syntax.
 
 Scope:
 
 - implement `VaultId`, `PrincipalId`, `ItemId`, `ItemName`, `FieldName`,
   selectors, grants, roles, revisions, epochs, and safe display types;
 - define canonical validation and size bounds;
+- after J01A is accepted, implement one shared ID generator over the J02
+  fallible randomness seam: sample the full 32 bytes, reject all-zero samples
+  within the J01A retry bound, return typed value-free entropy/exhaustion errors,
+  and return no identifier on failure; exact-byte constructors remain parsing,
+  import, and deterministic-vector APIs rather than ordinary creation;
 - separate user input from confirmed catalog names;
 - define a downstream adapter trait or CLI contract for external reference
   translation;
@@ -6276,6 +6419,9 @@ Scope:
 Tests:
 
 - property tests for canonicalization and round trips;
+- injected entropy failure, all-zero sampling through the exact retry bound,
+  successful resampling, typed value-free errors, and no returned identifier on
+  failure for every native ID type;
 - Unicode, normalization, separator, empty, oversized, and confusable cases;
 - compile-time or dependency tests proving core types do not depend on Jig;
 - fixtures proving `jig://` never appears in native serialized artifacts.
@@ -6285,14 +6431,16 @@ Tests:
 Acceptance:
 
 - native wire and domain types contain no `jig://`, project home, or Jig env;
+- one shared fallible generator implements the J01A contract for all native ID
+  types without turning exact-byte parsing constructors into creation APIs;
 - adapter input cannot alter signed cryptographic identity;
 - public display types never accidentally confirm inaccessible names.
 - Git storage context never enters cryptographic identity or signed state;
 - Git authorship, signatures, and review state cannot grant or broaden Jury authority.
 
-Dependencies: none.
+Dependencies: J01A, J02.
 
-Unblocks: J05, J06, J13, J15, J19A.
+Unblocks: J04, J05, J06, J07, J13, J15, J19A.
 
 ### J04 — Deliver encrypted vault, approver, and witness identities
 
@@ -6317,6 +6465,9 @@ Scope:
   suite; raw providers remain private to these modules;
 - generate independent vault-principal recipient/signature, approver-signature,
   and witness signing/contribution key material required by J01A and J19;
+- generate each new `PrincipalId` through the shared J03 generator; caller-
+  supplied exact bytes remain limited to parsing, import, and deterministic
+  vector paths;
 - implement Argon2id profile validation before allocation;
 - encrypt a random identity root and private payload with separate keys;
 - support named and explicit-file selection;
@@ -6350,6 +6501,8 @@ Tests:
   reporting, and explicit downgrade confirmation;
 - passphrase change preserving principal keys;
 - principal replacement creating new keys;
+- propagated identifier entropy/retry failure, local identifier collision or
+  reuse, and no partially published identity;
 - cross-role key reuse and vault-principal/approver/witness substitution
   rejection;
 - secret-free logs/errors and protected-memory exits.
@@ -6359,12 +6512,14 @@ Acceptance:
 - private keys cannot be returned through a public API;
 - identity files never enter normal transfers or portable vault artifacts;
 - vault-principal, approver, and witness keys have disjoint purposes and cannot be silently derived, reused, or substituted;
+- every newly created or replacement principal gets an independently generated
+  nonzero `PrincipalId`; generation failure publishes no identity;
 - witness contribution operations are bound to the exact J19 suite and revision-scoped input;
 - role-preserving rotation and replacement retain explicit public lineage without retaining old private authority;
 - exact KDF profiles and downgrade rules are tested, passphrase bytes are exact across supported platforms and input sources, and public descriptor vectors are stable;
 - every advertised device provider passes deterministic protocol tests and gated real-hardware conformance; unsupported providers report unavailable and never silently fall back.
 
-Dependencies: J01B, J02, J19.
+Dependencies: J01B, J02, J03, J05, J19.
 
 Unblocks: J07, J08, J09, J17, J20.
 
@@ -6379,8 +6534,9 @@ negotiation, or incompatible preimages after implementation begins.
 
 Outcome:
 
-`jury-vault` format v1 has bounded parse types, exact canonical preimages, and
-independently generated positive and negative vectors.
+`jury-vault` format v1 has bounded parse types, byte-exact embedding of the
+J01A- and J19-bound cryptographic preimages, and independently generated
+positive and negative vectors.
 
 Scope:
 
@@ -6395,8 +6551,10 @@ Scope:
 - define authenticated suite migration only as decrypt-and-re-encrypt into a new
   lineage, with a signed statement binding both genesis IDs, old terminal
   revision, old/new suites, and canonical migrated-item digests;
-- define exact byte layouts for every digest, signature, KDF context, HPKE
-  `info`, and AAD;
+- consume the exact J01A-owned shared/direct and J19-owned witnessed digest,
+  signature, KDF-context, HPKE-`info`, and AAD byte layouts verbatim; define only
+  their placement in the outer bounded vault representation and never introduce
+  a new cryptographic preimage or domain;
 - keep JSON as presentation storage while signing typed binary preimages;
 - emit one bounded deterministic JSON representation for a given `VaultFileV1`
   so the committed `.jury/vault.json` is a byte-stable opaque artifact;
@@ -6428,6 +6586,8 @@ Acceptance:
 - direct and witnessed fields are final J19 inputs, not placeholders requiring later evolution;
 - no plaintext private name, epoch root, or reusable contribution appears in vectors or public state;
 - direct slot encodings match J01A/J01B and witnessed slot encodings match the accepted J19 construction;
+- every cryptographic preimage is byte-identical to the bound J01A or J19 corpus;
+  a required change reopens the owning gate instead of being defined in J05;
 - a witnessed-only item can omit direct slots, while any usable direct slot is detectable and suppresses its quorum claim;
 - suite migration preserves the old lineage unchanged and never creates a dual-suite lineage;
 - unknown recipient slots and direct downgrade attempts fail closed;
@@ -6454,7 +6614,9 @@ workload, lifetime, and downgrade rules.
 
 Scope:
 
-- implement owner-signed genesis and policy revision verification;
+- generate a new `VaultId` through the shared J03 generator and implement owner-
+  signed genesis and policy revision verification; caller-chosen IDs remain
+  limited to typed import and deterministic vector paths;
 - implement principal lifecycle, owner rules, exact item roles, tombstones,
   reader-set change, slot replacement, and principal replacement operations;
 - model vault principals, approvers, and witnesses as distinct subject classes;
@@ -6475,6 +6637,10 @@ Tests:
 
 - role and owner matrices;
 - missing, duplicated, reordered, and forged operations;
+- propagated vault-identifier entropy/retry failure, known source/destination
+  lineage collision, and absence of partially signed genesis state;
+- principal and item identifier reuse anywhere in lineage history, including
+  replaced, revoked, deleted, and tombstoned entries;
 - sole-owner protections;
 - exact reader-set change requirements;
 - approver/witness membership, quorum, workload, and lifetime matrices;
@@ -6486,6 +6652,13 @@ Tests:
 Acceptance:
 
 - every accepted mutation has a unique normalized result;
+- every newly created lineage gets an independently generated nonzero `VaultId`;
+  generation failure publishes no genesis or policy state;
+- global `VaultId` uniqueness is a probabilistic nonclaim; every source and
+  destination lineage known during creation, migration, or import is checked for
+  collision;
+- principal and item IDs cannot be reused anywhere in lineage history, including
+  replaced, revoked, deleted, and tombstoned entries;
 - non-owner governance changes fail before key work;
 - direct read/write authority and witnessed membership/quorum authority are exact and deny by default;
 - any usable direct slot is visible as unilateral and suppresses the quorum claim;
@@ -6528,7 +6701,9 @@ Scope:
 - increment epoch, rotate any construction-internal epoch secret, and reseal
   descriptor/body on effective reader-set changes;
 - avoid epoch rotation on writer-only changes;
-- implement item creation, rename, deletion, and tombstones.
+- implement item creation, rename, deletion, and tombstones;
+- generate every new `ItemId` through the shared J03 generator; caller-supplied
+  exact bytes remain limited to typed import and deterministic vector paths.
 
 Tests:
 
@@ -6545,18 +6720,23 @@ Tests:
   is publicly indistinguishable from an ordinary same-bucket revision except for
   the explicitly documented timing/activity leaks;
 - bucket padding and malformed plaintext rejection.
+- propagated item-identifier entropy/retry failure, collision against the full
+  lineage followed by successful bounded regeneration, collision exhaustion,
+  and absence of a partially published item or revision.
 
 Acceptance:
 
 - no vault-wide DEK exists and private item names are absent from public state;
 - every direct and witnessed slot is tagged, authenticated, and revision scoped;
+- every newly created item gets an independently generated nonzero `ItemId`;
+  generation failure publishes no item or revision state;
 - witnessed-only items contain no direct fallback;
 - any usable direct slot is surfaced as unilateral and suppresses the quorum claim;
 - the common item consumer receives only ProtectedRevisionSecrets;
 - witnessed material cannot yield an epoch root, reusable contribution, or later-revision secret;
 - rekey operations are atomic or make no change.
 
-Dependencies: J02, J04, J05, J06, J19.
+Dependencies: J02, J03, J04, J05, J06, J19.
 
 Unblocks: J08, J11, J15, J16, J17.
 

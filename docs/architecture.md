@@ -133,20 +133,34 @@ implementation may land only after the repository contains:
 
 - a reviewable threat model and explicit nonclaims;
 - a versioned direct-slot, witnessed-slot, and storage specification;
-- a minimal machine-validated gate manifest binding the accepted suite,
-  provider revisions, and vectors;
+- a minimal machine-validated gate manifest binding the exact J01A suite
+  artifact and canonical shared/direct preimage corpus, provider revisions,
+  specifications, and vectors;
 - algorithm and encoding choices grounded in primary standards or explicitly
   pinned primary specifications whose non-standard status is disclosed;
+- every positive or conditional security-property claim mapped to an exact
+  security notion, attacker model, public analysis or proof pinned by revision
+  and content hash when mutable, assumptions, and a complete construction-level
+  composition argument; unsupported properties remain explicit nonclaims;
 - deterministic cross-implementation test vectors;
 - rollback, recovery, rekey, and revocation semantics;
 - adversarial and failure-injection test plans.
 
-J01A freezes the shared primitive suite and direct-slot construction. J01B
-proves the selected providers and owns the minimal direct gate manifest. No
-provider dependency, cryptographic adapter, encrypted identity, item, or backup
-path may land until J01A and J01B are accepted and that gate passes. This is a
-drift-prevention control, not a security certification or substitute for
-independent review.
+J01A freezes the shared primitive suite, direct-slot construction, and every
+canonical shared/direct cryptographic preimage. J01B proves the selected
+providers and owns the minimal direct gate manifest. J05 may only embed those
+locked direct preimages, plus the J19-owned witnessed preimages, into its outer
+bounded storage format; it cannot redefine either construction. No provider
+dependency or cryptographic adapter may land until J01A and J01B are accepted
+and that gate passes, and no encrypted identity, item, or backup path may land
+until the applicable J05 format is also accepted. This is a drift-prevention
+control, not a security certification or substitute for independent review.
+
+J01A also freezes the native-identifier generation contract. J02 owns the
+fallible randomness seam, J03 owns the single shared generator and
+representation, and creation tasks own only their scope-specific collision
+checks and atomic publication. No global `VaultId` registry exists, so global
+uniqueness remains an explicit probabilistic nonclaim.
 
 Witnessed/distributed cryptographic implementation has one additional active
 pre-implementation gate and one release-candidate verification step.
