@@ -16,6 +16,8 @@ Jury is pre-alpha and must not accept cryptographic implementation merely becaus
 - [x] (2026-08-30 13:23Z) Defined 46 byte-exact JCE1 preimages and a deterministic public vector corpus with positive direct, registration, identity-mode, genesis-attestation, AEAD, Argon2id, signature, MAC, and negative fixtures.
 - [x] (2026-08-30 13:27Z) Recomputed the corpus with independent temporary implementations. Did not add a permanent self-checking validator before production builders exist; J01B/J05 are the concrete consumers that must add byte-for-byte tests.
 - [x] (2026-08-30 13:30Z) Mapped every J01A criterion, completed the fresh solo/cross-implementation rerun, passed all Jig gates, and recorded the author-distinct verification request/blocker on the task.
+- [x] (2026-08-30 13:36Z) Committed the complete freeze as `9f464eb`, then corrected the exact acceptance vocabulary for three explicit nonclaims in `2de9e62` without changing the vector corpus.
+- [x] (2026-08-30 13:39Z) Reproduced the complete corpus and primitive outputs at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`; Jig work check, gates, and evidence pass with fresh receipts.
 - [ ] Close J01A only if every acceptance criterion is met; otherwise leave it open with exact blockers.
 
 ## Surprises & Discoveries
@@ -48,7 +50,7 @@ Jury is pre-alpha and must not accept cryptographic implementation merely becaus
 
 ## Outcomes & Retrospective
 
-The suite artifact and corpus now exist. All 25 source hashes, 46 preimage hashes, seven HKDF outputs, three HMACs, twelve Ed25519 signatures, the official and three Jury HPKE schedules/ciphertexts, three X-Wing encapsulation/decapsulation pairs, both AES-GCM-SIV seals, and both Argon2id profiles have been rerun locally with cross-implementations. The exact diff and acceptance mapping were reviewed, and all Jig gates pass. The candidate remains uncommitted and J01A cannot close without the required author-distinct reproducibility verifier at an exact revision; solo cross-checking is not that verification.
+The suite artifact and corpus are committed at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. All 25 source hashes, 46 preimage hashes, seven HKDF outputs, three HMACs, twelve Ed25519 signatures, the official and three Jury HPKE schedules/ciphertexts, the official and three Jury X-Wing encapsulation/decapsulation pairs, both AES-GCM-SIV seals, and both Argon2id profiles were rerun locally against that revision with cross-implementations. The exact acceptance mapping was reviewed, and Jig work check, gates, and evidence pass. J01A cannot close without the required author-distinct reproducibility verifier citing this revision; this solo cross-check is not that verification.
 
 ## Context and Orientation
 
@@ -106,7 +108,7 @@ Specification downloads go only to a uniquely named temporary directory and may 
 
 ## Artifacts and Notes
 
-Baseline commit: `c17021c` (`docs: freeze cryptographic contract baseline`). Primary outputs: `docs/security/jury-v1-suite.md` and `docs/security/vectors/jury-v1-suite.json` (SHA-256 `204ff421daa6b56f4b8481291988a0eea9628e016833483720d72d81ccfb7486`). Any executable drift validator must name J01B/J05 as consumers and ambiguous-preimage/specification-drift as its defect class.
+Baseline commit: `c17021c` (`docs: freeze cryptographic contract baseline`). Exact J01A artifact revision: `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. Primary outputs: `docs/security/jury-v1-suite.md` and `docs/security/vectors/jury-v1-suite.json` (SHA-256 `204ff421daa6b56f4b8481291988a0eea9628e016833483720d72d81ccfb7486`). Any executable drift validator must name J01B/J05 as consumers and ambiguous-preimage/specification-drift as its defect class.
 
 ## Interfaces and Dependencies
 
@@ -115,3 +117,5 @@ J01A depends on no implementation task. J01B consumes the suite and selects prov
 Revision note: Initial plan created on 2026-08-30 from baseline `c17021c` to implement the newly accepted long-term draft pairing and the complete J01A contract.
 
 Revision note: Updated on 2026-08-30 after implementation to record suite decisions, cycle/failure discoveries, the no-self-certification validator decision, exact corpus evidence, and the remaining gate/verifier work.
+
+Revision note: Updated on 2026-08-30 after committing and rerunning the full solo reproducibility pass at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`; the plan remains open solely for the required author-distinct verifier and closure.
