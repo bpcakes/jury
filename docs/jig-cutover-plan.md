@@ -1,6 +1,6 @@
 # Jig-to-Jury cutover plan
 
-Status: downstream integration plan; no implementation has started.
+Status: deferred downstream integration plan; no implementation has started.
 
 Plan date: 2026-08-28.
 
@@ -10,13 +10,20 @@ Downstream consumer: Jig.
 
 Related Jury plan: `docs/jury-v1-master-plan.md`.
 
+Release relation: every task in this document is post-`0.x` work. The first
+Jury `0.x` ships the Linux/macOS CLI and self-hosted `juryd` without Jig
+migration, TUI, semantic merge, or runtime rollover/suite migration. This plan
+requires a separate activation after J26 and does not block the active Jury
+release.
+
 Legacy implementation: Jig vault format v2 and its CLI/TUI.
 
 Unshipped design source: the former Jig vault format-v3 security-scopes plan.
 
 ## 1. Executive decision
 
-Jig vault v2 remains the legacy source until a user explicitly migrates.
+Jig vault v2 remains the legacy source through the first Jury `0.x`. A later
+explicitly activated cutover may offer migration.
 
 The unshipped Jig v3 design becomes Jury vault format v1.
 
@@ -28,7 +35,7 @@ The adapter delegates complete secret-consuming operations so that Jig does not
 receive plaintext values, item keys, identity private keys, or witness
 contributions.
 
-The migration is copy-on-write into an absent Jury home.
+If activated, migration is copy-on-write into an absent Jury home.
 
 The Jig source remains untouched and available for rollback until the operator
 deliberately retires it.
@@ -109,9 +116,11 @@ Jury owns:
 - child-process secret delivery and cleanup;
 - direct and witnessed key unwrapping;
 - approvals and receipts;
-- transfer, backup, restore, recovery, and rollover;
-- Jury TUI;
-- Jig-vault import.
+- transfer, backup, restore, and recovery;
+- the Linux/macOS Jury CLI.
+
+Jig-vault import, a Jury TUI, and rollover remain separately deferred Jury
+scopes. This downstream plan cannot activate them by implication.
 
 Jig owns:
 
@@ -234,8 +243,8 @@ The compatibility intent is:
 | `jig vault exec` | Jury resolves values and spawns child |
 | Jig brokered run | Jury resolves named values and spawns child |
 | `jig vault backup` | Jury owner backup family |
-| `jig vault tui` | replace process with Jury TUI |
-| Jig v2 migration | `jury migrate jig-vault` |
+| `jig vault tui` | unavailable unless a later Jury TUI scope is activated |
+| Jig v2 migration | unavailable unless deferred J15 is activated |
 
 Commands with no safe Jury equivalent return a stable unsupported error and a
 native Jury next step.
@@ -641,24 +650,24 @@ The completed Jig-v3 retirement map is:
 | B05 | `jury-qv4.2.6`, `jury-qv4.2.7`, `jury-qv4.2.10` | — | Envelopes, guarded unwrap, atomic rekey |
 | B06 | `jury-qv4.2.8`, `jury-qv4.2.12`, `jury-qv4.2.13`, `jury-qv4.4.5` | — | Audit, checkpoints, export/recovery/witness receipts |
 | B07 | `jury-qv4.2.7`, `jury-qv4.2.9` | `jig-sh-z3u.5` | Jury partial unlock; no-plaintext Jig delegation |
-| B08 | `jury-qv4.2.10`, `jury-qv4.3.2`, `jury-qv4.5.1`, `jury-qv4.6.1` | — | Mutations, cover, CLI/TUI, adversarial tests |
-| B09 | `jury-qv4.2.11` | `jig-sh-z3u.6` | Copy-on-write migration and opt-in link/rollback |
-| B10 | `jury-qv4.2.3`, `jury-qv4.2.5`, `jury-qv4.2.10`, `jury-qv4.3.2`, `jury-qv4.5.1` | — | Native identity/access administration |
+| B08 | `jury-qv4.2.10`, `jury-qv4.3.2`, `jury-qv4.6.1` | — | Mutations, cover, CLI, adversarial tests |
+| B09 | deferred `jury-qv4.2.11` | `jig-sh-z3u.6` | Copy-on-write migration and opt-in link/rollback require later scope |
+| B10 | `jury-qv4.2.3`, `jury-qv4.2.5`, `jury-qv4.2.10`, `jury-qv4.3.2` | — | Native identity/access administration |
 | B11 | `jury-qv4.2.2`, `jury-qv4.2.9`, `jury-qv4.3.2` | `jig-sh-z3u.4`, `jig-sh-z3u.5` | Native read/inject plus adapter translation/delegation |
 | B12 | `jury-qv4.3.1`, `jury-qv4.3.3` | `jig-sh-z3u.5` | Jury-owned execution and child plaintext delivery |
 | B13 | — | — | Explicitly deferred beyond Jury v1; no v1 importer |
-| B14 | `jury-qv4.2.12` | — | Transfer, inspection, ancestry merge |
+| B14 | `jury-qv4.2.12` | — | Transfer, inspection, strict-descendant import, divergence refusal |
 | B15 | `jury-qv4.2.13` | — | Backup, restore, readiness, drills |
-| B16 | `jury-qv4.5.1` | `jig-sh-z3u.5` | Jury TUI and Jig delegation replacement |
+| B16 | deferred `jury-qv4.5.1` | `jig-sh-z3u.5` | TUI work requires a separate post-`0.x` scope |
 | B17 | `jury-qv4.3.2`, `jury-qv4.4.3`, `jury-qv4.4.5`, `jury-qv4.6.2` | `jig-sh-z3u.2`–`jig-sh-z3u.9` | Native/server contract plus staged Jig cutover |
 | B18 | `jury-qv4.6.1` | — | Expanded adversarial corpus and measured budgets |
 | B19 | `jury-qv4.6.1`, `jury-qv4.6.2` | `jig-sh-z3u.7`–`jig-sh-z3u.9` | Jury assurance/release plus Jig dogfood/removal |
-| B20 | `jury-qv4.2.14` | — | Capacity preflight and signed Jury-v1 rollover |
+| B20 | `jury-qv4.2.10`; deferred `jury-qv4.2.14` | — | J11 refuses at hard caps; rollover/suite migration require later scope |
 
-Every named Jury task contains its outcome, rationale, exact design contract,
-scope, required tests, acceptance criteria, live dependencies, legacy baseline
-where applicable, and Jig-v3 retirement provenance. B13 is not silently lost:
-the Jury master plan records 1Password import as a v1 non-goal.
+The Jury master plan contains each outcome's rationale, design contract, scope,
+required tests, acceptance criteria, live dependencies, legacy baseline where
+applicable, and Jig-v3 retirement provenance. B13 is not silently lost: the Jury
+master plan records 1Password import as a v1 non-goal.
 
 The Jury tracker owns J01-J26.
 

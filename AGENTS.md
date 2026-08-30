@@ -125,8 +125,9 @@ serves that outcome and never becomes the product.
 - Cryptographic implementation requires the applicable gate in
   `docs/architecture.md` to be satisfied first. J01A/J01B gate shared and direct
   primitives. J19A-J19C freeze the witnessed construction, protocol, vectors,
-  and endpoint-retention proof; J19 binds those exact pre-implementation inputs
-  after a fresh solo verification pass before witnessed/distributed
+  and bounded endpoint-retention model; J19 binds those exact
+  pre-implementation inputs after a fresh solo verification pass before
+  witnessed/distributed
   implementation lands. J26 binds the exact security-critical implementation,
   gate verifier, and release build after J25 and a fresh solo release-candidate
   verification pass. These controls prevent drift; they are not independent
@@ -167,6 +168,11 @@ Use only `bv --robot-*` commands; bare `bv` launches an interactive interface.
 The six `jury-qv4` feature records are non-executable rollup containers. Never
 claim them as implementation work merely because an unfiltered `br ready`
 includes them.
+
+Unscoped `bv` rankings may include deferred or standalone work. They are useful
+for repository-wide hygiene, not for active-release sequencing; use the
+epic-scoped `br ready --epic jury-qv4 --type task --json` result to determine
+claimable release work.
 
 <!-- bv-agent-instructions-v4 -->
 

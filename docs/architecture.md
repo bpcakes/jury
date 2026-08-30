@@ -11,34 +11,34 @@ downstream concern documented separately in
 
 ## Product boundary
 
-The active release owns the portable vault format, identities, grants, direct
-and witnessed item access, approval workflows, offline-verifiable decision
-receipts, the self-hostable witness service, CLI, and TUI. Jury has no dependency
-on Jig; consumers such as Jig integrate through stable Jury interfaces.
+The active release owns the portable vault format, portable encrypted
+identities, grants, direct and witnessed item access, approval workflows,
+offline-verifiable decision receipts, the self-hostable witness service, and
+the CLI on Linux and macOS. Jury has no dependency on Jig; consumers such as Jig
+integrate through stable Jury interfaces. Windows, the TUI, hardware-backed
+identity protectors, and managed-service topology are deferred.
 
 ```text
-       +------------+   +------------+
-       |  jury CLI  |   |  jury TUI  |
-       +------+-----+   +------+-----+
-              |                |
-              +----------------+
-                               |
-                    stable use-case seams
-                               |
-                         +-----v------+
-                         | jury-core  |
-                         +------------+
-                               |
-                    bounded protocol contracts
-                               |
-                   +-----------+-----------+
-                   |                       |
-             +-----v------+          +-----v------+
-             | jury client |          |   juryd    |
-             +------------+          +------------+
+       +------------+
+       |  jury CLI  |
+       +------+-----+
+              |
+     stable use-case seams
+              |
+        +-----v------+
+        | jury-core  |
+        +------------+
+              |
+   bounded protocol contracts
+              |
+      +-------+-------+
+      |               |
++-----v------+   +----v-------+
+| jury client |  |   juryd    |
++-------------+  +------------+
 ```
 
-The dependency graph must remain acyclic. Storage and CLI/TUI transport details
+The dependency graph must remain acyclic. Storage and CLI transport details
 must not leak into `jury-core`. Protocol types cross boundaries through bounded,
 versioned contracts; HTTP and database adapters do not enter the witness engine.
 
@@ -66,11 +66,11 @@ repository. A fingerprint committed beside the artifact is discovery metadata,
 not an independent trust anchor.
 
 `vault.json` is an opaque Git artifact. Ordinary textual conflict resolution is
-forbidden. Jury's public verifier and ancestry-aware three-way merge validate
-base, ours, and theirs independently, merge only strict descendants or
-independent-item progress, and reject policy or same-item forks. Checking out an
-older or divergent artifact is evaluated against retained local state and never
-silently lowers it.
+forbidden. The first `0.x` public verifier accepts only an identical artifact or
+an authenticated strict descendant. Any divergence, including independent-item
+progress, remains a conflict and requires explicit operator recovery; semantic
+diff and merge are deferred. Checking out an older or divergent artifact is
+evaluated against retained local state and never silently lowers it.
 
 Detached and global homes remain supported for users who do not want the
 documented public policy, principal/grant, size-bucket, and revision-activity
@@ -106,8 +106,9 @@ epoch roots, reusable witness contributions, or revision secrets to adapters.
   witnessed paths release only the exact descriptor/body secrets for one
   authenticated revision seal.
 - One authenticated cryptographic suite per vault lineage, with no negotiation,
-  fallback, or mixed active suites. Suite migration is authenticated
-  decrypt-and-re-encrypt into a new lineage.
+  fallback, or mixed active suites. The format reserves authenticated
+  new-lineage migration records, but the first `0.x` has no runtime suite
+  migration or rollover command.
 - Signed, canonical public policy separated from encrypted item bodies.
 - Per-item data-encryption keys and exact reader/writer grants.
 - Explicit randomness, identity, filesystem, and process boundaries for testing.
@@ -165,11 +166,12 @@ uniqueness remains an explicit probabilistic nonclaim.
 Witnessed/distributed cryptographic implementation has one additional active
 pre-implementation gate and one release-candidate verification step.
 J19A selects the construction and threat model; J19B freezes protocol-v1
-schemas and state machines; J19C publishes vectors and the endpoint-retention
-proof; J19 binds those exact pre-implementation artifacts plus provider versions
-in a machine-validated gate after a fresh solo verification pass. J20-J23 and
-witnessed portions of J05/J07/J08/J10 cannot claim implementation before that
-gate opens. After implementation and adversarial testing, J26 binds the exact
+schemas and state machines; J19C publishes vectors and a bounded
+endpoint-retention model; J19 binds those exact pre-implementation artifacts
+plus provider versions in a machine-validated gate after a fresh solo
+verification pass. J20-J23 and witnessed portions of J05/J07/J08/J10 cannot
+claim implementation before that gate opens. After implementation and
+adversarial testing, J26 binds the exact
 security-critical implementation, minimal gate verifier, provider lock data,
 build inputs, and release artifacts after J25 and a fresh solo
 release-candidate verification pass. The release remains blocked rather than

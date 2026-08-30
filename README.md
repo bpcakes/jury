@@ -43,10 +43,10 @@ Currently, `jury --help` and `jury --version` only identify the scaffold.
 - Direct slots are optional and unilateral. If an item has one, Jury makes no
   quorum claim for that item.
 - Witnessed cryptography may not be implemented until J19A-J19C freeze the
-  construction, protocol, vectors, and endpoint-retention proof and J19 binds
-  that exact corpus after a fresh solo verification pass. This drift-prevention
-  gate is not independent security review. J19R/J19D/J19E external-review work
-  is deferred and does not gate the active `0.x` scope.
+  construction, protocol, vectors, and bounded endpoint-retention model and J19
+  binds that exact corpus after a fresh solo verification pass. This
+  drift-prevention gate is not independent security review. J19R/J19D/J19E
+  external-review work is deferred and does not gate the active `0.x` scope.
 - Jury does not claim to prevent an authorized endpoint from retaining
   plaintext it is allowed to receive.
 - Jury has no external review budget. Every `0.x` release must remain explicitly
@@ -62,12 +62,18 @@ integration is intentionally separate in
 
 ## Workspace
 
+The first `0.x` release targets Linux and macOS through the `jury` CLI and a
+self-hosted `juryd`. Windows, the `jury-tui`, hardware-backed identity
+protectors, managed-service topology, semantic Git merge, and runtime lineage
+rollover or suite migration are deferred. Capacity exhaustion fails closed
+before mutation; divergent Git artifacts require explicit operator recovery.
+
 | Package | Responsibility |
 | --- | --- |
 | `jury` | The `jury` command-line interface |
 | `jury-core` | Vault-domain rules and cryptographic orchestration boundaries |
 | `jury-protocol` | Witness request, approval, response, and receipt contracts |
-| `jury-tui` | Keyboard-first terminal interface |
+| `jury-tui` | Deferred terminal-interface scaffold; not shipped in the first `0.x` |
 | `jury-witness` | Transport-independent witness engine and `juryd` adapters |
 
 Jury is standalone: it must not depend on Jig. Jig may eventually consume Jury

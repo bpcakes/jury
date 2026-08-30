@@ -34,7 +34,10 @@ This section supersedes conflicting direct-only or deferred-witness language
 elsewhere in this document.
 
 - The active deliverable is an experimental witnessed-access Jury `0.x` release
-  using `jury-vault` format version 1 and witness protocol version 1.
+  using `jury-vault` format version 1 and witness protocol version 1. It ships
+  the `jury` CLI and self-hosted `juryd` for Linux and macOS. Both operating
+  systems are release platforms and must pass native CI, lifecycle, filesystem,
+  protected-memory, process-containment, packaging, and recovery checks.
 - J19-J23 are release-critical outcomes. Governed items require fresh signed
   approval and witness contributions for the exact revision seal and action
   manifest before read, inject, or exec can cross the guarded item boundary.
@@ -44,17 +47,20 @@ elsewhere in this document.
 - Every `0.x` build retains the pre-alpha warning and is not for real secrets.
 - J01A and J01B gate shared primitives and direct cryptography. J19 separately
   gates witnessed/distributed cryptographic implementation by binding the exact
-  J19A-J19C construction, vectors, proof, provider inputs, and a fresh solo
-  verification pass. J26 binds the exact post-J25 source, verifier, build inputs,
-  and release artifacts after a fresh solo release-candidate verification pass.
-  Neither gate is independent review or certification.
-- The current release has 29 active outcomes: J01A, J01B, J02-J14, J16-J26,
-  plus the J19A-J19C gate components. J15 is deferred post-`0.x`
-  compatibility work. J19R/J19D external construction review and J19E external
-  implementation/build review are also deferred optional future work. All four
-  are excluded from active readiness and estimates and do not gate release.
-  J19R/J19D/J19E may be activated only through an explicit scope revision after
-  a qualified reviewer and budget actually exist. J26 may not ship by
+  J19A-J19C construction, vectors, bounded retention model, provider inputs, and
+  a fresh solo verification pass. J26 binds the exact post-J25 source, verifier,
+  build inputs, and release artifacts after a fresh solo release-candidate
+  verification pass. Neither gate is independent review or certification.
+- The current release has 27 active outcomes: J01A, J01B, J02-J14, J16, J17,
+  J19A-J19C, J19-J23, J25, and J26. J15 compatibility, J18 runtime rollover and
+  suite migration, and J24 TUI work are deferred post-`0.x`. Hardware-backed
+  identity protectors, managed-service topology, semantic Git merge, and
+  Windows support are also deferred. These are excluded from active readiness
+  and estimates and do not gate release. J19R/J19D external construction review
+  and J19E external implementation/build review remain deferred optional future
+  work. J18 or J24 may be activated only through an explicit post-`0.x` scope
+  revision. J19R/J19D/J19E additionally require a qualified reviewer and actual
+  budget. J26 may not ship by
   excluding, stubbing, or relabeling J19-J23.
 - The project has one human maintainer and zero external-review budget. A model,
   coding agent, alternate implementation, test suite, self-review, or clean
@@ -119,9 +125,11 @@ The main known precedence rules are:
    never receive identity private-key handles.
 7. Witness requests, replay state, approvals, receipts, and `juryd` are active
    release contracts; none may expose epoch roots or reusable contributions.
-8. Importing Jig v2 creates a new Jury home and never replaces the Jig source.
-9. Native Jury CLI and TUI behavior belongs here; compatibility behavior of
-   `jig vault ...` belongs in `docs/jig-cutover-plan.md`.
+8. If deferred Jig migration is later activated, it creates a new Jury home and
+   never replaces the Jig source.
+9. Native Jury CLI behavior belongs here; TUI and compatibility behavior are
+   deferred from the first `0.x`, and `jig vault ...` belongs in
+   `docs/jig-cutover-plan.md`.
 10. Jury has no runtime, build, protocol, environment, or home-resolution
     dependency on Jig.
 
@@ -196,9 +204,9 @@ Jury v1 includes:
 - replay-safe witness contributions and a self-hostable `juryd`;
 - offline-verifiable decision receipts and witness recovery operations;
 - local audit and rollback checkpoints;
-- transfer, backup, recovery, and history rollover;
-- copy-on-write Jig v1/v2 migration;
-- a native `jury` CLI and `jury-tui`;
+- transfer, backup, and recovery;
+- hard capacity preflight that refuses before mutation;
+- a native `jury` CLI on Linux and macOS;
 - adversarial, property, fuzz, failure-injection, and benchmark gates;
 - reproducible experimental releases with inspectable cryptographic code.
 
@@ -212,6 +220,11 @@ Jury v1 excludes:
 - an in-place rewrite of a Jig vault;
 - dual writes between Jig v2 and Jury;
 - a runtime library dependency from Jury to any Jig crate;
+- Windows support in the first `0.x`;
+- a TUI, Jig migration, hardware-backed identity protectors, or managed-service
+  deployment topology;
+- semantic Git diff/merge, automatic reconciliation of divergent artifacts, or
+  runtime history rollover and suite migration;
 - a courtroom metaphor in protocol or implementation types.
 
 ### 0.7 Repository architecture
@@ -223,8 +236,8 @@ The workspace starts with these packages:
 | `jury-core` | domain rules, vault state, identity orchestration, item access | HTTP, terminal rendering, Jig types |
 | `jury-protocol` | bounded request, approval, response, and receipt contracts | storage, HTTP, databases, terminal rendering |
 | `jury` | command parsing, input/output, process adapter | cryptographic policy decisions |
-| `jury-tui` | keyboard UI and presentation state | raw key access, transport policy |
-| `jury-witness` | transport-independent witness engine and `juryd` adapters | CLI/TUI state, raw application secrets |
+| `jury-tui` | deferred keyboard UI scaffold | active `0.x` release behavior |
+| `jury-witness` | transport-independent witness engine and `juryd` adapters | CLI presentation state, raw application secrets |
 
 `jury-core` and `jury-protocol` MUST remain acyclic foundation crates.
 
@@ -310,9 +323,8 @@ principal authority.
 Jury V1 does not use clean/smudge encryption filters and never materializes a
 plaintext vault in the worktree. `jury init` creates a repository-local
 `.jury/.gitattributes` rule that disables ordinary textual diff and merge for
-`vault.json`. Any optional semantic diff or merge driver invokes Jury's bounded
-public operations; absence or failure of that driver leaves a conflict rather
-than falling back to textual merge.
+`vault.json`. Semantic diff and merge drivers are deferred. A conflict always
+remains a conflict rather than falling back to textual merge.
 
 The fixed `.jury/vault.json` path is sufficient for V1 discovery. A later
 `.jury/config.toml`, if introduced, is public non-authoritative configuration:
@@ -329,10 +341,10 @@ Native home selection has this precedence:
 
 The Linux global default is
 `${XDG_DATA_HOME:-$HOME/.local/share}/jury/vaults/default`. macOS uses
-`~/Library/Application Support/jury/vaults/default`. Windows uses the
-documented per-user local application-data directory under
-`jury/vaults/default`. An explicit Jig adapter always passes an absolute home
-and does not participate in native discovery.
+`~/Library/Application Support/jury/vaults/default`. The first `0.x` rejects
+unsupported platforms rather than guessing a storage location. An explicit Jig
+adapter always passes an absolute home and does not participate in native
+discovery.
 
 Repository discovery walks ancestors to the nearest bounded no-follow `.git`
 directory or linked-worktree `.git` file and does not place its path, repository
@@ -345,9 +357,7 @@ rollback and operational state instead lives below a separate platform state
 root:
 
 - `${XDG_STATE_HOME:-$HOME/.local/state}/jury/vaults` on Linux;
-- `~/Library/Application Support/jury/state/vaults` on macOS;
-- the documented per-user local application-state directory under
-  `jury/state/vaults` on Windows.
+- `~/Library/Application Support/jury/state/vaults` on macOS.
 
 `JURY_STATE_HOME` overrides that state root. The resolved state path is:
 
@@ -366,17 +376,15 @@ outside the cloned repository. A fingerprint stored in the same repository is
 useful for display but is not an independent substitution defense.
 
 Opening an older Git commit or a divergent branch never silently lowers retained
-state. Strict descendants may advance it. Independent-item progress is offered
-to the J16 authenticated merge. A behind artifact, policy fork, same-item fork,
-wrong genesis, or cross-lineage artifact fails closed with value-free status.
+state. Strict descendants may advance it. A behind artifact, any divergent
+artifact, wrong genesis, or cross-lineage artifact fails closed with value-free status.
 Historical inspection, if exposed, is explicitly non-mutating and cannot
 perform private use or lower the retained checkpoint.
 
-J16 owns bounded public verification, value-free semantic diff, and
-ancestry-aware three-way merge over explicit base/ours/theirs artifacts. Every
-input is independently parsed and authenticated. Conflict markers fail before
-private work. Git's merge result is never accepted merely because Git produced
-it.
+J16 owns bounded public verification, transfer inspection, and authenticated
+strict-descendant import. Every input is independently parsed and authenticated.
+Conflict markers and all divergent ancestry fail before private work. Git's
+output is never accepted merely because Git produced it.
 
 Git history is permanent for Jury's security claims. A removed direct recipient
 who retained an old private key and old repository objects may decrypt old
@@ -428,7 +436,7 @@ The semantic contract MUST NOT change:
 Direct and witnessed implementations share the same authorization preflight,
 `ProtectedRevisionSecrets` result type, and audit boundary.
 
-The CLI, TUI, importer, backup code, and Jig adapter MUST call item use cases,
+The CLI, importer, backup code, and downstream adapters MUST call item use cases,
 not an identity decryption primitive.
 
 ### 0.10 Algorithm-tagged recipient slots
@@ -712,8 +720,8 @@ A request is approvable only against the witness's exact current checkpoint. An
 older endpoint receives `StalePolicy`; a valid endpoint ahead of the witness
 receives `WitnessBehind` and cannot obtain a contribution until the checkpoint
 update is durably accepted. A revocation is authoritative for a witnessed
-operation only after the required witness set has accepted its checkpoint. CLI,
-TUI, and receipts report per-witness checkpoint state and never infer global
+operation only after the required witness set has accepted its checkpoint. CLI
+and receipts report per-witness checkpoint state and never infer global
 freshness for offline artifacts.
 
 `juryd` also persists a signed `WitnessStateAnchorV1` containing its witness
@@ -800,7 +808,7 @@ The threat model includes:
 
 - a malicious or compromised endpoint;
 - one compromised witness;
-- a malicious managed-witness operator;
+- a malicious witness-service operator;
 - a network attacker who can delay, replay, drop, or reorder messages;
 - a stale or rolled-back witness database;
 - a clock-skew or clock-rollback condition;
@@ -855,13 +863,14 @@ contribution keys merely because one operator controls both roles.
 The server process never parses a Jury item body and never needs item or field
 names to evaluate an opaque request.
 
-Self-host and managed deployments run the same cryptographically relevant code.
+All documented first-`0.x` deployments are self-hosted. A later managed scope
+must use the same cryptographically relevant code and may not add a proprietary
+server path with hidden decryption authority.
 
-Commercial value may exist in operation, federation, support, HSMs, compliance,
-and availability, but no proprietary server path may gain hidden decryption
-authority.
+### 0.17 Migration rule (deferred post-`0.x`)
 
-### 0.17 Migration rule
+This rule is retained for J15 and does not activate migration in the first
+`0.x`.
 
 Jig migration is import, not format upgrade.
 
@@ -910,7 +919,8 @@ Candidate components for history-preserving extraction are:
 | `exec_process.rs`, `process_pipe.rs`, `run/process*` | owned child trees and cleanup | extract or replace dependency |
 | `template.rs` | bounded template parsing/injection | extract behind Jury selectors |
 | `backup/restore_linux.rs` | filesystem restore protections | extract tests and primitives |
-| `vault_tests/`, `run/tests.rs`, TUI tests | failure/adversarial cases | port behavioral intent |
+| `vault_tests/`, `run/tests.rs` | failure/adversarial cases | port behavioral intent |
+| TUI tests | deferred J24 evidence | do not port into the first `0.x` |
 
 The following areas are explicitly replaced:
 
@@ -991,9 +1001,9 @@ The owning delivery task compares two acceptable outcomes:
 - implement the same narrow contract using a maintained general dependency plus
   Jury-specific cleanup tests.
 
-The decision is based on cancellation semantics, Unix process-group behavior,
-Windows job-object behavior, signal forwarding, bounded capture, dependency
-maintenance, and license compatibility.
+The decision is based on cancellation semantics, Linux/macOS process-group
+behavior, signal forwarding, bounded capture, dependency maintenance, and
+license compatibility. Windows containment is deferred with Windows support.
 
 The public API should express `OwnedChild`, kill-tree, wait, timeout, and cleanup
 outcomes without exposing Jig types.
@@ -1212,7 +1222,7 @@ An owner grants `reader` or `writer` access to a principal for an item.
 An owner has read/write/admin access to every item and therefore has one
 configured unwrapping path for every active item.
 
-Ordinary CLI and TUI inventory views show only named items accessible to the
+Ordinary CLI inventory views show only named items accessible to the
 selected identity.
 
 The full artifact still reveals opaque item count, exact public artifact and
@@ -1329,13 +1339,14 @@ The feature is complete when all of the following statements are true.
 9. Existing `ITEM/FIELD` references continue to identify fields without
    repository or vault routing in the reference.
 
-10. Read, inject, exec, run, TUI, audit, backup, and restore flows have
-    explicit Jury v1 behavior and fail closed at access boundaries.
+10. Read, inject, exec, run, audit, backup, and restore flows have explicit Jury
+    v1 CLI behavior and fail closed at access boundaries.
 
-11. Jig v1 and Jig v2 vaults remain readable only through the explicit
-    migration compatibility adapter.
+11. Linux and macOS have explicit filesystem, protected-memory,
+    process-containment, and packaging behavior.
 
-12. Migration to Jury v1 is explicit and one way.
+12. Native CI and release rehearsal exercise both supported operating systems;
+    unsupported platforms fail explicitly.
 
 13. Binaries reject unknown Jury format, slot, protocol, and receipt versions
     rather than silently interpreting them.
@@ -1387,17 +1398,15 @@ The feature is complete when all of the following statements are true.
     drill has been recorded, without pretending that an unobserved off-machine
     drill occurred.
 
-26. The TUI provides accessible-only role filters, owner access-matrix editing,
-    disabled-command reasons, exact committed-versus-retryable results, and
-    copyable references only for item names the selected identity can decrypt.
+26. Divergent artifacts, including independent-item progress, fail closed with
+    value-free conflict status; the first `0.x` never silently merges them.
 
 27. A new recipient cannot decrypt retained item ciphertext created before its
     grant, even when that ciphertext came from the immediately preceding valid
     vault revision.
 
-28. Before permanent policy or item-proof histories reach their hard caps, an
-    owner can create a separately trusted, signed Jury v1-to-Jury v1 rollover lineage
-    without overwriting or weakening the old lineage.
+28. Before any permanent policy, item-proof, or file-size hard cap is crossed,
+    mutation preflight returns a typed capacity error and writes nothing.
 
 29. Fingerprints, duplicate-key rejection, registration proofs, and principal
     replacement operate on one canonical Jury encoding of every selected-suite
@@ -1417,9 +1426,8 @@ The feature is complete when all of the following statements are true.
     page-dedicated protected-memory boundary; compact credentials and keys never
     silently fall back to ordinary pageable allocator storage.
 
-33. An identity may require both its passphrase and one explicitly enrolled OS
-    keychain, Secure Enclave, TPM 2.0, or FIDO2 protector, with no passphrase-only
-    bypass slot and backup-based recovery onto replacement hardware.
+33. Portable passphrase-protected identities behave identically at their public
+    boundary on Linux and macOS; no device or hardware assurance is claimed.
 
 34. Encrypted item bodies and encrypted backups expose only fixed size buckets
     rather than exact logical/recovery lengths, while optional signed cover reseals are
@@ -1430,8 +1438,8 @@ The feature is complete when all of the following statements are true.
     downgraded slot fails closed.
 
 36. Direct and witnessed access use the same `ItemAccessProvider` semantics; no
-    CLI, TUI, importer, or downstream adapter receives raw identity private keys
-    or epoch roots.
+    CLI, importer, or downstream adapter receives raw identity private keys or
+    epoch roots.
 
 37. A witnessed request is bound to the exact vault, item, epoch, policy,
     principal, operation, workload digest, expiry, nonce, and request-specific
@@ -1443,8 +1451,8 @@ The feature is complete when all of the following statements are true.
 39. Offline receipts verify signed decisions without secret values and state
     clearly that they do not prove endpoint execution or forgetting.
 
-40. A customer can self-host the cryptographically relevant witness service,
-    and the managed offering uses the same protocol and security-critical code.
+40. An operator can self-host the complete cryptographically relevant witness
+    service without a proprietary or managed-service dependency.
 
 41. Every counted approval is a replay-bounded signature by a current approver
     over the exact request and verified action-manifest digest; an interactive
@@ -1463,6 +1471,10 @@ The first Jury v1 release does not attempt to provide:
 
 - a hosted plaintext secrets database or a service with unilateral decryption;
 - SSO, SCIM, OIDC, LDAP, or directory synchronization in the core milestone;
+- Windows support, a TUI, managed-service deployment topology, hardware-backed
+  identity protectors, or Jig migration;
+- semantic Git merge, automatic divergent-artifact reconciliation, runtime
+  lineage rollover, or suite migration;
 - expiring *stored grants*; witnessed requests themselves are short-lived;
 - IP or device-posture conditions beyond explicitly bound workload evidence;
 - a remotely authoritative history for the portable vault artifact;
@@ -1621,14 +1633,6 @@ dumps, crash bundles, and pageable secret buffers after Jury has released them.
 Jury must disable its own dumpability before unlock and keep compact credentials
 and keys in dedicated locked, dump-excluded pages. It does not claim protection
 when a privileged kernel, debugger, or account controller reads live memory.
-
-`Identity-file thief without enrolled hardware`
-
-An attacker may copy a device-bound identity file and know or guess its
-passphrase without possessing the enrolled keychain/Secure Enclave/TPM/FIDO2
-protector. The identity remains locked because device-bound mode has no portable
-passphrase-only slot. A thief controlling both the OS account and protector use
-is outside this boundary.
 
 An attacker with full control of the authorized user's process or account is out
 of scope.
@@ -2721,8 +2725,8 @@ session, decrypted item bodies, serialized plaintext bodies, resolved field
 values, signing keys, and HPKE secret keys must be held in zeroizing containers
 wherever the Rust type system and selected dependencies allow.
 
-Before passphrase capture, hardware-protector use, or any private-key operation,
-the CLI/TUI process lowers `RLIMIT_CORE` to zero. Linux additionally sets
+Before passphrase capture or any private-key operation, the CLI process lowers
+`RLIMIT_CORE` to zero. Linux additionally sets
 `PR_SET_DUMPABLE` to zero. Failure stops before unlock unless the operator uses
 the explicit `--allow-unprotected-memory` emergency override and confirms the
 degradation; non-interactive use additionally requires
@@ -2734,12 +2738,9 @@ Add a page-dedicated, non-growing `ProtectedMemory` allocation owned by
 `jury-core` or a neutral extracted leaf crate. Compact passphrases captured through Jury-owned input, Jury-generated
 identity roots and private keys, signing keys, optional epoch secrets, revision secrets,
 audit/checkpoint seeds, and RNG seeds enter it without a prior Jury-owned ordinary
-`String`/`Vec` copy. External keychain, Secure Enclave, TPM, and FIDO APIs may
-return short OS/library-owned buffers that Jury cannot allocate itself; copy those
-immediately into `ProtectedMemory`, zero or release the source through the
-provider API where supported, and record any unavoidable non-zeroizable provider
-copy in that adapter's assurance documentation. No ordinary Jury-owned provider
-copy may outlive the call. On Linux protected pages require
+`String`/`Vec` copy. Future device-protector adapters must define their own
+temporary-buffer contracts before activation; the first `0.x` has no such
+provider path. On Linux protected pages require
 `mlock2(MLOCK_ONFAULT)` with a verified `mlock` fallback,
 `MADV_DONTDUMP`, and `MADV_DONTFORK`; on macOS they require `mlock`, while the
 process-wide zero core limit supplies the dump control. Guard pages and page-
@@ -2762,9 +2763,7 @@ agent may not weaken the workspace lint to make the task pass.
 If the supported OS cannot lock the compact protected allocation, unlock fails
 closed unless the same explicit emergency override is active. JSON/human status
 reports `required`, `active`, `degraded_by_override`, or `unsupported` without
-addresses or secret-dependent detail. TUI sessions always keep their retained
-identity material in protected pages and display persistent degraded state when
-the override is used.
+addresses or secret-dependent detail.
 
 Bulk decrypted item bodies, serializer scratch, redaction copies, child-process
 copies, and the 128–512 MiB Argon2 workspace remain short-lived zeroizing memory
@@ -2862,6 +2861,9 @@ destination principals, owners, grants, items, and ciphertext metadata created
 by its first policy revision. It excludes all signatures and the genesis
 fingerprint, avoiding a hash/signature cycle. New Jury v1 vaults omit both
 attestations, and a genesis containing both is invalid.
+
+Both attestation shapes are reserved format inputs for deferred J15/J18 work.
+The first `0.x` runtime creates neither one.
 
 The owner self-signature provides integrity, not third-party identity proof.
 
@@ -3120,12 +3122,15 @@ documented backup implications, and an explicit plan amendment.
 
 Every mutation preflight computes its resulting policy, item-proof, slot, item,
 and total encoded-size counts before writing. A mutation that would cross a hard
-cap fails with the typed `Capacity` error and an exact `jury history
-rollover` next step; it never commits a state that cannot still be rolled over.
-Rollover itself reads but does not grow the source and therefore remains
-available at a source cap.
+cap fails with the typed `CapacityExhausted` error before any shared or local
+mutation. It reports the exhausted dimension and that the first `0.x` cannot
+advance this lineage; it never advertises an unimplemented rollover command.
 
-### 11.13 Authenticated history rollover
+### 11.13 Authenticated history rollover (deferred post-`0.x`)
+
+This section reserves the future design consumed by J18. The first `0.x` has no
+rollover or suite-migration runtime path and relies on the fail-closed capacity
+preflight in section 11.12.
 
 Jury V1 does not prune or rewrite a vault's signed policy or item-proof ancestry in
 place. An explicit owner-only rollover creates a new Jury v1 lineage in an absent
@@ -3161,8 +3166,7 @@ Private identities live outside every vault home.
 The default identity root follows the platform data-directory convention:
 
 - `${XDG_DATA_HOME:-$HOME/.local/share}/jury/identities` on Linux;
-- `~/Library/Application Support/jury/identities` on macOS;
-- the documented per-user local application-data directory on Windows.
+- `~/Library/Application Support/jury/identities` on macOS.
 
 `JURY_IDENTITY_HOME` overrides that identity root.
 
@@ -3272,7 +3276,12 @@ never silently downgrades `hardened-v1`. Operators may request
 or the existing non-interactive confirmation contract. Reads report an available
 profile upgrade but never rewrite an identity as a side effect.
 
-#### Device-bound identity protection
+#### Device-bound identity protection (deferred post-`0.x`)
+
+The first `0.x` implements only `portable` passphrase-protected identities on
+Linux and macOS. The provider model below is retained as future design; no
+keychain, Secure Enclave, TPM2, FIDO2, device-enrollment, or hardware-assurance
+claim may appear in the first release.
 
 Identity protection mode is exactly one of:
 
@@ -3341,19 +3350,13 @@ Add:
 
 ```text
 jury identity init [--name NAME] [--kind human|machine] [--label LABEL] \
-  [--kdf-profile portable|hardened] \
-  [--protection portable|keychain|secure-enclave|tpm2|fido2] \
-  [--protector ID]
+  [--kdf-profile portable|hardened]
 jury identity list
 jury identity status [--name NAME]
 jury identity public [--out FILE] [--overwrite]
 jury identity prove --challenge CHALLENGE --out PROOF [--overwrite]
 jury identity passphrase change [--kdf-profile portable|hardened] \
   [--allow-kdf-downgrade]
-jury identity protection status
-jury identity protection enroll --provider PROVIDER [--protector ID]
-jury identity protection rebind [--protector ID]
-jury identity protection remove --allow-portable-downgrade
 ```
 
 `identity init` refuses an existing destination.
@@ -3415,13 +3418,11 @@ already controls that owner's signing key.
 
 ### 12.5 Passphrase compatibility
 
-The read-only Jig migration adapter accepts `JIG_V2_VAULT_PASSPHRASE` only for
-opening its source Jig v1/v2 envelope.
+The deferred J15 read-only Jig migration design reserves
+`JIG_V2_VAULT_PASSPHRASE`; the active CLI does not accept it.
 
 For Jury v1, `JURY_IDENTITY_PASSPHRASE` supplies the knowledge factor for the
-selected local identity. A device-bound identity also invokes its exact recorded protector;
-the environment variable alone is insufficient and no environment variable may
-supply the provider response, PIN, biometric data, or presence assertion.
+selected portable local identity.
 
 The CLI prompt changes from `Vault passphrase` to `Identity passphrase` after
 detecting Jury v1 from the public header.
@@ -3437,7 +3438,7 @@ The preferred documented spelling becomes
 ### 12.6 Multiple identities
 
 The default release supports one explicitly named or explicitly pathed selected
-identity per command and per TUI session.
+identity per command.
 
 It does not automatically try every identity file.
 
@@ -3463,10 +3464,6 @@ They do not use bearer tokens in Jury v1.0.
 
 Automation supplies `JURY_IDENTITY` or `JURY_IDENTITY_FILE` plus
 `JURY_IDENTITY_PASSPHRASE` through its own secret mechanism.
-
-An explicitly enrolled TPM2 or non-interactive keychain protector may supply the
-second factor. FIDO2 and human-presence policies are not suitable for unattended
-automation and never downgrade themselves when no user is present.
 
 Both variables are removed before child execution.
 
@@ -3605,8 +3602,7 @@ Checkpoint update follows successful vault verification and, for mutation, the
 atomic vault write.
 
 A checkpoint write failure after a successful vault mutation is reported as a
-committed-primary-action plus recovery warning, matching the TUI's existing
-committed-action distinction.
+committed-primary-action plus recovery warning.
 
 The next open may safely advance a behind checkpoint after validating the vault's
 chains.
@@ -3720,7 +3716,7 @@ Add stable error kinds:
 
 - `AccessDenied`;
 - `Conflict`;
-- `Capacity`;
+- `CapacityExhausted`;
 - `Unsupported`.
 
 Use `Authentication` for wrong identity passphrase or failure to unwrap a slot
@@ -3730,9 +3726,10 @@ Use `AccessDenied` when policy grants no item read or write authority.
 
 Use `Conflict` for stale revisions, transfer forks, and checkpoint rollback.
 
-Use `Capacity` when a valid current state cannot accept a requested mutation
-without crossing a hard count or encoded-size cap. Report only safe counts and
-the exact history-rollover next step.
+Use `CapacityExhausted` when a valid current state cannot accept a requested
+mutation without crossing a hard count or encoded-size cap. Report only safe
+counts and that the first `0.x` cannot advance this lineage; provide no
+unimplemented rollover next step.
 
 Use `Serialization` or `Authentication` for malformed or invalidly signed shared
 state according to whether structure or authenticity failed.
@@ -3924,7 +3921,8 @@ jury history ...
 ```
 
 Keep existing field, secret, read, inject, exec, run, audit, backup,
-passphrase, status, migrate, init, and TUI families.
+passphrase, status, and init families. J15 migration and J24 TUI families are
+deferred.
 
 ### 16.2 Principal administration
 
@@ -4116,8 +4114,6 @@ jury init [--item ITEM]...
 
 It may accept repeated initial `--reader` and `--writer` principal IDs.
 
-TUI item creation uses the same core transaction.
-
 Repeated `vault init --item` arguments create private-name empty item
 descriptors, epoch-one keys and bodies, and owner slots in the initial owner
 policy transaction.
@@ -4223,7 +4219,8 @@ For Jury v1 it reports safe public fields:
 - active item count;
 - tombstone count;
 - policy-revision and item-proof usage against each hard cap;
-- encoded-size headroom and `rollover_recommended` without item names;
+- encoded-size headroom and whether further mutation remains possible, without
+  item names or an unimplemented rollover recommendation;
 - `cryptographic_scopes = true`.
 
 It may validate public signatures because no private key is needed.
@@ -4233,21 +4230,18 @@ than counts from untrusted structures.
 
 It does not report selected-principal access without an identity unlock.
 
-### 16.11 History rollover
+### 16.11 Capacity status
 
 Add:
 
 ```text
 jury history status
-jury history rollover --home ABSENT_HOME [--dry-run]
 ```
 
 `history status` is the stable spelling for the public capacity fields also
-shown by `vault status`. `history rollover` requires an owner identity, validates
-the entire source and local checkpoint, applies the absent-home and alias checks
-used by restore, and previews the new vault ID/fingerprint, active object counts,
-fresh-encryption count, bridge digest, backup requirement, and trust/
-redistribution steps. It never overwrites, truncates, or deletes the source.
+shown by `vault status`. The first `0.x` exposes no history rollover or suite
+migration command. At a hard cap it refuses mutation before writing and directs
+the operator to retain the lineage until a future migration path is available.
 
 ### 16.12 JSON stability
 
@@ -4341,8 +4335,9 @@ principal's authenticated local state.
 It does not record or claim recipient delivery.
 
 `transfer inspect` validates the transfer envelope and inner public chains before
-displaying source vault, genesis and exporter fingerprints, policy ancestry,
-opaque item/revision deltas, and predicted conflicts.
+displaying source vault, genesis and exporter fingerprints, ancestry relation,
+opaque item/revision deltas, and whether import is an identical artifact, a
+strict descendant, or a rejected divergence.
 
 `--against-current` compares with the selected local home without mutating it.
 
@@ -4350,9 +4345,9 @@ opaque item/revision deltas, and predicted conflicts.
 whose descriptors that identity can decrypt from the local or incoming accepted
 state.
 
-`transfer import --dry-run` executes the complete authenticated merge and
-selected-identity preflight but writes no vault, audit, checkpoint, or export
-receipt.
+`transfer import --dry-run` executes the complete authenticated
+strict-descendant validation and selected-identity preflight but writes no
+vault, audit, checkpoint, or export receipt.
 
 `transfer status` unlocks the selected identity, compares the current revision
 with that installation's last successful export receipt, and reports `never
@@ -4427,51 +4422,19 @@ Import into an existing home requires the same vault ID and genesis fingerprint.
 
 The importer validates both local and incoming structures completely.
 
-Policy journals must be equal or one must be a strict prefix of the other.
+An identical incoming artifact is a no-op. An incoming artifact may advance the
+local home only when its complete authenticated state is a strict descendant of
+the local policy and every local item-proof chain. Behind or divergent policy,
+independent progress on different items, same-item forks, missing active items,
+wrong tombstones, or cross-lineage state is a typed conflict. The first `0.x`
+does not synthesize a merged artifact.
 
-If incoming policy is behind, it cannot lower local policy.
-
-If incoming policy is ahead and descends from local, it becomes the candidate
-policy.
-
-For every item:
-
-- identical current revision is unchanged;
-- incoming strict descendant advances local;
-- local strict descendant remains local;
-- independent progress on different items is merged;
-- divergence for the same item is a conflict;
-- missing active items are invalid;
-- tombstones obey the selected descendant policy.
-
-Current descriptor ciphertext and metadata must match the selected descendant
-policy.
-
-A descriptor change can advance only through its owner-signed policy branch; it
-does not auto-merge independently of policy.
-
-When an item branch advances concurrently with a policy branch, the importer
-rechecks the advancing revision's author and key epoch against the selected
-current policy.
-
-It accepts the advance only if that author is still an effective writer/owner and
-the revision epoch equals the selected current item epoch.
-
-An unchanged historical current revision remains valid after its author is later
-downgraded or removed; only a newly merged advance must pass this current-policy
-check.
-
-This allows unrelated policy changes plus an authorized item write to merge while
-rejecting a stale removed writer and any pre-rotation item ciphertext.
-
-The fully merged candidate is validated against the selected policy before one
-atomic write.
-
-No merge writes partially.
+The accepted incoming artifact is validated from scratch against its selected
+policy before one atomic write. Rejection writes no shared or local state.
 
 ### 17.6 Fork recovery
 
-Jury V1.0 does not auto-merge two writes to the same item or two policy forks.
+Jury V1.0 does not auto-merge any divergent artifacts.
 
 The conflict reports public policy metadata, opaque item IDs, and branch revision
 hashes.
@@ -4486,7 +4449,7 @@ Recovery is explicit:
 2. open copies in separate explicit vault homes;
 
 3. have an owner or authorized writer inspect the competing item values through
-   controlled sinks;
+   controlled sinks when authorized;
 
 4. choose one canonical branch;
 
@@ -4502,8 +4465,8 @@ Users may still copy `vault.json` directly.
 
 Opening a copied file validates its public chains and local checkpoint.
 
-The supported transfer commands add provenance, merge rules, bounds, safe path
-handling, and first-use fingerprint confirmation.
+The supported transfer commands add provenance, strict-descendant rules, bounds,
+safe path handling, and first-use fingerprint confirmation.
 
 Documentation should recommend transfer commands rather than raw replacement.
 
@@ -4519,13 +4482,9 @@ jury backup create --out FILE [--overwrite] \
 jury backup status
 jury backup verify --in FILE
 jury backup drill --in FILE --vault-out ABSENT_PATH \
-  --identity-out ABSENT_PATH [--identity-kdf-profile portable|hardened] \
-  [--identity-protection portable|keychain|secure-enclave|tpm2|fido2] \
-  [--protector ID]
+  --identity-out ABSENT_PATH [--identity-kdf-profile portable|hardened]
 jury backup restore --in FILE --identity-out ABSENT_PATH \
-  [--identity-kdf-profile portable|hardened] \
-  [--identity-protection portable|keychain|secure-enclave|tpm2|fido2] \
-  [--protector ID]
+  [--identity-kdf-profile portable|hardened]
 ```
 
 A Jury v1 backup is owner identity recovery material and must be treated as
@@ -4652,14 +4611,10 @@ Jury V1 restore takes an absent vault home and either:
 
 For an absent identity target, restore captures a new identity passphrase twice,
 uses `portable-v1` by default or the explicit `--identity-kdf-profile`, and seals
-the recovered private payload with a fresh identity root, salt, and nonces. It
-uses portable protection by default or enrolls the explicit
-`--identity-protection`/`--protector` through the normal provider boundary before
-publishing either destination. The backup passphrase alone never becomes the
-installed identity passphrase or hardware factor. Non-interactive restore uses
-the existing command-scoped `JURY_NEW_PASSPHRASE` contract for the new
-identity credential; interactive hardware presence/verification cannot be
-bypassed by an environment variable.
+the recovered private payload with a fresh identity root, salt, and nonces using
+portable protection. The backup passphrase alone never becomes the installed
+identity passphrase. Non-interactive restore uses the existing command-scoped
+`JURY_NEW_PASSPHRASE` contract for the new identity credential.
 
 For `--reuse-identity`, restore unlocks that identity with its separate current
 identity passphrase and proves private-key and seed correspondence. It neither
@@ -4752,7 +4707,10 @@ Documentation includes a generic `ExampleVault` recovery drill:
 - delete the drill copy only through an explicitly operator-directed cleanup,
   outside automated tests.
 
-## 19. Copy-on-write migration from Jig v1/v2
+## 19. Copy-on-write migration from Jig v1/v2 (deferred post-`0.x`)
+
+This section is retained as future design for J15. The first `0.x` has no Jig
+reader, migration command, or compatibility release requirement.
 
 ### 19.1 Eligibility
 
@@ -4901,7 +4859,10 @@ Jury never creates Jig format v1 or v2.
 
 Tests retain read-only Jig fixtures solely for compatibility and migration.
 
-## 20. TUI behavior
+## 20. TUI behavior (deferred post-`0.x`)
+
+This section is retained as future design for J24. The first `0.x` ships no TUI;
+the CLI is the only operator interface in the active release.
 
 ### 20.1 Session credential
 
@@ -5101,7 +5062,7 @@ Add these Jury v1 invariants.
 - A backup containing identity material is owner-only and clearly labeled.
 - Public policy validates before any key unwrap.
 - Every recipient slot has an authenticated algorithm tag and schema version.
-- Items may mix direct and witnessed slots, but security claims and UI state are
+- Items may mix direct and witnessed slots, but security claims and CLI state are
   path-specific; any current direct slot forbids an item-level quorum claim.
 - Unknown slot algorithms, protocol versions, and receipt versions fail closed.
 - Callers never obtain raw identity or witness private-key handles.
@@ -5133,7 +5094,7 @@ Add these Jury v1 invariants.
 - Public structures contain no canonical active or former item name, reversible
   name digest, or name-derived item ID.
 - A selected identity decrypts descriptors only for item slots it currently
-  holds; inaccessible descriptors never enter snapshots, JSON, TUI buffers,
+  holds; inaccessible descriptors never enter snapshots, JSON, CLI output,
   errors, audit events, or receipts.
 - Name routing returns one result for inaccessible and nonexistent caller-
   supplied item names.
@@ -5161,7 +5122,8 @@ Add these Jury v1 invariants.
   state can reopen an already released revision but cannot open a later seal
   without fresh authorization under the J19 compromise assumptions.
 - Each lineage authenticates exactly one suite; no negotiation, fallback, or
-  mixed active suite exists, and suite migration creates a new lineage.
+  mixed active suite exists. Reserved suite-migration records do not create an
+  active runtime path in the first `0.x`.
 - Write-only role changes never claim cryptographic read revocation.
 - Every decrypted item descriptor is exactly the canonical fixed-size encoding;
   descriptor ciphertext length never varies with the private item name.
@@ -5184,15 +5146,9 @@ Add these Jury v1 invariants.
   sufficient encrypted recovery material to reseal the owner identity under a
   newly selected identity passphrase.
 - Private commands disable process core dumps before secret capture. Compact
-  credentials, provider outputs, identity roots/private keys, optional epoch and
+  credentials, identity roots/private keys, optional epoch and
   revision secrets, audit seeds, and RNG seeds use page-dedicated locked/dump-excluded memory
   or fail before unlock unless an explicit degraded-mode override is recorded.
-- Device-bound identity unlock combines the passphrase-derived key with exactly
-  one enrolled provider response; the identity file contains no portable bypass
-  slot or cached provider secret.
-- A device-protector provider receives no passphrase, identity root, optional
-  item epoch secret, revision secret, principal private key,
-  or plaintext vault data, and cancellation/loss never triggers fallback.
 - Every item body plaintext and complete Jury v1 artifact uses one exact allowed size
   bucket. Logical lengths and zero padding authenticate inside body AEAD; package
   padding is strictly bounded and transfer/backup framing binds its bucket.
@@ -5209,8 +5165,8 @@ Add these Jury v1 invariants.
 - Identity labels never resolve authority, and identity selection never probes
   multiple private keys automatically.
 - Transfer import never force-overwrites a fork.
-- History rollover creates a distinct signed lineage in an absent home and never
-  prunes, replaces, or relabels the source lineage.
+- Hard-cap preflight refuses before mutation; the first `0.x` never prunes or
+  rolls over a lineage.
 - Jury V1 readers reject unknown algorithms, schemas, operations, subject kinds, and
   roles.
 - Older readers reject Jury v1.
@@ -5229,14 +5185,13 @@ Use these layers:
 - unit tests for canonical preimages and validators;
 - normative and independent known-answer tests for every selected HPKE/KEM and
   signature component;
-- format fixtures for Jig v1, Jig v2, valid Jury v1, and invalid Jury v1;
+- format fixtures for valid and invalid Jury v1;
 - property tests for policy replay and revision chains;
 - mutation tests for byte tampering and reordered structures;
 - core API tests for partial unlock and authorization;
 - CLI parser, output, help, and raw-output tests;
-- TUI model/render/backend contract tests;
 - end-to-end consumer workflows;
-- platform-specific path and restore tests;
+- native Linux and macOS path, protected-memory, process, and restore tests;
 - size and latency benchmarks with declared fixtures.
 
 ### 22.2 Required principal matrix
@@ -5250,7 +5205,6 @@ Every relevant operation is tested as:
 - unknown principal;
 - removed principal;
 - wrong identity passphrase;
-- unavailable, cancelled, substituted, and successful device-bound protector;
 - protected-memory/core-dump setup failure with and without explicit degraded
   override;
 - valid identity with corrupted private payload.
@@ -5260,7 +5214,7 @@ Every relevant operation is tested as:
 Exercise:
 
 - Development accessible while the Production descriptor is inaccessible and
-  its name is absent from snapshots, errors, JSON, and TUI buffers;
+  its name is absent from snapshots, errors, JSON, and CLI output;
 - Production readable but not writable;
 - Production writable;
 - empty item;
@@ -5332,16 +5286,14 @@ Include fixtures for:
 - unknown identity/backup KDF profile, known profile with altered Argon2
   version/memory/passes/lanes/output length, and over-ceiling pre-authentication
   memory or parallelism;
-- unknown/substituted identity protector, changed provider challenge or opaque
-  credential ID, short/long provider response, passphrase-only bypass slot, and
-  provider fallback after cancellation/timeout;
 - lowered local checkpoint;
 - same-item fork;
 - policy fork.
 - principal replacement that retains one old key slot, misses one inherited
   role, or skips one required item rotation;
-- rollover bridge with a changed source ID, genesis fingerprint, terminal
-  revision, rollover ID, or owner signature.
+- reserved rollover bridge with a changed source ID, genesis fingerprint,
+  terminal revision, rollover ID, or owner signature; the runtime still rejects
+  creation of such a record.
 - a retained historical artifact that remains decryptable after later compromise
   of its then-authorized recipient key, paired with an assertion that passphrase
   change does not alter that result and principal replacement protects only the
@@ -5350,7 +5302,9 @@ Include fixtures for:
 Each test asserts stable error kind and absence of fixture secret bytes in display
 and debug output.
 
-### 22.5 Migration fixtures
+### 22.5 Migration fixtures (deferred post-`0.x`)
+
+These fixtures belong to J15 and are excluded from the active release corpus.
 
 Keep the checked-in generic v1 fixture.
 
@@ -5378,13 +5332,14 @@ Test:
 - `--allow-no-access` install;
 - inspect without identity shows only opaque deltas;
 - inspect `--me` labels only decryptable descriptors;
-- import dry-run predicts the exact merge and writes no local or shared state;
+- import dry-run predicts the exact strict-descendant result and writes no local
+  or shared state;
 - transfer status distinguishes never exported, matching, and changed locally;
 - export receipt never claims delivery;
 - identical import no-op;
 - incoming policy descendant;
-- local policy descendant;
-- independent changes to two items merge;
+- local policy descendant rejects as behind;
+- independent changes to two items reject as divergence;
 - same-item fork rejects;
 - policy fork rejects;
 - rollback below checkpoint rejects;
@@ -5408,13 +5363,9 @@ Test:
 - absent identity installation;
 - absent identity recovery reseals the same principal keys and local seed under
   a new identity passphrase, salt, nonce, and selected profile;
-- portable and each available device-bound restore enrollment; lost old hardware
-  is not required and the restored identity has no portable bypass unless that
-  mode was explicitly selected;
 - exact existing identity reuse;
 - nonmatching existing identity rejection;
 - identity published then vault publication failure and safe retry;
-- legacy backup restore compatibility;
 - backup contains owner recovery capability;
 - backup status before creation, after creation, after vault advance, and after
   verification;
@@ -5459,17 +5410,14 @@ Record on a documented development machine:
 - reader grant;
 - read revocation and reseal at 1 KiB, 1 MiB, and near file cap;
 - multi-item principal replacement;
-- Jury v1-to-Jury v1 rollover at policy, proof, and total-file cap thresholds;
-- transfer merge for independent items;
+- hard-cap refusal at policy, proof, and total-file thresholds;
+- divergent independent-item transfer refusal;
 - transfer inspect and dry-run near the file cap;
-- Jig v1/v2-to-Jury-v1 migration near file cap;
 - portable and hardened identity/backup KDF wall time and measured peak RSS;
 - rejected hostile KDF headers showing bounded pre-KDF work and no requested
   attacker-sized allocation;
 - protected-memory allocation/lock/unlock/zeroize costs and minimum required
   locked-byte budget on Linux and macOS;
-- each hardware provider's cold/warm unlock latency, cancellation/timeout, and
-  concurrent-attempt behavior without fabricated availability targets;
 - body/backup padding overhead at every bucket and proof-history growth under
   documented cover cadences.
 
@@ -5490,8 +5438,8 @@ Test:
   selection is unambiguous;
 - identity list reads public headers without private-key unlock or automatic
   probing;
-- protected prompts and TUI headers identify the exact selected identity;
-- `access list --me` and ordinary TUI snapshots contain only accessible names;
+- protected prompts and CLI status identify the exact selected identity;
+- `access list --me` and ordinary CLI output contain only accessible names;
 - `access explain` and `access check` prove capabilities without reading fields;
 - inaccessible and nonexistent names have identical error kind, text shape, JSON
   shape, and exit behavior;
@@ -5586,18 +5534,18 @@ Protocol tests cover:
 Deployment tests run the same conformance suite against in-memory, local
 single-node, and multi-process self-host fixtures.
 
-Managed-only infrastructure may add tests but may not replace the public server
-conformance suite.
+Managed-only infrastructure is outside the first `0.x` scope and does not enter
+its conformance suite.
 
 ## 23. Rollout and compatibility
 
 ### 23.1 Release shape
 
-Deliver Jury v1 in one release only after core, CLI, TUI, migration, transfer,
-backup, witnessed protocol, `juryd`, receipts, documentation, and compatibility
-tests are complete.
+Deliver Jury v1 in one release only after the Linux/macOS core and CLI,
+transfer, backup, witnessed protocol, self-hosted `juryd`, receipts,
+documentation, and supported-platform tests are complete.
 
-Do not ship a writer before the supported reader and migration recovery exist.
+Do not ship a writer before the supported reader and recovery path exist.
 
 Do not hide incomplete access enforcement behind a production feature flag.
 
@@ -5605,13 +5553,13 @@ Internal development may use test-only constructors and fixtures.
 
 ### 23.2 Read matrix
 
-The new binary:
+The Linux and macOS binaries:
 
 - creates, reads, and writes Jury format v1 with a selected identity;
-- inspects Jig v1/v2 only through an explicit read-only migration adapter;
-- migrates Jig v1/v2 to an absent Jury destination;
 - never writes Jig formats;
 - rejects unknown Jury format versions and unknown slot algorithms.
+
+Windows binaries and Jig migration are not part of the first `0.x`.
 
 Jig binaries:
 
@@ -5626,8 +5574,8 @@ flags, identity selection, private output, inject, and child-process behavior.
 
 It does not promise Jig command spelling or `jig://` parsing.
 
-`JIG_V2_VAULT_PASSPHRASE` is accepted only by explicit migration commands and is
-always removed before child execution.
+Jig credentials are never accepted by the active native CLI and are always
+removed before child execution.
 
 Jury identity commands use `JURY_IDENTITY_PASSPHRASE` and the `JURY_*` namespace.
 
@@ -5655,9 +5603,9 @@ opaque envelope count, sizes, principals, grants, and revision activity.
 
 It covers access-at-a-glance, capability checks, batch onboarding, policy
 dry-runs, transfer inspection/status, redistribution reminders, named identities,
-guided initialization, principal key replacement, capacity monitoring,
-authenticated rollover, and recovery readiness as primary workflows rather than
-advanced footnotes.
+guided initialization, principal key replacement, fail-closed capacity
+monitoring, and recovery readiness as primary workflows rather than advanced
+footnotes.
 
 ### 23.5 Operational guidance
 
@@ -5706,20 +5654,9 @@ Document key replacement as a fresh identity plus challenge/proof followed by
 one atomic `principal replace`; never advise editing keys inside a registered
 descriptor. Owner replacement requires a different remaining owner.
 
-Document capacity operations:
-
-1. monitor the public policy, proof, and encoded-size headroom;
-
-2. dry-run rollover before the warning threshold becomes a hard-cap failure;
-
-3. create the new lineage in an absent home and verify its signed source bridge;
-
-4. create and verify a new owner backup;
-
-5. distribute the new lineage and require its new genesis fingerprint;
-
-6. retain the old lineage and backups according to policy because rollover does
-   not erase or revoke them.
+Document capacity operations: monitor public policy, proof, and encoded-size
+headroom; preflight every mutation; and stop before a hard cap. The first `0.x`
+does not provide a rollover or suite-migration escape path and must say so.
 
 ### 23.6 Hosted-provider guidance
 
@@ -5745,15 +5682,16 @@ Use a central secrets manager instead when:
 
 The active graph is witnessed-first. Format and item work cannot freeze until
 J19 supplies the exact bound direct/witnessed slot contract. Direct mode,
-migration/recovery, process safety, the witness engine, and server adapters then
-progress behind shared boundaries before J22 joins them into witnessed open.
+recovery, process safety, the witness engine, and server adapters then progress
+behind shared boundaries before J22 joins them into witnessed open.
 
 No bead exists for writing this plan, reviewing it, or converting it to beads.
 
 Every bead below owns a concrete reproducible outcome.
 
-The tracker may use the six existing children of `jury-qv4` as delivery tracks;
-the numbered outcomes below are their implementable descendants.
+The tracker uses five active children of `jury-qv4` as delivery tracks. The
+former TUI track is deferred and detached from the active epic; the numbered
+outcomes below are the implementable descendants.
 
 ### 24.1 DAG
 
@@ -5762,7 +5700,7 @@ J01A suite requirements -> J01B provider proof
 J02 protected primitives ---------------------------+
 J03 domain + adapter seam ----+
 J01B provider proof ----------> J19A construction + threat model
-J19A -> J19B protocol/state machines -> J19C vectors/retention proof
+J19A -> J19B protocol/state machines -> J19C vectors/bounded retention model
                                           -> J19 exact-artifact machine gate
 
 J01B + J02 + J19 -> J04 identity store
@@ -5772,27 +5710,27 @@ J02 + J04 + J05 + J06 + J19 -> J07 direct/witnessed item envelopes
 J02 + J04 + J07 -> J08 mode-neutral ItemAccessProvider + direct backend
 J04 + J05 + J06 -> J09 local audit + checkpoints
 J06 + J08 + J09 + J19 -> J10 witnessed-aware partial-unlock sessions
-J07 + J10 -> J11 atomic item/policy mutations
+J07 + J10 -> J11 atomic item/policy mutations + capacity refusal
 
 J02 -> J12 neutral process execution extraction
 J03 + J10 + J11 -> J13 native admin/read/inject CLI
 J10 + J12 + J13 -> J14 exec/run pipeline
 
-J05 + J06 + J07 + J09 + J10 -> J16 transfer and ancestry merge
+J05 + J06 + J07 + J09 + J10 -> J16 transfer + strict-descendant import
 J04 + J07 + J09 + J10 -> J17 backup, restore, recovery
-J11 + J16 + J17 + J23 -> J18 capacity preflight + witnessed rollover
 
 J04 + J06 + J19 -> J20 witness policy/replay/contribution engine
 J20 -> J21 self-hostable juryd adapters
 J10 + J13 + J14 + J19 + J21 + J23 -> J22 witnessed open + approval UX
 J19 + J20 + J21 -> J23 receipts + witness operations
 
-J10 + J13 + J16 + J17 + J18 + J22 + J23 -> J24 witnessed access TUI
-J11 + J14 + J16 + J17 + J18 + J20 + J21 + J22 + J23 + J24
+J11 + J14 + J16 + J17 + J20 + J21 + J22 + J23
   -> J25 adversarial corpus + benchmarks
-J18 + J22 + J23 + J24 + J25 -> J26 experimental witnessed release
+J22 + J23 + J25 -> J26 experimental witnessed release
 
 Deferred post-0.x only: J03 + J05 + J06 + J07 + J09 + J10 -> J15 compatibility
+                         J11 + J16 + J17 + J23 -> J18 rollover + suite migration
+                         J10 + J13 + J16 + J17 + J18 + J22 + J23 -> J24 TUI
 Deferred optional external review: J19B -> J19R reviewer engagement
                                    J19C + J19R -> J19D construction review
                                    J19D + J25 -> J19E implementation/build review
@@ -5804,33 +5742,34 @@ Every task-local `Unblocks` list below names immediate blocking-edge consumers,
 not merely transitive downstream outcomes. Tracker metadata is the executable
 source for those edges and must remain identical to the task-local list.
 
-J01A, J02, and J03 are the initial ready outcomes. J01B is blocked by J01A;
-J19A is blocked by J01B and J03. J19C feeds the exact-artifact J19 gate that
-blocks the format and witnessed path. The deferred review branch has no edge
-back into the active release path.
+J01A is blocked pending an author-distinct verifier; J12 is the current ready
+active outcome. J01B is blocked by J01A, and J19A is blocked by J01B and J03.
+J19C feeds the exact-artifact J19 gate that blocks the format and witnessed
+path. Deferred branches have no edge back into the active release path.
 
 J26 is the active release join and is not allowed to hide incomplete active
-children. J19-J23 and J25 remain mandatory release dependencies. The external
-review tasks J19R/J19D/J19E are optional future assurance work, not active
-release gates.
+children. J19-J23 and J25 remain mandatory release dependencies. J15, J18, J24,
+and the external-review tasks J19R/J19D/J19E are future work, not active release
+gates.
 
 ### 24.2 Track ownership
 
 | Existing track | Concrete descendants |
 | --- | --- |
 | Cryptographic requirements | J01A, J01B |
-| Portable vault and identity | J02-J11, J16-J18 |
+| Portable vault and identity | J02-J11, J16-J17 |
 | CLI and execution | J12-J14 |
 | Witnessed authority and `juryd` | J19A-J19C, J19-J23 |
-| Witnessed access TUI | J24 |
+| Deferred witnessed access TUI | J24 |
 | Release | J25-J26 |
 
-J15 is a deferred standalone post-`0.x` compatibility outcome. J19R/J19D and
+J15, J18, and J24 are deferred standalone post-`0.x` outcomes. J19R/J19D and
 J19E are deferred standalone optional external-review outcomes. None is a
 descendant of the active Jury release epic; all are excluded from active
 readiness and estimate rollups. J15 may be reactivated only after J26 under a
-separately approved post-`0.x` scope. J19R/J19D/J19E may be reactivated only
-after an explicit scope revision names a qualified reviewer and actual budget.
+separately approved post-`0.x` scope. J18 and J24 require an explicit later
+product scope. J19R/J19D/J19E additionally require a qualified reviewer and
+actual budget.
 
 ### 24.3 Jury Beads mapping
 
@@ -6014,7 +5953,7 @@ Inspect:
 - `crates/jig-vault/src/backup.rs` and `backup/**`;
 - `path_security.rs`, `output.rs`, and `store.rs`;
 - `vault_tests/lifecycle.rs`;
-- backup and restore controls exposed by the Jig CLI/TUI.
+- backup and restore controls exposed by the Jig CLI.
 
 Reuse no-overwrite, private staging, tamper cleanup, permissions, symlink and
 hard-link refusal, audit verification, publication-failure, and legacy backup
@@ -6065,25 +6004,25 @@ accidental omission.
 | Jig v3 task | Disposition | Concrete owners | Rationale |
 | --- | --- | --- | --- |
 | B01 cryptographic provider | Covered | J01A, J01B, J02 | J01A freezes requirements and suite; J01B proves current providers; J02 owns protected secret-memory primitives. |
-| B02 encrypted identities | Covered | J02, J04, J13, J24, J25 | Identity format, protected unlock, device protectors, operator UX, and conformance are independently owned. |
+| B02 encrypted identities | Changed | J02, J04, J13, J25 | The active release owns portable protected identities and CLI UX; device protectors are deferred. |
 | B03 wire model and preimages | Changed | J05, J07, J19 | `jig-vault` v3 becomes bounded `jury-vault` v1 with tagged direct and witnessed slots. |
 | B04 signed policy and access | Covered | J06, J11, J19, J20 | Offline policy replay remains; witnessed request policy adds a separate bounded decision engine. |
 | B05 item envelopes and rekey | Covered | J07, J08, J11 | Item roots, derived keys, slots, proofs, rekeying, and guarded unwrapping remain first-class. |
 | B06 audit and checkpoints | Covered | J09, J16, J17, J23 | Principal-local activity/checkpoints remain and are extended with transfer, recovery, and witness receipts. |
 | B07 partial unlock | Changed | J08, J10, Jig D05 | Jury owns sessions and unwrapping; Jig delegates complete operations and never receives plaintext. |
-| B08 atomic mutations | Covered | J11, J13, J24, J25 | Core authorization/publication, CLI/TUI workflows, cover reseals, and adversarial cases remain. |
+| B08 atomic mutations | Covered | J11, J13, J25 | Core authorization/publication, CLI workflows, cover reseals, and adversarial cases remain. |
 | B09 v2-to-v3 migration | Changed | J15, Jig D06 | In-place migration is replaced by read-only Jig compatibility and copy-on-write migration to an absent Jury home. |
-| B10 administration CLI | Covered | J04, J06, J11, J13, J24 | Identity, principal, access, protection, preview, status, and capacity workflows remain. |
+| B10 administration CLI | Covered | J04, J06, J11, J13 | Portable identity, principal, access, preview, status, and capacity workflows remain. |
 | B11 list/read/inject | Changed | J03, J10, J13, Jig D04-D05 | Jury owns native selectors and plaintext operations; Jig only translates and delegates. |
 | B12 exec/run | Changed | J12, J14, Jig D05 | Jury owns resolution, containment, redaction, and plaintext child delivery. |
 | B13 1Password import | Deferred | Jury v1 non-goal | The importer is intentionally excluded from Jury v1 and may be reconsidered later. |
-| B14 transfer and merge | Covered | J16 | Vault-only export, inspection, dry-run, ancestry merge, conflicts, and honest local status remain. |
+| B14 transfer and merge | Changed | J16 | Vault-only export, inspection, strict-descendant import, divergence refusal, and honest local status remain; semantic merge is deferred. |
 | B15 backup and restore | Covered | J17 | Independent recovery credentials, absent-target restore, readiness, verification, and drills remain. |
-| B16 access-aware TUI | Changed | J24, Jig D05 | Jury owns the CLI-backed direct/witnessed TUI; Jig replaces its in-process vault UI by delegation. |
+| B16 access-aware TUI | Deferred | J24 | No TUI ships in the first `0.x`; the CLI is the active operator interface. |
 | B17 config, status, contract, guidance | Changed | J13, J21, J23, J26, Jig D02-D09 | Jury owns native/server contracts and docs; Jig owns adapter discovery, rollout, deprecation, and removal. |
 | B18 adversarial corpus and budgets | Covered | J25 | The corpus expands to witness, server, receipt, cancellation, and database boundaries. |
 | B19 integration and release | Changed | J25, J26, Jig D07-D09 | Jury release assurance and Jig cutover/dogfood are separate, evidence-gated outcomes. |
-| B20 capacity and rollover | Covered | J18 | Capacity preflight and signed new-lineage rollover remain, renamed for Jury v1. |
+| B20 capacity and rollover | Changed | J11, J18 | J11 actively refuses mutations at hard caps; J18 rollover and suite migration are deferred. |
 
 The Jig tracker may close B01-B20 and their parent as superseded only after the
 live Jury Beads contain the task contracts below, the live dependency graph
@@ -6339,7 +6278,7 @@ Scope:
   primitives that treat repository contents as untrusted and never place
   plaintext staging files in the worktree;
 - harden the separate platform state root and cross-worktree lock against
-  symlink, hard-link, reparse-point, containment, and alias attacks;
+  symlink, hard-link, containment, and alias attacks;
 - add explicit clock/randomness hooks where needed for later tests, including the
   fallible OS-randomness seam consumed by the J03 native-ID generator;
 - remove Jig homes, environment variables, error types, and URI selectors;
@@ -6351,14 +6290,14 @@ Tests:
 - allocation-growth refusal;
 - protected-page rounding, guards, lock/dump/fork failure, zeroize-before-unmap,
   and core-suppression-before-callback tests on supported platforms;
-- symlink, hard-link, reparse-point, and alias attacks;
+- symlink, hard-link, and alias attacks;
 - nested repository, linked-worktree `.git` file, malicious `.jury`, and
   worktree/state-root overlap cases;
 - race replacement between validation and use;
 - atomic output crash points;
 - injected randomness failure with typed value-free errors and no returned bytes;
 - secret-free error snapshots;
-- Linux, macOS, and Windows platform gates where supported.
+- native Linux and macOS platform gates.
 
 Acceptance:
 
@@ -6473,13 +6412,9 @@ Scope:
 - support named and explicit-file selection;
 - expose role-specific public descriptors and typed proof, sign,
   direct-decapsulation, and witnessed-contribution operations;
-- implement the typed `IdentityProtector` boundary and versioned keychain,
-  Secure Enclave P-256, TPM2 sealed-factor, and FIDO2 `hmac-secret` adapters;
-- gate every advertised provider on direct-API, cancellation/timeout, temporary-
-  buffer accounting, presence/verification, and real-device conformance;
-- implement protection status, enrollment, rebind, removal, assurance reporting,
-  explicit portable downgrade, and backup-based lost-device recovery with no
-  passphrase-only bypass or cancellation fallback;
+- implement only portable passphrase protection in the first `0.x`; keep the
+  future `IdentityProtector` seam private and unadvertised until a separate
+  hardware-provider scope is activated;
 - implement passphrase change as resealing, not key replacement;
 - keep identity homes disjoint from vault homes.
 
@@ -6495,10 +6430,7 @@ Tests:
 - hostile KDF parameters before allocation;
 - key/public descriptor correspondence;
 - selector ambiguity and path attacks;
-- portable and each available provider-backed round trip, provider/credential/
-  challenge substitution, cancellation, timeout, lost-device, and no-fallback;
-- enrollment/rebind/removal atomicity, old-method authorization, assurance
-  reporting, and explicit downgrade confirmation;
+- portable identity round trips and identical public behavior on Linux and macOS;
 - passphrase change preserving principal keys;
 - principal replacement creating new keys;
 - propagated identifier entropy/retry failure, local identifier collision or
@@ -6517,7 +6449,8 @@ Acceptance:
 - witness contribution operations are bound to the exact J19 suite and revision-scoped input;
 - role-preserving rotation and replacement retain explicit public lineage without retaining old private authority;
 - exact KDF profiles and downgrade rules are tested, passphrase bytes are exact across supported platforms and input sources, and public descriptor vectors are stable;
-- every advertised device provider passes deterministic protocol tests and gated real-hardware conformance; unsupported providers report unavailable and never silently fall back.
+- Linux and macOS pass the same portable identity lifecycle and protected-memory
+  tests; CLI/help/release output advertises no device or hardware assurance.
 
 Dependencies: J01B, J02, J03, J05, J19.
 
@@ -6550,7 +6483,9 @@ Scope:
   per-revision suite selection, negotiation, fallback, and mixed active suites;
 - define authenticated suite migration only as decrypt-and-re-encrypt into a new
   lineage, with a signed statement binding both genesis IDs, old terminal
-  revision, old/new suites, and canonical migrated-item digests;
+  revision, old/new suites, and canonical migrated-item digests; this is a
+  reserved format representation and negative-vector surface, not an active
+  runtime command;
 - consume the exact J01A-owned shared/direct and J19-owned witnessed digest,
   signature, KDF-context, HPKE-`info`, and AAD byte layouts verbatim; define only
   their placement in the outer bounded vault representation and never introduce
@@ -6589,7 +6524,8 @@ Acceptance:
 - every cryptographic preimage is byte-identical to the bound J01A or J19 corpus;
   a required change reopens the owning gate instead of being defined in J05;
 - a witnessed-only item can omit direct slots, while any usable direct slot is detectable and suppresses its quorum claim;
-- suite migration preserves the old lineage unchanged and never creates a dual-suite lineage;
+- reserved suite-migration records preserve the old lineage unchanged and never
+  create a dual-suite lineage; the first `0.x` runtime cannot create them;
 - unknown recipient slots and direct downgrade attempts fail closed;
 - `.jury/vault.json` is byte-stable and contains no installation-local custody or witness state.
 
@@ -6744,7 +6680,7 @@ Unblocks: J08, J11, J15, J16, J17.
 
 Why this task exists:
 
-CLI and TUI callers must not gain a bypass merely because direct and witnessed
+CLI and downstream callers must not gain a bypass merely because direct and witnessed
 authorization use different machinery. One narrow provider contract keeps mode,
 private keys, contributions, and revision secrets behind the owning boundary
 while giving consumers identical cleanup and failure semantics.
@@ -6782,7 +6718,8 @@ Tests:
 
 Acceptance:
 
-- CLI/TUI-facing APIs cannot request an identity private key, epoch root, contribution, or revision secret;
+- CLI-facing APIs cannot request an identity private key, epoch root,
+  contribution, or revision secret;
 - every provider can release only one selected descriptor/body revision to a scoped consumer;
 - the public interface contains no direct-only assumption;
 - direct and witnessed backends share the same success and cleanup boundary;
@@ -6815,7 +6752,7 @@ Scope:
   worktrees that select the same vault/genesis/principal tuple;
 - authenticate event sequence and vault revision checkpoints;
 - reject a behind or divergent Git checkout without lowering retained state;
-  strict descendants may advance and independent-item branches route to J16;
+  strict descendants may advance and all divergent branches fail closed;
 - separate shared authenticity from local activity;
 - define safe event schemas for direct and witnessed reads, request/decision
   transitions, writes, failures, transfers, backup, and witness operations;
@@ -6823,8 +6760,8 @@ Scope:
   and revision-seal identifiers without storing manifests, contributions,
   reusable authorization material, private names, or values;
 - expose selected-principal `vault audit verify` semantics, including clear
-  labeling for migration-attested legacy archives;
-- implement bounded verification and rollover.
+  labeling for any future migration-attested legacy archives;
+- implement bounded verification and explicit retention limits.
 
 Tests:
 
@@ -6930,6 +6867,9 @@ Scope:
   invalidates incompatible pending requests;
 - determine every touched item before decryption;
 - preflight all rotations, slots, signatures, bounds, and output size;
+- compute every resulting count and encoded size before mutation, return a typed
+  `CapacityExhausted` error at any hard cap, and publish neither shared nor local
+  state on refusal; the first `0.x` has no rollover fallback;
 - append audit intent, publish one artifact, and advance checkpoint;
 - under the shared cross-worktree lock, re-open and compare the current
   `.jury/vault.json` digest and ancestry to the loaded preview before replacing
@@ -6957,6 +6897,8 @@ Tests:
 - cover authorization, same-bucket invariance, proof-cost, capacity, and
   redistribution-result cases;
 - output publication and fsync faults;
+- every count and file-size cap just below, at, and above the boundary, including
+  proof that refusal leaves shared and local bytes unchanged;
 - secret-free result and error contracts.
 
 Acceptance:
@@ -6969,6 +6911,8 @@ Acceptance:
 - a Git-backed mutation cannot overwrite different Git or Jury ancestry;
 - post-publication local-state failure is reported as committed and never replays the shared mutation;
 - Jury mutations have no implicit Git side effects.
+- capacity exhaustion is deterministic, typed, pre-publication, and never
+  advertises an unavailable rollover command.
 
 Dependencies: J07, J10.
 
@@ -6993,7 +6937,8 @@ Scope:
 - implement process group/job ownership, timeout, kill tree, signal forwarding,
   bounded capture, pipe closure, wait, and cleanup;
 - preserve streaming redaction and independent output streams;
-- support platform-specific capabilities explicitly;
+- support Linux and macOS capabilities explicitly and reject unsupported
+  platforms;
 - document unavoidable OS-owned secret copies.
 
 Tests:
@@ -7008,7 +6953,7 @@ Tests:
 Acceptance:
 
 - Jury never imports `jig-owned-process` at runtime;
-- child cleanup tests pass on supported platforms;
+- child cleanup tests pass in native Linux and macOS CI;
 - unsupported guarantees fail or degrade explicitly.
 
 Dependencies: J02.
@@ -7034,8 +6979,7 @@ Scope:
 - implement argument parsing and bounded protected input;
 - implement human and stable JSON output;
 - add identity init/list/status/public/prove/change;
-- add identity protection status/enroll/rebind/remove with exact provider and
-  assurance reporting, no fallback, and explicit portable downgrade gating;
+- expose portable identity status without device or hardware-assurance claims;
 - add vault init/status and item/field operations;
 - implement section 0.8A precedence for `--home`, `--global`, absolute
   `JURY_HOME`, nearest Git worktree `.jury`, and the platform global default;
@@ -7049,7 +6993,7 @@ Scope:
   a clone and an externally supplied expected genesis for non-interactive use;
 - label direct, witnessed-only, and mixed-mode access per selected principal and
   never emit an item-level quorum claim for mixed mode;
-- add role-specific create, inspect, rotate, replace, and protector commands for
+- add role-specific create, inspect, rotate, and replace commands for
   vault principals, approvers, and witnesses;
 - add `policy require witnessed` with eligible approver/witness membership,
   approval quorum, witness quorum, allowed-operation, request-lifetime, and
@@ -7061,12 +7005,14 @@ Scope:
 - add read/private output and template injection;
 - add `privacy cover --item`, `vault audit verify`, history/capacity status, and
   stable public validation output;
-- strip every Jury and migration credential from child environments;
+- strip every Jury credential from child environments;
 - never parse `jig://` in native commands.
 
 Tests:
 
 - interactive and non-interactive workflows;
+- the complete supported CLI suite on native Linux and macOS CI, including
+  platform home discovery and protected input;
 - nested repositories, linked worktrees, explicit/global precedence, absent
   repo home init, malicious `.git`/`.jury` paths, and detached-home workflows;
 - fresh-clone TOFU, externally pinned CI, whole-repository substitution, and
@@ -7075,8 +7021,8 @@ Tests:
 - uniform unavailable behavior;
 - no output/JSON/log leakage;
 - denied multi-reference injection creates no output;
-- device-protector cancellation/loss never falls back; cover and audit commands
-  reveal no inaccessible names and report exact committed/retryable state;
+- cover and audit commands reveal no inaccessible names and report exact
+  committed/retryable state;
 - mixed-slot fixtures prove status and JSON claims remain path-specific;
 - role/membership/quorum/mode command matrices, impossible quorum rejection,
   and missing direct-downgrade acknowledgement;
@@ -7091,6 +7037,9 @@ Acceptance:
 - structured status reports direct-slot suppression and pending-request invalidation without private data;
 - inside a Git worktree, the default shared artifact is committed .jury/vault.json while identities and local state remain outside Git;
 - native CLI help does not imply Jig ownership or whole-product cryptographic review.
+- native CLI help advertises Linux and macOS, rejects unsupported platforms, and
+  does not advertise TUI, hardware protectors, managed service, semantic merge,
+  rollover, or suite migration.
 
 Dependencies: J03, J10, J11.
 
@@ -7203,49 +7152,43 @@ Dependencies: J03, J05, J06, J07, J09, J10.
 
 Unblocks: post-`0.x` compatibility only.
 
-### J16 — Implement transfer, inspection, and ancestry merge
+### J16 — Implement transfer, inspection, and strict-descendant import
 
 Why this task exists:
 
 Transfer distributes portable ciphertext, not recovery authority. Signed
-envelopes, ancestry validation, and typed fork rejection permit safe offline
-exchange without including identities or pretending local export proves
-delivery.
+envelopes, ancestry validation, and typed divergence rejection permit safe
+offline exchange without including identities or pretending local export proves
+delivery. The first `0.x` does not synthesize merged state.
 
 Outcome:
 
-Portable encrypted shared state can be exported, inspected, imported, and
-merged when ancestry permits without carrying local identities or audit.
+Portable encrypted shared state can be exported, inspected, and imported when
+the incoming artifact is identical or a strict authenticated descendant,
+without carrying local identities or audit.
 
 Scope:
 
 - implement bounded transfer envelope and digest;
 - implement public inspection and optional accessible-name projection;
-- implement bounded public verify and value-free semantic diff over explicit
-  artifact files without requiring an identity;
-- implement ancestry-aware three-way merge over independently validated
-  base/ours/theirs artifacts, suitable for explicit use or an opt-in Git merge
-  driver, with no textual fallback;
+- implement bounded public verify and value-free ancestry/status inspection over
+  explicit artifact files without requiring an identity;
 - enforce genesis, policy, item-proof, and checkpoint relationships;
-- permit strict descendants and independent-item merges only when signatures
-  and ancestry prove safety;
-- authenticate and merge witnessed membership, both quorums, access mode,
-  workload rules, pending-request invalidation, and direct-slot claim
-  suppression under those same ancestry rules;
-- reject branches that conflict on witnessed governance, lower a quorum,
-  introduce a direct slot, or revive a revoked approver/witness rather than
-  selecting the weaker branch automatically;
-- reject same-item forks without explicit recovery;
+- permit only identical state or a complete incoming strict descendant when
+  signatures and ancestry prove safety;
+- reject behind state, independent-item progress, policy or item forks,
+  witnessed-governance divergence, lower quorums, direct-slot introductions,
+  revived actors, and stale claim state without producing a candidate artifact;
 - record local export status without claiming delivery.
 
 Tests:
 
 - truncation, replacement, wrong genesis, rollback, and forks;
-- Git conflict markers, malicious base selection, forged Git authorship or
-  signed commits, missing merge driver, and merge-driver partial output;
+- Git conflict markers, forged Git authorship or signed commits, and attempted
+  textual or semantic merge output;
 - old-commit checkout and divergent-branch comparison against retained J09
   state, including fresh-clone trust and linked-worktree concurrency;
-- independent-item merge and same-item conflict;
+- incoming strict descendants plus independent-item and same-item conflicts;
 - direct-versus-witnessed policy forks, concurrent membership/quorum changes,
   direct-slot introduction, revoked actor resurrection, and stale cached quorum
   claims;
@@ -7256,17 +7199,18 @@ Tests:
 Acceptance:
 
 - raw copy and transfer semantics are documented honestly;
-- import cannot silently discard a valid local branch;
+- import cannot silently discard a valid local branch or synthesize merged state;
 - export status never claims recipient delivery.
 - ordinary textual Git merge cannot produce an accepted Jury artifact;
-- semantic diff is value-free by default and inaccessible names remain hidden;
-- three-way merge cannot discard a valid local branch or accept Git identity as Jury authority;
+- ancestry inspection is value-free by default and inaccessible names remain hidden;
+- import cannot accept Git identity as Jury authority;
 - old and divergent checkouts never lower retained local ancestry.
-- merge never silently selects a direct downgrade, lower quorum, revived witness/approver, or stale quorum claim;
+- divergence never silently selects a direct downgrade, lower quorum, revived
+  witness/approver, or stale quorum claim.
 
 Dependencies: J05, J06, J07, J09, J10.
 
-Unblocks: J18, J24, J25.
+Unblocks: J25. J18 and J24 only if their deferred scopes are activated.
 
 ### J17 — Deliver owner backup, restore, and recovery drills
 
@@ -7301,7 +7245,6 @@ Scope:
   integration metadata while restoring identity and authenticated local state
   only to their separate platform roots;
 - preserve existing targets;
-- support legacy backup restore followed by explicit migration;
 - record drill success only after actual restored access verification.
 
 Tests:
@@ -7321,6 +7264,7 @@ Tests:
 - existing and aliased targets;
 - real drill and failed receipt recording;
 - transfer/backup type confusion.
+- native backup, drill, and restore transactions on Linux and macOS.
 
 Acceptance:
 
@@ -7336,9 +7280,16 @@ Acceptance:
 
 Dependencies: J04, J07, J09, J10.
 
-Unblocks: J18, J24, J25.
+Unblocks: J25. J18 and J24 only if their deferred scopes are activated.
 
-### J18 — Implement capacity preflight and authenticated rollover
+### J18 — Implement authenticated rollover and suite migration
+
+Release status:
+
+J18 is deferred and out of scope for the first `0.x`. J11 owns all active
+capacity preflight and fails before mutation at a hard cap. J18 may be
+reactivated only through an explicit post-`0.x` rollover and suite-migration
+scope; it does not block J25 or J26.
 
 Why this task exists:
 
@@ -7409,7 +7360,7 @@ Acceptance:
 
 Dependencies: J11, J16, J17, J23.
 
-Unblocks: J24, J25, J26.
+Unblocks: deferred J24 only.
 
 ### J19A-J19C — Freeze the witnessed construction corpus
 
@@ -7624,7 +7575,7 @@ Dependencies: J19B.
 
 Unblocks: J19D.
 
-#### J19C — Publish witnessed conformance vectors and endpoint-retention proof
+#### J19C — Publish witnessed conformance vectors and a bounded endpoint-retention model
 
 Why this task exists:
 
@@ -7636,8 +7587,10 @@ lands.
 Outcome:
 
 `conformance/witness-v1/` contains implementation-independent positive and
-negative vectors plus an executable model proving the exact endpoint-retention
-and revision-freshness property for the J19A construction and J19B protocol.
+negative vectors plus an executable bounded model that searches the declared
+state space for counterexamples to the endpoint-retention and revision-freshness
+properties of the J19A construction and J19B protocol. This is engineering
+evidence under frozen assumptions, not a formal proof or independent review.
 
 Required work:
 
@@ -7680,10 +7633,10 @@ Acceptance:
 
 - separately implemented consumers can consume the corpus without repository-
   private context;
-- the model covers all endpoint-visible retained state and explicitly lists
-  excluded compromise cases;
-- revision-N state cannot satisfy revision-N+1 authorization or decryption under
-  the accepted model;
+- the model declares and covers its finite state space, assumptions, and excluded
+  compromise cases;
+- no revision-N state satisfies revision-N+1 authorization or decryption within
+  that declared model space;
 - protocol, meaningful-approval, anchor-crash, and retained-state positives and
   negatives are deterministic, bounded, and generic;
 - no vector or transcript yields an epoch root or reusable contribution.
@@ -7719,7 +7672,7 @@ Required work:
 - require review of construction selection and assumptions, canonical preimages,
   meaningful approval and request/manifest consistency, contribution assembly,
   replay/expiry, rollback anchors, split-write recovery, rotation/recovery,
-  downgrade behavior, and endpoint-retention proof;
+  downgrade behavior, and bounded endpoint-retention model;
 - record reviewer identity or organization, independence basis, scope, date,
   reviewed revision, findings, severity, and dispositions;
 - remediate every material finding in its owning J19A-J19C artifact and obtain
@@ -7769,7 +7722,7 @@ the project received external review.
 Outcome:
 
 One machine-checked gate binds the exact J19A-J19C threat model, construction,
-protocol corpus, conformance vectors, endpoint-retention proof, solo
+protocol corpus, conformance vectors, bounded endpoint-retention model, solo
 verification record, and provider versions consumed by witnessed
 implementation. It makes no claim about implementation source that does not yet
 exist and no claim of independent review, certification, or suitability for
@@ -7788,7 +7741,7 @@ Scope:
 - fail closed when an artifact, provider version, vector, verification command,
   finding disposition, or bound revision is absent, stale, or mismatched;
 - invalidate the gate whenever a construction, preimage, state machine, vector,
-  proof, provider input, verifier, or material remediation changes;
+  retention model, provider input, verifier, or material remediation changes;
 - label alternate implementations, models, agents, tests, and the fresh pass as
   engineering evidence, never as independent review.
 
@@ -7918,9 +7871,10 @@ Unblocks: J21, J23, J25.
 
 Why this task exists:
 
-Self-hosting is meaningful only when operators run the same security-critical
-engine as the managed product. Adapters own transport and durability while the
-protocol engine remains shared and independently testable.
+Self-hosting is meaningful only when operators receive the complete
+security-critical engine. Adapters own transport and durability while the
+protocol engine remains independently testable; no managed product is required
+or specified by the first `0.x`.
 
 Outcome:
 
@@ -7955,7 +7909,8 @@ Tests:
 - oversized/slow/malformed requests;
 - rate-limit enumeration resistance;
 - in-flight shutdown;
-- same cryptographic behavior in self-host and managed configuration.
+- the same conformance behavior across documented self-host configurations on
+  Linux and macOS hosts where the selected adapters support them.
 
 Acceptance:
 
@@ -7968,6 +7923,7 @@ Acceptance:
   domain are independent from database backup/restore authority; shared
   authority cannot serve contributions;
 - health output contains no policy, item, or principal enumeration.
+- documentation and configuration contain no hidden managed-service dependency.
 
 Dependencies: J20.
 
@@ -8048,7 +8004,7 @@ Acceptance:
 
 Dependencies: J10, J13, J14, J19, J21, J23.
 
-Unblocks: J24, J25, J26.
+Unblocks: J25 and J26. J24 only if its deferred scope is activated.
 
 ### J23 — Deliver offline receipts and witness operations
 
@@ -8075,7 +8031,7 @@ Scope:
   external-ahead/divergent fail-closed operations;
 - implement safe health and audit export;
 - define retention/compaction and transparency options;
-- document customer-hosted plus managed-witness topologies.
+- document bounded self-hosted witness topologies only.
 
 Tests:
 
@@ -8099,9 +8055,16 @@ Acceptance:
 
 Dependencies: J19, J20, J21.
 
-Unblocks: J18, J22, J24, J25, J26.
+Unblocks: J22, J25, and J26. J18 and J24 only if their deferred scopes are
+activated.
 
 ### J24 — Deliver the witnessed access-aware CLI-backed TUI
+
+Release status:
+
+J24 is deferred and out of scope for the first `0.x`. The CLI is the sole active
+operator interface. This task may be reactivated only through an explicit
+post-`0.x` TUI scope and does not block J25 or J26.
 
 Why this task exists:
 
@@ -8163,28 +8126,27 @@ Acceptance:
 
 Dependencies: J10, J13, J16, J17, J18, J22, J23.
 
-Unblocks: J25, J26.
+Unblocks: future TUI-capable releases only.
 
 ### J25 — Complete the witnessed adversarial corpus and measured budgets
 
 Why this task exists:
 
-The release claim spans parsers, durable state, Git transport, cryptographic
-providers, witness services, user interfaces, and child processes. Separately
-authored adversarial cases and measured budgets are required because happy-path
-unit tests or guessed limits cannot expose cross-boundary downgrade, rollback,
-leakage, or resource-exhaustion failures.
+The release claim spans durable state, Git transport, cryptographic providers,
+witness services, the CLI, and child processes. J25 joins those boundaries with
+end-to-end adversarial cases and measurements; each owning task remains
+responsible for its ordinary negative and crash tests.
 
 Outcome:
 
-Jury has separately authored negative fixtures, fuzz/property targets,
+Jury has purpose-built negative fixtures, fuzz/property targets,
 failure-injection coverage, leak scans, and recorded performance/resource
 measurements across the entire security boundary.
 
 Scope:
 
-- exercise format, crypto, identity, policy, item, transfer, backup,
-  process, CLI, and TUI failure surfaces through executable tests;
+- exercise cross-boundary format, crypto, identity, policy, item, transfer,
+  backup, process, CLI, and witness-service failures through executable tests;
 - add coverage-guided fuzz targets for all untrusted parsers;
 - add state-machine models for policy, mutations, replay, and recovery;
 - inject filesystem, entropy, clock, network, database, process, and cancellation
@@ -8192,13 +8154,13 @@ Scope:
 - model Git as an untrusted transport: whole-repository substitution, malicious
   `.git`/`.jury`, symlinked and linked worktrees, clone without local state,
   checkout/reset/force-push rollback, forged Git authorship/signatures, conflict
-  markers, text merge, semantic merge partial output, and concurrent worktrees;
-- prove repository-local workflows never place plaintext, identities,
-  checkpoints, audit, receipts, locks, or recovery state in the Git worktree,
-  index, objects, diffs, hooks, or filters;
-- cover protected-memory/core-dump failure timing, device-provider conformance,
-  privacy-cover history/capacity, and complete direct and witnessed end-to-end
-  candidates;
+  markers, attempted text/semantic merge output, and concurrent worktrees;
+- run a bounded, named leak scan over the canonical repository-local lifecycle
+  and enumerate the inspected worktree, index, object, diff, hook, filter, log,
+  receipt, and crash-artifact surfaces; report this as scoped evidence, never as
+  universal proof;
+- cover protected-memory/core-dump failure timing, privacy-cover history and
+  capacity refusal, and complete direct and witnessed end-to-end candidates;
 - fuzz and model request/manifest consistency, approval counting, replay,
   witness checkpoint/anchor recovery, contribution assembly, receipt parsing,
   and direct-path downgrade reporting;
@@ -8215,13 +8177,11 @@ Scope:
   1/1,000/65,536 proofs; one-item unlock; descriptor catalogs at
   1/10/100/1,000 granted items; ten-item inject preflight; reader grant; read
   revocation/reseal at 1 KiB, 1 MiB, and near file cap; multi-item principal
-  replacement; rollover at policy/proof/file caps; independent-item merge;
-  transfer inspect/dry-run and Jig migration near file cap;
+  replacement; hard-cap refusal; and transfer inspect/strict-descendant dry-run;
 - measure portable/hardened identity and backup KDF wall time plus peak RSS,
   bounded rejection of hostile KDF headers, protected-memory lock/unlock/zeroize
-  cost and locked-byte budget on Linux/macOS, hardware-provider cold/warm unlock
-  and cancellation/concurrency behavior, every padding bucket, and proof-history
-  growth under documented cover cadences;
+  cost and locked-byte budget on Linux and macOS, every padding bucket, and
+  proof-history growth under documented cover cadences;
 - record no guessed absolute latency SLO; pathological superlinear behavior
   outside documented local-audit verification blocks release, and non-KDF peak
   memory stays within the 16 MiB artifact cap plus bounded touched-item state;
@@ -8235,8 +8195,10 @@ Acceptance:
 
 - every public parser has malformed-input coverage;
 - every durable transaction has before/during/after crash tests;
-- repo discovery, fresh-clone trust, Git rollback detection, and J16 three-way
-  merge have independent negative/state-machine coverage;
+- repo discovery, fresh-clone trust, Git rollback detection, strict-descendant
+  import, and divergent-artifact refusal have cross-boundary coverage;
+- the complete suite passes in native Linux and macOS CI with platform-specific
+  filesystem, protected-memory, and process cases enabled;
 - provider implementations agree on accepted outputs and normalized rejection
   semantics across the cross-provider corpus;
 - nonce/key reuse faults and KDF resource exhaustion meet the exact J01A oracle;
@@ -8248,7 +8210,7 @@ Acceptance:
   exploitability analysis, expiry, remediation date, and disclosure or embargo
   treatment. Severity labeling alone never makes a material defect releasable.
 
-Dependencies: J11, J14, J16, J17, J18, J20, J21, J22, J23, J24.
+Dependencies: J11, J14, J16, J17, J20, J21, J22, J23.
 
 Unblocks: J26; J19E only if the optional review work is activated.
 
@@ -8282,7 +8244,7 @@ Scope:
 - review the exact revision of cryptographic wrappers, identity and protected-
   memory boundaries, parsers and canonical encodings, direct/witnessed item
   access, approval and replay state machines, contribution assembly, persistence
-  and external-anchor handling, guarded CLI/TUI release, and plaintext sinks;
+  and external-anchor handling, guarded CLI release, and plaintext sinks;
 - review the minimal J19 and candidate-binding verifier itself, including negative tests for
   missing, stale, substituted, or partially updated source, provider, review,
   vector, build, and binary bindings;
@@ -8341,18 +8303,21 @@ and rehearse.
 Outcome:
 
 A fresh operator can verify, build, configure witnessed governance, self-host,
-run, back up, and recover the experimental witnessed-access release while
-understanding that Jury is externally unreviewed pre-alpha software and is not
-suitable for real secrets. J15 compatibility and J19R/J19D/J19E external-review
-work are not advertised as shipped.
+run, back up, and recover the experimental witnessed-access release on Linux or
+macOS while understanding that Jury is externally unreviewed pre-alpha software
+and is not suitable for real secrets. J15 compatibility and J19R/J19D/J19E external-review
+work, J18 rollover/suite migration, J24 TUI work, hardware identity protectors,
+managed topology, semantic merge, and Windows support are not advertised as
+shipped.
 
 Scope:
 
 - finalize license selection and add exact texts;
 - publish format, direct/witnessed slot, protocol, receipt, and rollback-anchor
   specifications plus the vector corpus and exact J19 gate scope;
-- produce signed binaries, checksums, SBOM, provenance, and clean-environment
-  reproducible build instructions bound to the exact J26 candidate;
+- produce native Linux and macOS binaries, checksums, SBOM, provenance, and
+  clean-environment reproducible build instructions bound to the exact J26
+  candidate;
 - freeze the release-signing trust root before any signing credential exists:
   use an offline or hardware-backed key, or a protected keyless identity with an
   immutable workflow identity; keep signing authority out of ordinary validation
@@ -8362,8 +8327,8 @@ Scope:
 - document upgrades, rollback, backup, drills, and incident response;
 - document and dogfood repo-local `.jury/vault.json` init, clone, external
   genesis trust, public verify, identity-scoped use, CI pinning, value-free diff,
-  authenticated merge, detached `--home`, global mode, rollover adoption, and
-  recovery;
+  strict-descendant import, divergent-artifact refusal, detached `--home`,
+  global mode, and recovery;
 - publish `.jury/.gitattributes` guidance, explicitly forbid clean/smudge and
   textual vault merging, and state that Git commits, PR approval, and signed Git
   history do not grant Jury authority;
@@ -8378,9 +8343,9 @@ Scope:
   failure, witness rotation, and recovery;
 - document the exact J01A HNDL and PQ-authenticity decisions, that HNDL does not
   survive later private-key theft or protect already decrypted revisions, that
-  re-encryption cannot revoke retained old-lineage copies, that FIPS-validated
-  deployment is not claimed, and that suite migration creates a separately
-  trusted lineage with no negotiation or fallback;
+  re-encryption cannot revoke retained old-lineage copies, and that
+  FIPS-validated deployment is not claimed; disclose that the first `0.x` has
+  no runtime suite migration or rollover path;
 - state prominently that no independent professional security review was
   performed and that J19R/J19D/J19E remain deferred optional work;
 - self-review the exact candidate in a fresh pass, report it honestly as
@@ -8390,9 +8355,10 @@ Scope:
   every confirmed finding requires disposition and unresolved medium-or-higher
   findings block release;
 - dogfood one generic owner/developer/machine lifecycle across identity
-  protection, private-name grants, retained pre-grant ciphertext, direct
-  execution, transfer, revocation, principal replacement, cover,
-  backup verify/drill/restore, witnessed recovery, and rollover;
+  creation, private-name grants, retained pre-grant ciphertext, direct
+  execution, transfer, strict-descendant import, divergent-artifact refusal,
+  revocation, principal replacement, cover, backup verify/drill/restore, and
+  witnessed recovery on both Linux and macOS;
 - verify source and binary version identity;
 - refresh dependency ownership, checksums, feature trees, licenses, RustSec, and
   upstream advisories immediately before signing; J01B's dated snapshot
@@ -8404,6 +8370,8 @@ Acceptance:
 
 - all active dependency leaves are complete with task-local test evidence;
 - direct and witnessed release candidates pass the public conformance suite;
+- native Linux and macOS artifacts pass the complete supported-platform checks
+  and generic lifecycle rehearsal; no Windows artifact is published;
 - the J19 machine gate binds the exact solo-verified witnessed construction and
   rejects any changed or undispositioned revision without claiming independent
   review;
@@ -8419,9 +8387,10 @@ Acceptance:
   RustSec, and upstream-advisory evidence is fresh for the exact signed
   candidate;
 - no Jury Cargo package depends on Jig;
-- documentation states endpoint-retention, offline-freshness, revocation, and
-  the absence of independent professional security review prominently;
-- a fresh generic repository lifecycle proves committed ciphertext travels with
+- documentation states the bounded endpoint-retention evidence,
+  offline-freshness and revocation limits, and the absence of independent
+  professional security review prominently;
+- a fresh generic repository lifecycle demonstrates that committed ciphertext travels with
   code while every private and installation-local artifact remains outside Git;
 - product, CLI, and release language claim witnessed authority only for items
   and deployments that satisfy the exact J19-bound construction, policy,
@@ -8431,9 +8400,12 @@ Acceptance:
   exact accepted suite evidence;
 - the complete generic dogfood lifecycle and real witnessed recovery rehearsal
   are recorded against the exact self-reviewed release candidate;
-- J15 compatibility is neither required nor advertised as included.
+- J15 compatibility is neither required nor advertised as included;
+- J18 rollover/suite migration, J24 TUI, hardware identity protectors, managed
+  service, semantic merge, and Windows support are neither required nor
+  advertised as included.
 
-Dependencies: J18, J22, J23, J24, J25.
+Dependencies: J22, J23, J25.
 
 Unblocks: the experimental Jury `0.x` witnessed-access release.
 
