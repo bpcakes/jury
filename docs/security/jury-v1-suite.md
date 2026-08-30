@@ -159,8 +159,9 @@ mandatory; adding an optional PQ component to `0x0001` is forbidden.
 
 ## 4. Security-property matrix
 
-`Conditional` is a positive claim only under every stated assumption. `No` and
-`unproven` are nonclaims.
+`Conditional` is a positive claim only under every stated assumption. `No`
+includes properties that are unproven and therefore not claimed. `Not required`
+records a deliberate suite requirement decision rather than a positive claim.
 
 | Property | Result | Security notion, attacker, assumptions, and Jury composition |
 | --- | --- | --- |
@@ -169,14 +170,14 @@ mandatory; adding an optional PQ component to `0x0001` is forbidden.
 | Post-quantum authenticity | No | Ed25519 is classical. A quantum attacker that breaks it can forge signed state. |
 | Classical sender authenticity for direct slots | Conditional | Classical signature unforgeability under the Ed25519 design assumptions (`820d…a0e`) and strict verification. HPKE Base contributes none. The owner-signed policy revision covers the exact direct-slot bytes and normalized-state transition; complete chain and authority validation occurs before private work. |
 | Recipient-compromise forward secrecy | No | The recipient key is static. Later compromise opens every retained direct slot encrypted to it. Rotation protects later epochs only. |
-| Post-compromise recovery for later epochs | Unproven/not claimed | J01A requires fresh keys, independent revision secrets and slots, removal of the old principal, and authenticated ancestry. No whole-application proof exists before J05/J06 implement and validate those transitions; retained earlier artifacts remain exposed regardless. |
+| Post-compromise recovery for later epochs | No (unproven/not claimed) | J01A requires fresh keys, independent revision secrets and slots, removal of the old principal, and authenticated ancestry. No whole-application proof exists before J05/J06 implement and validate those transitions; retained earlier artifacts remain exposed regardless. |
 | KEM shared-secret binding | Conditional | LEAK-BIND-K-PK and LEAK-BIND-K-CT under the CDM23 analysis (`d8a4…3a0`) and pinned generic-hybrid assumptions. Jury additionally signs the recipient-bundle fingerprint and exact encapsulation/ciphertext bytes. No MAL-level whole-protocol claim is made. |
 | Stored-data nonce-misuse resistance | Conditional | RFC 8452 bounds and the AES-GCM-SIV analysis (`0256…cd1`). A repeated key/nonce leaks equality and repeated use worsens bounds. Jury still requires fresh random nonces and rejects duplicate seal tuples. |
 | HPKE nonce-misuse resistance | Not required | Each direct slot uses a fresh single-shot HPKE context and one Seal operation. Reusing an encapsulation or context is invalid; ChaCha20-Poly1305 itself is not misuse-resistant. |
 | Primitive key commitment | No | The selected HPKE and AEAD profile is not claimed to be key-committing. Signed canonical key fingerprints and context fields provide application key binding only after valid public-chain verification. |
-| Rollback and replay resistance | Unproven/not claimed | Not supplied by primitives. J01A freezes the inputs required by complete signed ancestry, unique revision/seal IDs, local checkpoints, and stale-state rejection, but J05/J09/J25 must establish the application property. Deleting both artifact history and retained local state remains outside it. |
+| Rollback and replay resistance | No (unproven/not claimed) | Not supplied by primitives. J01A freezes the inputs required by complete signed ancestry, unique revision/seal IDs, local checkpoints, and stale-state rejection, but J05/J09/J25 must establish the application property. Deleting both artifact history and retained local state remains outside it. |
 | Password guessing resistance | Conditional | Per-guess memory/time cost under the Argon2 analysis (`b492…979`) and exact RFC 9106 Argon2id profile. The attacker has the complete encrypted identity/backup and performs offline guesses. The KDF does not add entropy or make a weak passphrase safe. |
-| Constant-time behavior | Unproven until J01B | Every secret-bearing provider and wrapper path has the requirements in section 12, but provider source evidence and platform caveats do not exist yet. Timing tests cannot promote this cell to proof. |
+| Constant-time behavior | No (unproven until J01B) | Every secret-bearing provider and wrapper path has the requirements in section 12, but provider source evidence and platform caveats do not exist yet. Timing tests cannot promote this cell to proof. |
 | FIPS-validated deployment | No | FIPS 203 defines ML-KEM; Jury, its provider, build, platform, and operation are not validated. |
 
 One weaker recipient slot defeats an item-level HNDL or quorum claim. Any usable
