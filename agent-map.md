@@ -9,6 +9,8 @@ Fast jump index for agent-facing guidance in this repository.
 ## Nested guides
 
 - [crates](./crates/AGENTS.md)
+- [jury-protected](./crates/jury-protected/AGENTS.md)
+- [jury-filesystem](./crates/jury-filesystem/AGENTS.md)
 
 ## Suggested usage pattern
 

@@ -1,6 +1,5 @@
 use std::fmt;
 
-use secrecy::SecretString;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,10 +28,6 @@ impl SecretBytes {
         Self::new(Vec::with_capacity(capacity))
     }
 
-    pub(crate) fn zeroed(len: usize) -> Self {
-        Self::new(vec![0; len])
-    }
-
     pub fn len(&self) -> usize {
         self.value.len()
     }
@@ -43,10 +38,6 @@ impl SecretBytes {
 
     pub fn as_slice(&self) -> &[u8] {
         self.value.as_slice()
-    }
-
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.value.as_mut_slice()
     }
 
     /// Appends bytes without allowing the backing allocation to grow.
@@ -82,34 +73,6 @@ impl SecretBytes {
     pub fn clear(&mut self) {
         self.value.zeroize();
     }
-
-    /// Converts the bytes into a protected UTF-8 string.
-    ///
-    /// # Errors
-    ///
-    /// Returns the original [`SecretBytes`] when its contents are not valid
-    /// UTF-8.
-    pub fn into_secret_string(self) -> std::result::Result<SecretString, Self> {
-        self.into_zeroizing_string().map(|mut value| {
-            let owned = std::mem::take(&mut *value);
-            SecretString::from(owned)
-        })
-    }
-
-    pub(crate) fn into_zeroizing_string(mut self) -> std::result::Result<Zeroizing<String>, Self> {
-        // `String::from_utf8` takes ownership of the bytes, so they briefly
-        // leave the `Zeroizing` wrapper while being converted and are wrapped
-        // again on both success and failure paths.
-        let bytes = std::mem::take(&mut *self.value);
-        match String::from_utf8(bytes) {
-            Ok(value) => Ok(Zeroizing::new(value)),
-            Err(error) => Err(Self::new(error.into_bytes())),
-        }
-    }
-
-    pub(crate) fn zeroize(&mut self) {
-        self.value.zeroize();
-    }
 }
 
 impl AsRef<[u8]> for SecretBytes {
@@ -133,14 +96,29 @@ mod tests {
     use super::SecretBytes;
 
     #[test]
-    fn truncate_and_clear_retain_the_preallocated_capacity() {
+    fn truncate_and_clear_retain_the_preallocated_capacity()
+    -> Result<(), super::SecretBytesCapacityError> {
         let mut bytes = SecretBytes::with_capacity(32);
-        bytes.extend_from_slice(b"sensitive").unwrap();
+        bytes.extend_from_slice(b"sensitive")?;
         bytes.truncate(4);
         assert_eq!(bytes.as_slice(), b"sens");
         bytes.clear();
         assert!(bytes.is_empty());
-        bytes.extend_from_slice(b"replacement").unwrap();
+        bytes.extend_from_slice(b"replacement")?;
         assert_eq!(bytes.as_slice(), b"replacement");
+        Ok(())
+    }
+
+    #[test]
+    fn extension_refuses_allocation_growth_without_changing_contents()
+    -> Result<(), super::SecretBytesCapacityError> {
+        let mut bytes = SecretBytes::with_capacity(4);
+        bytes.extend_from_slice(b"safe")?;
+        assert_eq!(
+            bytes.extend_from_slice(b"growth"),
+            Err(super::SecretBytesCapacityError)
+        );
+        assert_eq!(bytes.as_slice(), b"safe");
+        Ok(())
     }
 }

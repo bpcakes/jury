@@ -8,8 +8,34 @@ use std::fmt;
 use crate::SecretBytes;
 
 pub const MIN_REDACTABLE_LEN: usize = 4;
+pub const MAX_REDACTION_SECRETS: usize = 128;
+pub const MAX_REDACTION_SOURCE_BYTES: usize = 128 * 1024;
+pub const MAX_REDACTION_SECRET_LEN: usize = 32 * 1024;
+pub const MAX_REDACTION_INPUT_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RedactorError {
+    TooManySecrets,
+    SourceBytes,
+    SecretLength,
+    InputBytes,
+}
+
+impl fmt::Display for RedactorError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::TooManySecrets => "redaction secret count exceeds the supported bound",
+            Self::SourceBytes => "redaction source bytes exceed the supported bound",
+            Self::SecretLength => "one redaction secret exceeds the supported length",
+            Self::InputBytes => "redaction input exceeds the supported bound",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for RedactorError {}
+
+#[derive(Default)]
 pub struct Redactor {
     text_needles: Vec<TextNeedle>,
     raw_needles: Vec<RawNeedle>,
@@ -25,7 +51,6 @@ impl fmt::Debug for Redactor {
     }
 }
 
-#[derive(Clone)]
 struct TextNeedle {
     value: String,
     marker: &'static str,
@@ -37,17 +62,34 @@ impl Drop for TextNeedle {
     }
 }
 
-#[derive(Clone)]
 struct RawNeedle {
     value: zeroize::Zeroizing<Vec<u8>>,
 }
 
 impl Redactor {
-    pub fn from_secret_values(values: &[SecretBytes]) -> Self {
-        Self::from_secret_slices(values.iter().map(SecretBytes::as_slice))
+    pub fn try_from_secret_values(values: &[SecretBytes]) -> Result<Self, RedactorError> {
+        Self::try_from_secret_slices(values.iter().map(SecretBytes::as_slice))
     }
 
-    pub(crate) fn from_secret_slices<'a>(values: impl IntoIterator<Item = &'a [u8]>) -> Self {
+    fn try_from_secret_slices<'a>(
+        values: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Self, RedactorError> {
+        let values = values.into_iter().collect::<Vec<_>>();
+        if values.len() > MAX_REDACTION_SECRETS {
+            return Err(RedactorError::TooManySecrets);
+        }
+        let mut source_bytes = 0_usize;
+        for value in &values {
+            if value.len() > MAX_REDACTION_SECRET_LEN {
+                return Err(RedactorError::SecretLength);
+            }
+            source_bytes = source_bytes
+                .checked_add(value.len())
+                .ok_or(RedactorError::SourceBytes)?;
+            if source_bytes > MAX_REDACTION_SOURCE_BYTES {
+                return Err(RedactorError::SourceBytes);
+            }
+        }
         let mut text_needles = Vec::new();
         let mut raw_needles = Vec::new();
         for value in values {
@@ -160,10 +202,10 @@ impl Redactor {
         }
         text_needles.sort_by_key(|needle| std::cmp::Reverse(needle.value.len()));
         raw_needles.sort_by_key(|needle| std::cmp::Reverse(needle.value.len()));
-        Self {
+        Ok(Self {
             text_needles,
             raw_needles,
-        }
+        })
     }
 
     pub(crate) fn append_streaming_patterns(
@@ -173,7 +215,7 @@ impl Redactor {
         max_patterns: usize,
         max_total_bytes: usize,
         max_pattern_len: usize,
-    ) -> crate::Result<()> {
+    ) -> Result<(), crate::StreamingRedactorError> {
         for value in self
             .raw_needles
             .iter()
@@ -185,35 +227,26 @@ impl Redactor {
             )
         {
             if value.len() > max_pattern_len {
-                return Err(crate::VaultError::new(
-                    crate::VaultErrorKind::InvalidInput,
-                    "concealed field generates an output-redaction pattern above the supported length limit",
-                ));
+                return Err(crate::StreamingRedactorError::PatternLength);
             }
-            *total_bytes = total_bytes.checked_add(value.len()).ok_or_else(|| {
-                crate::VaultError::new(
-                    crate::VaultErrorKind::InvalidInput,
-                    "concealed fields generate too much output-redaction pattern data",
-                )
-            })?;
+            *total_bytes = total_bytes
+                .checked_add(value.len())
+                .ok_or(crate::StreamingRedactorError::PatternBytes)?;
             if *total_bytes > max_total_bytes {
-                return Err(crate::VaultError::new(
-                    crate::VaultErrorKind::InvalidInput,
-                    "concealed fields generate too much output-redaction pattern data",
-                ));
+                return Err(crate::StreamingRedactorError::PatternBytes);
             }
             if patterns.len() >= max_patterns {
-                return Err(crate::VaultError::new(
-                    crate::VaultErrorKind::InvalidInput,
-                    "concealed fields generate too many output-redaction patterns",
-                ));
+                return Err(crate::StreamingRedactorError::PatternCount);
             }
             patterns.push(zeroize::Zeroizing::new(value.to_vec()));
         }
         Ok(())
     }
 
-    pub fn redact_str(&self, input: &str) -> String {
+    pub fn redact_str(&self, input: &str) -> Result<String, RedactorError> {
+        if input.len() > MAX_REDACTION_INPUT_BYTES {
+            return Err(RedactorError::InputBytes);
+        }
         // The v1 broker applies redaction once to capped 1 MiB streams. This
         // straightforward scan-per-needle approach is intentionally bounded by
         // that cap; switch to multi-pattern matching before using it on larger
@@ -224,10 +257,13 @@ impl Redactor {
                 output = output.replace(&needle.value, needle.marker);
             }
         }
-        output
+        Ok(output)
     }
 
-    pub fn redact_bytes_lossy(&self, input: &[u8]) -> String {
+    pub fn redact_bytes_lossy(&self, input: &[u8]) -> Result<String, RedactorError> {
+        if input.len() > MAX_REDACTION_INPUT_BYTES {
+            return Err(RedactorError::InputBytes);
+        }
         // Raw-byte redaction intentionally runs before lossy UTF-8 decoding so
         // binary secret values are covered. This can replace coincidental byte
         // matches in non-secret binary output; redaction is a safety net.
@@ -298,9 +334,9 @@ fn hex(bytes: &[u8], upper: bool) -> String {
     for byte in bytes {
         use std::fmt::Write;
         if upper {
-            write!(&mut output, "{byte:02X}").expect("writing to String cannot fail");
+            let _ = write!(&mut output, "{byte:02X}");
         } else {
-            write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
+            let _ = write!(&mut output, "{byte:02x}");
         }
     }
     output
@@ -342,9 +378,9 @@ fn percent_encode(input: &str, upper: bool) -> String {
         } else {
             use std::fmt::Write;
             if upper {
-                write!(&mut output, "%{byte:02X}").expect("writing to String cannot fail");
+                let _ = write!(&mut output, "%{byte:02X}");
             } else {
-                write!(&mut output, "%{byte:02x}").expect("writing to String cannot fail");
+                let _ = write!(&mut output, "%{byte:02x}");
             }
         }
     }
@@ -363,7 +399,10 @@ fn json_escape(input: &str) -> String {
     // Match serde_json's canonical string escaping. Producers that choose
     // alternate legal JSON spellings, such as \u00XX for printable ASCII, are
     // outside this v1 redaction form and should still be caught by raw text.
-    let quoted = serde_json::to_string(input).expect("serializing a string to JSON cannot fail");
+    let quoted = match serde_json::to_string(input) {
+        Ok(value) => value,
+        Err(_) => input.to_owned(),
+    };
     debug_assert!(quoted.starts_with('"') && quoted.ends_with('"'));
     quoted
         .strip_prefix('"')
@@ -376,7 +415,7 @@ fn html_decimal_escape(input: &str) -> String {
     let mut output = String::new();
     for ch in input.chars() {
         use std::fmt::Write;
-        write!(&mut output, "&#{};", ch as u32).expect("writing to String cannot fail");
+        let _ = write!(&mut output, "&#{};", ch as u32);
     }
     output
 }
@@ -390,7 +429,7 @@ fn html_hex_escape(input: &str, upper_x: bool, upper_digits: bool) -> String {
             true => write!(&mut output, "{prefix}{:X};", ch as u32),
             false => write!(&mut output, "{prefix}{:x};", ch as u32),
         }
-        .expect("writing to String cannot fail");
+        .ok();
     }
     output
 }
@@ -401,9 +440,9 @@ fn unicode_escape(input: &str, upper: bool) -> String {
         if ch.is_ascii() {
             use std::fmt::Write;
             if upper {
-                write!(&mut output, "\\u{:04X}", ch as u32).expect("writing to String cannot fail");
+                let _ = write!(&mut output, "\\u{:04X}", ch as u32);
             } else {
-                write!(&mut output, "\\u{:04x}", ch as u32).expect("writing to String cannot fail");
+                let _ = write!(&mut output, "\\u{:04x}", ch as u32);
             }
         } else {
             // Non-ASCII code points have multiple JSON spellings, including
@@ -420,9 +459,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redacts_raw_and_encoded_forms() {
+    fn redacts_raw_and_encoded_forms() -> Result<(), Box<dyn std::error::Error>> {
         let secret = SecretBytes::new(b"secret-value/123".to_vec());
-        let redactor = Redactor::from_secret_values(&[secret]);
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
         let input = [
             "secret-value/123",
             "c2VjcmV0LXZhbHVlLzEyMw==",
@@ -448,7 +487,7 @@ mod tests {
             "\\u0073\\u0065\\u0063\\u0072\\u0065\\u0074\\u002D\\u0076\\u0061\\u006C\\u0075\\u0065\\u002F\\u0031\\u0032\\u0033",
         ]
         .join("\n");
-        let redacted = redactor.redact_str(&input);
+        let redacted = redactor.redact_str(&input)?;
         assert!(!redacted.contains("secret-value/123"));
         assert!(!redacted.contains("c2VjcmV0"));
         assert!(!redacted.contains("736563"));
@@ -457,40 +496,63 @@ mod tests {
         assert!(!redacted.contains("%252F"));
         assert!(!redacted.contains("%%2F"));
         assert!(redacted.contains("[REDACTED]"));
+        Ok(())
     }
 
     #[test]
-    fn preserves_line_count() {
+    fn preserves_line_count() -> Result<(), Box<dyn std::error::Error>> {
         let secret = SecretBytes::new(b"secret-value".to_vec());
-        let redactor = Redactor::from_secret_values(&[secret]);
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
         let input = "a\nsecret-value\nb\n";
-        let redacted = redactor.redact_str(input);
+        let redacted = redactor.redact_str(input)?;
         assert_eq!(input.lines().count(), redacted.lines().count());
+        Ok(())
     }
 
     #[test]
-    fn redacts_encoded_binary_secret() {
+    fn redacts_encoded_binary_secret() -> Result<(), Box<dyn std::error::Error>> {
         let secret = SecretBytes::new(vec![0, 159, 146, 150, 255]);
-        let redactor = Redactor::from_secret_values(&[secret]);
-        let redacted = redactor.redact_str("AJ+Slv8= 009f9296ff");
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
+        let redacted = redactor.redact_str("AJ+Slv8= 009f9296ff")?;
         assert!(!redacted.contains("AJ+Slv8="));
         assert!(!redacted.contains("009f9296ff"));
+        Ok(())
     }
 
     #[test]
-    fn redacts_raw_binary_bytes_before_lossy_utf8_conversion() {
+    fn redacts_raw_binary_bytes_before_lossy_utf8_conversion()
+    -> Result<(), Box<dyn std::error::Error>> {
         let secret = SecretBytes::new(vec![0, 159, 146, 150, 255]);
-        let redactor = Redactor::from_secret_values(&[secret]);
-        let redacted = redactor.redact_bytes_lossy(&[b'a', 0, 159, 146, 150, 255, b'z']);
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
+        let redacted = redactor.redact_bytes_lossy(&[b'a', 0, 159, 146, 150, 255, b'z'])?;
         assert_eq!(redacted, "a[REDACTED]z");
+        Ok(())
     }
 
     #[test]
-    fn debug_output_does_not_include_secret_needles() {
+    fn debug_output_does_not_include_secret_needles() -> Result<(), RedactorError> {
         let secret = SecretBytes::new(b"secret-value".to_vec());
-        let redactor = Redactor::from_secret_values(&[secret]);
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
         let debug = format!("{redactor:?}");
         assert!(!debug.contains("secret-value"));
         assert!(!debug.contains("c2VjcmV0LXZhbHVl"));
+        Ok(())
+    }
+
+    #[test]
+    fn construction_and_one_shot_input_are_bounded_before_expansion() -> Result<(), RedactorError> {
+        let oversized = SecretBytes::new(vec![b'x'; MAX_REDACTION_SECRET_LEN + 1]);
+        assert!(matches!(
+            Redactor::try_from_secret_values(&[oversized]),
+            Err(RedactorError::SecretLength)
+        ));
+
+        let secret = SecretBytes::new(b"ExampleSecret".to_vec());
+        let redactor = Redactor::try_from_secret_values(&[secret])?;
+        assert_eq!(
+            redactor.redact_str(&"x".repeat(MAX_REDACTION_INPUT_BYTES + 1)),
+            Err(RedactorError::InputBytes)
+        );
+        Ok(())
     }
 }

@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 jury-core = { path = "../jury-core" }
+jury-protected = { path = "../jury-protected" }
 
 [lints]
 workspace = true
-

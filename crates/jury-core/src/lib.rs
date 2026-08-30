@@ -6,6 +6,7 @@
 
 pub mod adapter;
 pub mod domain;
+pub mod entropy;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";

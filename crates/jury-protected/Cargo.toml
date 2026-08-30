@@ -1,0 +1,20 @@
+[package]
+name = "jury-protected"
+description = "Protected-memory, entropy, redaction, and process-safety primitives for Jury"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+aho-corasick = "=1.1.3"
+base64 = "=0.22.1"
+getrandom = "=0.4.3"
+rlimit = "=0.11.0"
+sanitization = { version = "=2.0.3", default-features = false, features = ["std", "profile-guarded-native", "require-fork-exclusion"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.145"
+zeroize = "=1.9.0"
+
+[lints]
+workspace = true
