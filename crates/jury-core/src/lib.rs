@@ -4,6 +4,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod adapter;
+pub mod domain;
+
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";
 
