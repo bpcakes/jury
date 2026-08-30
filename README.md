@@ -43,10 +43,14 @@ Currently, `jury --help` and `jury --version` only identify the scaffold.
 - Direct slots are optional and unilateral. If an item has one, Jury makes no
   quorum claim for that item.
 - Witnessed cryptography may not be implemented until J19A-J19C freeze the
-  construction, protocol, vectors, and endpoint-retention proof, J19D completes
-  independent review, and J19 binds that exact corpus in the machine gate.
+  construction, protocol, vectors, and endpoint-retention proof and J19 binds
+  that exact corpus after a fresh solo verification pass. This drift-prevention
+  gate is not independent security review. J19R/J19D/J19E external-review work
+  is deferred and does not gate the active `0.x` scope.
 - Jury does not claim to prevent an authorized endpoint from retaining
   plaintext it is allowed to receive.
+- Jury has no external review budget. Every `0.x` release must remain explicitly
+  externally unreviewed, pre-alpha, and unsuitable for real secrets.
 
 See [docs/architecture.md](docs/architecture.md) for the initial boundaries and
 [docs/naming.md](docs/naming.md) for the deliberately limited product metaphor.

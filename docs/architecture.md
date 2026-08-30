@@ -148,15 +148,28 @@ path may land until J01A and J01B are accepted and that gate passes. This is a
 drift-prevention control, not a security certification or substitute for
 independent review.
 
-Witnessed/distributed cryptographic implementation has an additional gate:
+Witnessed/distributed cryptographic implementation has one additional active
+pre-implementation gate and one release-candidate verification step.
 J19A selects the construction and threat model; J19B freezes protocol-v1
 schemas and state machines; J19C publishes vectors and the endpoint-retention
-proof; J19D obtains independent cryptographic review of that exact corpus and
-dispositions every material finding; J19 binds the reviewed artifacts plus
-implementation/provider versions in the machine-validated gate. J20-J23 and
-witnessed portions of J05/J07/J08/J10 cannot claim implementation before this
-gate opens. The release remains blocked rather than substituting coordination,
-static share release, or self-review for the promised authority model.
+proof; J19 binds those exact pre-implementation artifacts plus provider versions
+in a machine-validated gate after a fresh solo verification pass. J20-J23 and
+witnessed portions of J05/J07/J08/J10 cannot claim implementation before that
+gate opens. After implementation and adversarial testing, J26 binds the exact
+security-critical implementation, minimal gate verifier, provider lock data,
+build inputs, and release artifacts after J25 and a fresh solo
+release-candidate verification pass. The release remains blocked rather than
+substituting coordination, static share release, or a mock quorum for the
+promised authority model.
+
+J19R/J19D external construction review and J19E external implementation/build
+review are deferred optional work. They do not gate the active `0.x` release and
+may become gates only after an explicit scope revision names an available
+qualified reviewer and budget. Self-review, automated tests, independent
+implementations, AI/model or coding-agent analysis, and a clean rebuild are
+useful evidence but are not independent security review. Every `0.x` release
+must state that it is externally unreviewed, experimental, and unsuitable for
+real secrets.
 
 ## Deferred research
 

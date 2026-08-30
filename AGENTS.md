@@ -125,8 +125,17 @@ serves that outcome and never becomes the product.
 - Cryptographic implementation requires the applicable gate in
   `docs/architecture.md` to be satisfied first. J01A/J01B gate shared and direct
   primitives. J19A-J19C freeze the witnessed construction, protocol, vectors,
-  and endpoint-retention proof; J19D obtains independent review; J19 binds that
-  exact reviewed corpus before witnessed/distributed implementation lands.
+  and endpoint-retention proof; J19 binds those exact pre-implementation inputs
+  after a fresh solo verification pass before witnessed/distributed
+  implementation lands. J26 binds the exact security-critical implementation,
+  gate verifier, and release build after J25 and a fresh solo release-candidate
+  verification pass. These controls prevent drift; they are not independent
+  security review or certification. J19R/J19D and J19E are deferred optional
+  external-review work and do not gate the active `0.x` release. They may become
+  release gates only through an explicit scope revision after a qualified
+  reviewer and budget actually exist. AI/model review, another coding agent,
+  self-review, automated tests, and a clean rebuild are never described as
+  independent review.
   Witnessed open is the defining active `0.x` release path, not a future add-on.
 - Keep secrets, private keys, decrypted payloads, and passphrases out of logs,
   errors, snapshots, receipts, telemetry, and test output.
@@ -147,12 +156,17 @@ This repository uses beads_rust. Use `br` only; do not mix tracker command
 families in this workspace. Issues are stored under `.beads/`.
 
 1. Start with `bv --robot-triage --format toon` for graph-aware triage.
-2. Verify a candidate with `br show <id> --json` or `br ready --json`.
+2. Verify a candidate with `br show <id> --json` or
+   `br ready --type task --json`. For the release epic, add
+   `--epic jury-qv4`.
 3. Claim it with `br update <id> --status=in_progress --json`.
 4. Close completed work with `br close <id> --reason="Completed" --json`.
 5. Run `br sync --flush-only` after tracker mutations.
 
 Use only `bv --robot-*` commands; bare `bv` launches an interactive interface.
+The six `jury-qv4` feature records are non-executable rollup containers. Never
+claim them as implementation work merely because an unfiltered `br ready`
+includes them.
 
 <!-- bv-agent-instructions-v4 -->
 
@@ -190,7 +204,7 @@ bv --robot-next          # Minimal: just the single top pick + claim command
 bv --robot-triage --format toon
 ```
 
-Before claiming, verify current state with the selected tracker: `br show <id> --json`/`br ready --json` or `bd show <id> --json`/`bd ready --json`. `recommendations` can include graph-important blocked or assigned work; only `quick_ref.top_picks` and non-empty `claim_command` fields represent claimable work.
+Before claiming, verify current state with the selected tracker: `br show <id> --json`/`br ready --type task --json` or `bd show <id> --json`/`bd ready --json`. For Jury release work, scope the Rust command with `--epic jury-qv4`. `recommendations` can include graph-important blocked or assigned work; only task records in `quick_ref.top_picks` with non-empty `claim_command` fields represent claimable work.
 
 #### Other bv Commands
 
@@ -220,7 +234,8 @@ Use exactly one command family, matching the tracker configured for the reposito
 #### Rust beads_rust (`br`)
 
 ```bash
-br ready --json                       # Show issues ready to work (no blockers)
+br ready --type task --json           # Show executable tasks ready to work
+br ready --epic jury-qv4 --type task --json # Scope to Jury release work
 br list --status=open --json          # All open issues
 br show <id> --json                   # Full issue details with dependencies
 br create --title="..." --type=task --priority=2 --json
@@ -253,7 +268,9 @@ bd export --no-memories -o .beads/beads.jsonl  # Refresh the export read by bv
 
 ### Key Concepts
 
-- **Dependencies**: Issues can block other issues. `br ready --json` and `bd ready --json` show unblocked work.
+- **Dependencies**: Issues can block other issues. `br ready --type task --json`
+  and `bd ready --json` show unblocked executable work; unfiltered Jury feature
+  parents are rollup containers, not claim candidates.
 - **Priority**: P0=critical, P1=high, P2=medium, P3=low, P4=backlog (use numbers 0-4, not words)
 - **Types**: task, bug, feature, epic, chore, docs, question
 - **Blocking**: Use `br dep add <issue> <depends-on>` or `bd dep add <issue> <depends-on>` to add dependencies

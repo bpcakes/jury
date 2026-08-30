@@ -4,13 +4,17 @@ Status: authoritative implementation plan; pre-alpha; no production security cla
 
 Plan date: 2026-08-28.
 
+Last planning audit: 2026-08-30.
+
 Product: Jury, the experimental portable vault with witnessed open as its
 defining authority path.
 
 Primary repository: this Jury repository.
 
-Legacy source repository: the sibling Jig repository at baseline commit
-`eed70cee337b0067ed92deb9fa05017b0b284605`.
+Legacy source repository: `https://github.com/bpcakes/jig-sh.git` at baseline
+commit `eed70cee337b0067ed92deb9fa05017b0b284605`. A verified sibling checkout at
+`../jig-sh` may be used as the object source, but its working tree is never the
+place where history filtering runs.
 
 Legacy source-plan digest:
 `ed670ec63eaa9814ea0a01a0d4b2af6a65ccb68e68e307bac9109dd4286fb49a`.
@@ -39,14 +43,23 @@ elsewhere in this document.
   item and must be reported as such.
 - Every `0.x` build retains the pre-alpha warning and is not for real secrets.
 - J01A and J01B gate shared primitives and direct cryptography. J19 separately
-  gates witnessed/distributed cryptographic implementation and requires
-  independent review of the exact construction, vectors, proof, and revision.
-  Self-review or AI-assisted review never satisfies that gate.
-- The current release has 30 active outcomes: J01A, J01B, J02-J14, J16-J26,
-  and the J19A-J19D gate components. J15 is post-`0.x` compatibility work and
-  does not gate release. J26 may not ship by excluding, stubbing, or relabeling
-  J19-J23.
-- The fourteen planning reviews in section 25 are historical. No readiness
+  gates witnessed/distributed cryptographic implementation by binding the exact
+  J19A-J19C construction, vectors, proof, provider inputs, and a fresh solo
+  verification pass. J26 binds the exact post-J25 source, verifier, build inputs,
+  and release artifacts after a fresh solo release-candidate verification pass.
+  Neither gate is independent review or certification.
+- The current release has 29 active outcomes: J01A, J01B, J02-J14, J16-J26,
+  plus the J19A-J19C gate components. J15 is deferred post-`0.x`
+  compatibility work. J19R/J19D external construction review and J19E external
+  implementation/build review are also deferred optional future work. All four
+  are excluded from active readiness and estimates and do not gate release.
+  J19R/J19D/J19E may be activated only through an explicit scope revision after
+  a qualified reviewer and budget actually exist. J26 may not ship by
+  excluding, stubbing, or relabeling J19-J23.
+- The project has one human maintainer and zero external-review budget. A model,
+  coding agent, alternate implementation, test suite, self-review, or clean
+  rebuild may add engineering evidence but is never called independent review.
+- The planning reviews in section 25 are historical. No readiness
   report, certificate, matrix, dashboard, or evidence ledger is required unless
   it has a concrete consumer, named gate, observed defect, and deletion
   condition.
@@ -157,9 +170,10 @@ The first release therefore MUST NOT claim:
 - resistance to an already-compromised endpoint during authorization;
 - protection from root, a debugger controlling the process, DMA, or
   hibernation capture;
-- any assurance beyond the exact scope and revision of J19's independent review.
+- independent professional security review, whole-product assurance, or
+  suitability for real secrets.
 
-Witnessed access is active through the J19-reviewed construction. Other
+Witnessed access is active through the exact J19-bound construction. Other
 attested, post-quantum, or threshold schemes remain later recipient-slot
 algorithms and require their own scope decision, threat model, and conformance
 corpus.
@@ -622,15 +636,16 @@ The protocol bead MUST compare at least:
 
 A static `HKDF(device_share || witness_share)` design is not accepted merely
 because it is simple: an endpoint that retains the witness share may bypass the
-witness later. J19 must select a reviewed distributed-decryption, threshold-KEM,
-or equivalently analyzed construction and prove that an endpoint retaining all
-earlier responses cannot open a later `RevisionSealId` without a fresh quorum.
+witness later. J19 must select a maintained, publicly specified and analyzed
+distributed-decryption, threshold-KEM, or equivalent construction and
+demonstrate that an endpoint retaining all earlier responses cannot open a later
+`RevisionSealId` without a fresh quorum.
 
 The J19 witnessed construction needs deterministic vectors and an explicit
-statement of what retained endpoint material enables. Independent cryptographic
-review of the exact construction and revision is mandatory; until its findings
-are dispositioned and bound into the machine gate, witnessed implementation and
-J26 remain blocked.
+statement of what retained endpoint material enables. The exact corpus must pass
+the fresh solo verification and machine binding in J19 before witnessed
+implementation begins. This is not independent cryptographic review, and J26
+must say so.
 
 ### 0.13 Replay, expiry, and freshness
 
@@ -709,7 +724,11 @@ digest excludes only inert local acknowledgement/cache metadata. Production
 contribution service requires comparison with an operator-configured rollback
 anchor outside the restored transactional database, such as an independently
 versioned object, hardware monotonic store, or transparency service selected and
-reviewed by J19.
+reviewed by J19. Its write authority, administrator credentials, restore path,
+and failure domain must be disjoint from the transactional database and its
+backup/restore operator. A second ordinary object controlled by the same
+database restore authority is not independent and keeps production contribution
+service disabled.
 
 Startup and crash reconciliation have three accepted cases. If database and
 external anchor match exactly, service may resume. If the database contains
@@ -803,8 +822,8 @@ are compromised after rotation.
 A compromised approval UI can lie about what it renders or misuse an available
 approver key. Cryptography can bind the signed decision to verified manifest
 bytes but cannot make a compromised display truthful; resistance to that actor
-requires a separately reviewed trusted-display or attested-approver mode and is
-not a Jury v1 claim.
+requires a separately specified and externally evaluated trusted-display or
+attested-approver mode and is not a Jury v1 claim.
 
 Availability is not secrecy.
 
@@ -922,12 +941,25 @@ Each candidate receives:
 
 History preservation happens before large anonymous copies land in Jury.
 
+The immutable source locator is `https://github.com/bpcakes/jig-sh.git` at
+commit `eed70cee337b0067ed92deb9fa05017b0b284605`. An existing sibling
+`../jig-sh` is acceptable only after `git cat-file -e
+eed70cee337b0067ed92deb9fa05017b0b284605^{commit}` succeeds and the selected
+paths exist at that commit. If neither the verified sibling nor a canonical
+clone contains that object, the extraction task is blocked; an agent must not
+substitute a different revision, generated files, build artifacts, or the
+preserved source-plan document.
+
 The recommended workflow is:
 
-1. keep the current Jury scaffold uncommitted or commit it as one explicit
-   scaffold baseline;
-2. clone the Jig repository into a temporary extraction repository;
-3. use `git filter-repo` with an explicit allowlist of whole source paths and
+1. verify the Jury baseline and preserve any pre-existing user changes; do not
+   merge filtered history without the Git authority required by the current
+   session;
+2. create a disposable directory with `mktemp -d`, clone the canonical remote or
+   verified sibling into it, detach at the exact baseline commit, and confirm the
+   selected source paths there;
+3. run `git filter-repo` only in that disposable clone with an explicit
+   allowlist of whole source paths and
    tests selected by the component audit;
 4. rename the filtered paths into a temporary `jury-legacy-components` tree;
 5. add the filtered repository as a temporary remote to Jury;
@@ -1051,32 +1083,45 @@ gate until J01A/J01B evidence is refreshed.
 The experimental `0.x` release requires:
 
 - the direct vertical slice passes the conformance corpus;
-- the J19 independently reviewed witnessed-construction gate is current;
+- the J19 exact-artifact witnessed-construction gate is current;
+- the exact post-J25 release candidate passes a fresh solo verification pass and
+  the release binding rejects changed source, verifier, provider, build, or
+  artifact inputs;
 - a witnessed-only item passes request, meaningful approval, quorum,
   read/inject/exec, receipt, next-revision denial, rotation, and recovery tests;
 - migration is copy-on-write and rollback-tested;
 - backups are restored in real drills;
-- release build instructions are exercised; reproducibility exceptions are
-  documented without creating a separate certification process;
+- release build instructions reproduce identical bound binaries in a clean
+  environment from pinned inputs;
 - artifacts have signatures, SBOMs, provenance, and checksums;
 - exact licenses and trademark policy are committed;
-- documentation states endpoint retention, historical decryptability, and the
-  exact scope of J19 review without implying whole-product review;
+- documentation states endpoint retention, historical decryptability, the exact
+  scope of the J19 gate, and that no independent professional security review
+  occurred;
 - the scaffold/no-real-secrets warning remains in every `0.x` release.
 
 ### 0.23 Witnessed implementation gate
 
-J19 is an additional hard gate, not a design note. Before witnessed or
+J19 is an additional pre-implementation hard gate, not a design note. Before witnessed or
 distributed cryptographic implementation lands, it MUST freeze the exact
 construction and protocol schemas, prove the endpoint-retention claim for later
-revision seals, publish independent vectors, obtain independent cryptographic
-review of the exact revision, disposition every material finding, and bind all
-of that evidence in `docs/security/jury-v1-crypto-gate.toml`.
+revision seals, publish vectors generated independently of production builders,
+complete a fresh solo verification pass, and bind the exact J19A-J19C corpus and
+provider inputs in `docs/security/jury-v1-crypto-gate.toml`.
 
-Changing the construction, contexts, schemas, vectors, reviewed revision, or a
-material finding disposition closes the gate. J20-J23 and the witnessed parts
-of J05/J07/J08/J10 cannot bypass it with coordination, static share release, a
-mock quorum, or self-review. If the review cannot be obtained, J26 stays open.
+Changing the construction, contexts, schemas, vectors, provider inputs, or
+verification record closes the gate. J20-J23 and the witnessed parts of
+J05/J07/J08/J10 cannot bypass it with coordination, static share release, or a
+mock quorum. Passing the gate prevents known drift; it does not establish an
+independent audit or production security.
+
+J19 does not certify implementation source that does not yet exist. After J25,
+J26 performs a fresh solo release-candidate verification pass, reproduces the
+release binaries from pinned inputs in a clean environment, dispositions every
+confirmed finding under the release policy, and binds the exact source,
+verifier, provider lock data, build inputs, and artifacts. Missing, stale, or
+changed binding evidence keeps J26 open. J19R/J19D and J19E remain optional
+deferred external-review work and are not active release dependencies.
 
 ## 1. Executive decision
 
@@ -1103,7 +1148,7 @@ for items it may currently read.
 Every item key epoch fixes one effective reader set. Each descriptor and body
 seal has an independent revision secret and fresh random `RevisionSealId`.
 Direct recipient capsules release only the exact revision secret. Witnessed
-capsules use the J19-reviewed distributed-decryption construction and never
+capsules use the exact J19-bound distributed-decryption construction and never
 expose or reconstruct an epoch root. J19 may admit an internal epoch root only
 if it proves writer creation, mixed-mode equivalence, and retention safety; no
 public item callback receives one.
@@ -1472,6 +1517,15 @@ A machine may not be an owner in Jury v1.0.
 A distributor can copy, truncate, replay, combine, or replace transfer files.
 
 A distributor is not trusted with plaintext or signing authority.
+
+`Build or release attacker`
+
+An attacker may compromise a contributor, dependency publisher, CI action,
+runner, release workflow, or signing identity. Ordinary validation CI is never
+trusted with release-signing authority. Immutable dependency inputs,
+clean-environment reproduction, an explicit named-maintainer release decision,
+and signing-key or keyless-identity rotation and revocation remain part of the
+release boundary.
 
 `Endpoint`
 
@@ -1897,8 +1951,9 @@ The encrypted field map and field metadata for one item.
 
 `Item root key`
 
-An optional construction-internal epoch secret admitted only if J19 selects and
-proves a reviewed distributed PRF/KDF design. It is never an application-facing
+An optional construction-internal epoch secret admitted only if J19 selects a
+publicly specified and analyzed distributed PRF/KDF design and demonstrates the
+required properties. It is never an application-facing
 or witnessed-endpoint value. The conservative random-revision-secret design has
 no item root key.
 
@@ -2138,7 +2193,7 @@ Existing compatibility rules about source and destination references remain.
 ### 10.1 Suite identifiers
 
 J01A assigns the first Jury v1 suite identifier only after its property matrix
-and alternative analysis are reviewed. This plan deliberately does not name the
+and alternative analysis are accepted with a fresh source-backed pass. This plan deliberately does not name the
 winner in advance.
 
 The matrix records, for every candidate construction:
@@ -2148,6 +2203,10 @@ The matrix records, for every candidate construction:
 - post-quantum authenticity as a separate property from confidentiality;
 - recipient-compromise history exposure and other forward-secrecy nonclaims;
 - nonce-misuse behavior, key commitment/binding, and catastrophic-reuse modes;
+- the constant-time and side-channel contract for every secret-bearing
+  operation, including KEM decapsulation and implicit rejection, AEAD tag and
+  key comparisons, signature generation, KDF handling, and wrapper-level
+  secret-dependent control flow or memory access;
 - standardization maturity, interoperability, provider diversity, and vector
   quality;
 - public/private key, encapsulation, signature, and per-recipient artifact size;
@@ -2160,7 +2219,7 @@ At minimum J01A compares:
   ChaCha20-Poly1305, and XChaCha20-Poly1305 pinned to the exact expired draft;
 - recipient wrapping: classical RFC 9180 HPKE, pure ML-KEM HPKE, and
   X25519+ML-KEM-768 hybrid HPKE pinned to the exact active IETF draft;
-- strict Ed25519 and a reviewed hybrid-signature alternative if post-quantum
+- strict Ed25519 and a publicly specified and analyzed hybrid-signature alternative if post-quantum
   authenticity is required;
 - the complete KDF schedule, password KDF, device-factor combiner, randomness,
   and all size/count/resource limits.
@@ -2211,6 +2270,8 @@ J01B selects current implementations only for the J01A suite after checking:
 - strict key and signature validation;
 - fallible entropy paths without hidden panics;
 - zeroization behavior of concrete private-key and intermediate types;
+- source-backed constant-time claims and known platform/compiler caveats for
+  every secret-bearing primitive, plus the provider's invalid-input behavior;
 - absence of unwanted plugin, shell, SSH, PEM, PKCS#8, legacy, and hazmat
   surfaces in the product build;
 - license compatibility;
@@ -2229,7 +2290,10 @@ Tests inject entropy failure, provider error, malformed public keys and
 ciphertexts, all-zero classical shared secrets when applicable, non-canonical
 signatures, resource-limit violations, and zeroization on all exits. At least
 two independent implementations agree on success outputs and rejection
-semantics for every load-bearing construction.
+semantics for every load-bearing construction. Where a stable measurement is
+meaningful, targeted differential or statistical tests challenge secret-
+dependent timing and validity oracles; tests supplement rather than replace
+source-backed provider guarantees.
 
 Do not enable unrelated plugin, SSH, PEM, legacy, or hazmat surfaces.
 
@@ -2343,12 +2407,12 @@ fixture encoder rather than round-tripping through the same builder.
 
 Every descriptor or body seal has an independently random 32-byte
 `RevisionSealId` and an independent suite-sized revision secret. J19 chooses one
-reviewed creation construction:
+specified and tested creation construction:
 
 - generate the revision secret randomly, wrap it separately to each direct
   recipient, and place it in a threshold/distributed-decryption capsule for the
   witnessed path; or
-- derive it with a reviewed distributed PRF/KDF construction that lets direct
+- derive it with a publicly specified and analyzed distributed PRF/KDF construction that lets direct
   and witnessed paths obtain the same output without exposing a reusable epoch
   root to the witnessed endpoint.
 
@@ -2357,9 +2421,9 @@ new capsule from public keys and a malicious endpoint retaining old plaintext,
 keys, and transcripts has no algebraic route to the independently random next
 secret. Its cost is one new direct capsule per recipient and one new witnessed
 capsule for every seal. The second may reduce capsule churn but is accepted only
-if J19 identifies a maintained, independently reviewed construction and proves
-writer creation, mixed-mode equivalence, rotation, and retention behavior; a
-bespoke HKDF over static shares is invalid.
+if J19 identifies a maintained, publicly specified construction with applicable
+public analysis and demonstrates writer creation, mixed-mode equivalence,
+rotation, and retention behavior; a bespoke HKDF over static shares is invalid.
 
 Whichever construction J19 selects, its canonical secret-derivation or capsule
 context contains at least:
@@ -2378,7 +2442,7 @@ providers. J19 freezes the distributed construction before J05 or J07 freezes
 its format.
 
 The implementation exposes distinct non-interchangeable descriptor- and
-body-revision-secret types plus an internal epoch-root type only if the reviewed
+body-revision-secret types plus an internal epoch-root type only if the J19-bound
 construction requires one. All use zeroizing storage. KDF and decapsulation
 state remain in the shortest possible scope and are dropped before the consumer
 callback. J01B documents the provider's real zeroization behavior rather than
@@ -2519,7 +2583,7 @@ revision seal and releases or reconstructs only its revision secret.
 
 Its exact contribution construction is frozen by the protocol task only after
 retention, collusion, witness rotation, recovery, and deterministic vectors are
-reviewed.
+checked and accepted.
 
 All witnessed request and response messages bind the same vault, item, epoch,
 policy, principal, content role, revision, `RevisionSealId`, slot, and
@@ -2606,6 +2670,15 @@ fork tests prove `MADV_DONTFORK` mappings are absent in the child. macOS code
 must not execute user-controlled work between fork and exec; post-exec tests
 prove the protected mappings are gone, while the zero core limit remains
 inherited on both platforms.
+
+Repository-owned crates keep the workspace `unsafe_code = "forbid"` policy.
+J02 must use a maintained, pinned dependency that exposes the required native
+memory operations through a reviewed safe API. If no such dependency can meet
+the complete guard, lock, dump, fork, and zeroize-before-unmap contract, J02
+remains blocked until an operator approves a separately scoped unsafe leaf
+boundary with a source-backed threat model, adversarial tests, and a fresh solo
+verification pass, and updates this architecture explicitly; an implementation
+agent may not weaken the workspace lint to make the task pass.
 
 If the supported OS cannot lock the compact protected allocation, unlock fails
 closed unless the same explicit emergency override is active. JSON/human status
@@ -4390,11 +4463,14 @@ Backup is not the developer distribution path.
 
 Only an active owner may create a Jury v1 backup.
 
-The selected identity must have a valid current key slot for every active item.
-
-Backup preflight verifies the selected owner's configured direct slot for every
-active item. It need not decrypt every item body merely to copy authenticated
-ciphertext.
+The selected identity must have one valid configured unwrapping path for every
+active item. Backup preflight classifies each current path without changing it:
+it verifies the selected owner's direct slot only for directly recoverable
+items, and verifies that witnessed-only items have no current direct slot.
+Witnessed-only ciphertext and recovery metadata may be copied without requesting
+witness contributions or claiming that the backup can recover plaintext. Backup
+creation never adds a slot, changes an item's computed mode, or converts missing
+witness-service recovery into direct access.
 
 The owner identity public descriptor must match current policy.
 
@@ -4530,9 +4606,12 @@ Use an explicit recoverable transaction:
 
 3. verify inner vault signatures and backed-up checkpoint/audit;
 
-4. verify recovered owner private/public correspondence and every required item
-   slot, then either prepare a freshly sealed identity under the new identity
-   passphrase or unlock and prove exact `--reuse-identity` correspondence;
+4. verify recovered owner private/public correspondence and every backed-up
+   direct item slot; for witnessed-only items, verify the absence of a direct
+   slot plus the authenticated policy, topology, and checkpoint evidence without
+   opening the item; then either prepare a freshly sealed identity under the new
+   identity passphrase or unlock and prove exact `--reuse-identity`
+   correspondence;
 
 5. create a private restore transaction marker in the verified identity-target
    parent, named `.jury-vault-restore-<transaction-id>.json`, containing only
@@ -4568,9 +4647,13 @@ Do not rewrite legacy backup bytes in place.
 
 `backup drill` reuses the real restore transaction into explicitly absent vault
 and identity destinations, opens the restored owner session, validates every
-accessible encrypted descriptor, verifies every owner slot, audit, and
-checkpoint, and only then records a successful drill receipt in the source
-owner's authenticated local state.
+accessible encrypted descriptor, verifies each existing owner direct slot and
+the absence of direct slots on witnessed-only items, and validates audit,
+policy, topology, and checkpoint evidence. It never opens a witnessed-only item
+or calls its plaintext recovered until the restored deployment completes the
+normal J23 witness-recovery path and satisfies its quorum. Only then does it
+record the applicable drill coverage in the source owner's authenticated local
+state.
 
 It leaves the restored copy in place for operator inspection and never deletes
 it automatically.
@@ -4584,7 +4667,9 @@ Documentation includes a generic `ExampleVault` recovery drill:
 - restore to a new explicit home and identity path;
 - confirm genesis fingerprint and owner principal;
 - verify audit;
-- read one generic test field through a controlled sink;
+- read one generic direct test field through a controlled sink, or for a
+  witnessed-only test item first recover the external witness deployment and
+  then use the normal approval/contribution quorum;
 - delete the drill copy only through an explicitly operator-directed cleanup,
   outside automated tests.
 
@@ -5580,13 +5665,13 @@ Use a central secrets manager instead when:
 ## 24. Implementation sequencing and delivery graph
 
 The active graph is witnessed-first. Format and item work cannot freeze until
-J19 supplies the reviewed direct/witnessed slot contract. Direct mode,
+J19 supplies the exact bound direct/witnessed slot contract. Direct mode,
 migration/recovery, process safety, the witness engine, and server adapters then
 progress behind shared boundaries before J22 joins them into witnessed open.
 
 No bead exists for writing this plan, reviewing it, or converting it to beads.
 
-Every bead below owns a concrete independently verifiable outcome.
+Every bead below owns a concrete reproducible outcome.
 
 The tracker may use the six existing children of `jury-qv4` as delivery tracks;
 the numbered outcomes below are their implementable descendants.
@@ -5599,7 +5684,7 @@ J02 protected primitives ---------------------------+
 J03 domain + adapter seam ----+
 J01B provider proof ----------> J19A construction + threat model
 J19A -> J19B protocol/state machines -> J19C vectors/retention proof
-  -> J19D independent review -> J19 exact-revision machine gate
+                                          -> J19 exact-artifact machine gate
 
 J01B + J02 + J19 -> J04 identity store
 J01A + J03 + J19 -> J05 canonical format + direct/witnessed vectors
@@ -5628,17 +5713,27 @@ J11 + J14 + J16 + J17 + J18 + J20 + J21 + J22 + J23 + J24
   -> J25 adversarial corpus + benchmarks
 J18 + J22 + J23 + J24 + J25 -> J26 experimental witnessed release
 
-Post-0.x only: J03 + J05 + J06 + J07 + J09 + J10 -> J15 compatibility
+Deferred post-0.x only: J03 + J05 + J06 + J07 + J09 + J10 -> J15 compatibility
+Deferred optional external review: J19B -> J19R reviewer engagement
+                                   J19C + J19R -> J19D construction review
+                                   J19D + J25 -> J19E implementation/build review
 ```
 
 There are no dependency cycles.
 
+Every task-local `Unblocks` list below names immediate blocking-edge consumers,
+not merely transitive downstream outcomes. Tracker metadata is the executable
+source for those edges and must remain identical to the task-local list.
+
 J01A, J02, and J03 are the initial ready outcomes. J01B is blocked by J01A;
-J19A is blocked by J01B and J03. J19A-J19D then feed the exact-revision J19
-gate, which blocks the format and witnessed path.
+J19A is blocked by J01B and J03. J19C feeds the exact-artifact J19 gate that
+blocks the format and witnessed path. The deferred review branch has no edge
+back into the active release path.
 
 J26 is the active release join and is not allowed to hide incomplete active
-children. J19-J23 are mandatory release dependencies.
+children. J19-J23 and J25 remain mandatory release dependencies. The external
+review tasks J19R/J19D/J19E are optional future assurance work, not active
+release gates.
 
 ### 24.2 Track ownership
 
@@ -5647,12 +5742,16 @@ children. J19-J23 are mandatory release dependencies.
 | Cryptographic requirements | J01A, J01B |
 | Portable vault and identity | J02-J11, J16-J18 |
 | CLI and execution | J12-J14 |
-| Witnessed authority and `juryd` | J19A-J19D, J19-J23 |
+| Witnessed authority and `juryd` | J19A-J19C, J19-J23 |
 | Witnessed access TUI | J24 |
 | Release | J25-J26 |
 
-J15 is a standalone post-`0.x` compatibility outcome, not a descendant of the
-active Jury release epic.
+J15 is a deferred standalone post-`0.x` compatibility outcome. J19R/J19D and
+J19E are deferred standalone optional external-review outcomes. None is a
+descendant of the active Jury release epic; all are excluded from active
+readiness and estimate rollups. J15 may be reactivated only after J26 under a
+separately approved post-`0.x` scope. J19R/J19D/J19E may be reactivated only
+after an explicit scope revision names a qualified reviewer and actual budget.
 
 ### 24.3 Jury Beads mapping
 
@@ -5680,7 +5779,9 @@ active Jury release epic.
 | J19A | `jury-qv4.4.6` |
 | J19B | `jury-qv4.4.7` |
 | J19C | `jury-qv4.4.8` |
-| J19D | `jury-qv4.4.9` |
+| J19D (deferred optional) | `jury-qv4.4.9` |
+| J19R (deferred optional) | `jury-qv4.4.10` |
+| J19E (deferred optional) | `jury-qv4.4.11` |
 | J19 | `jury-qv4.4.1` |
 | J20 | `jury-qv4.4.2` |
 | J21 | `jury-qv4.4.3` |
@@ -5696,8 +5797,10 @@ genuinely unblocked outcome; parent rollup state is not an implementation claim.
 
 ### 24.4 Task-specific Jig v2 baselines
 
-The source baseline for every entry in this section is the sibling Jig
-repository at commit `eed70cee337b0067ed92deb9fa05017b0b284605`.
+The source baseline for every entry in this section is
+`https://github.com/bpcakes/jig-sh.git` at commit
+`eed70cee337b0067ed92deb9fa05017b0b284605`; a verified sibling `../jig-sh` may
+supply the object database.
 
 The plan snapshot itself may be newer and uncommitted; code extraction always
 uses the named Git commit unless the owning bead explicitly records and reviews
@@ -5911,11 +6014,18 @@ discussion, and source-plan provenance remain inspectable.
 
 ### J01A — Freeze core cryptographic requirements and the v1 suite
 
+Why this task exists:
+
+Provider availability must not choose Jury's security properties by accident.
+Freezing the required properties, nonclaims, alternatives, contexts, and failure
+behavior first gives J01B and J19 one stable provider-neutral contract to prove.
+
 Outcome:
 
-The repository contains a self-reviewed property matrix, alternative comparison,
-explicit post-quantum and compliance decisions, and one exact provider-neutral
-primitive suite and direct-slot construction before any provider is selected.
+`docs/security/jury-v1-suite.md` contains a reviewable property matrix,
+alternative comparison, explicit post-quantum and compliance decisions, and one
+exact provider-neutral primitive suite and direct-slot construction before any
+provider is selected.
 
 Scope:
 
@@ -5929,11 +6039,14 @@ Scope:
 - compare AES-256-GCM-SIV, one-key/one-seal RFC 8439
   ChaCha20-Poly1305, and the exact expired XChaCha Internet-Draft profile for
   storage; do not equate larger nonces with misuse resistance;
-- compare strict Ed25519 with a reviewed hybrid-signature alternative if PQ
+- compare strict Ed25519 with a publicly specified and analyzed hybrid-signature alternative if PQ
   authenticity is required;
 - freeze exact KEM/HPKE mode, AEADs, KDFs and contexts, hash/signature rules,
   Argon2id profiles, device-factor combiner, randomness treatment, encodings,
   limits, and error behavior;
+- freeze which inputs and intermediate states are secret for each primitive,
+  the required constant-time behavior, accepted provider/platform caveats, and
+  the local or remote attacker observation model;
 - state that FIPS-validated deployment is a V1 non-goal and never infer a FIPS
   deployment claim from use of FIPS 203 ML-KEM;
 - require one authenticated suite at lineage genesis, no negotiation or
@@ -5951,7 +6064,8 @@ Tests:
 - specify positive, negative, fault, migration, and cross-provider vectors that
   J01B, J19, and J25 must realize;
 - review nonce/key reuse, malformed-key/ciphertext, entropy failure, KDF
-  exhaustion, and draft-version substitution cases at the construction level.
+  exhaustion, draft-version substitution, secret-dependent control flow, and
+  timing/validity-oracle cases at the construction level.
 
 Acceptance:
 
@@ -5960,18 +6074,30 @@ Acceptance:
 - HNDL resistance and PQ authenticity are explicit independent decisions;
 - one exact suite and all constructions, contexts, encodings, and limits are
   frozen or J01A remains open;
+- every secret-bearing operation has an explicit constant-time/side-channel
+  requirement or a bounded nonclaim with an attacker-observation rationale;
 - every RFC, FIPS, or draft dependency is named with exact status and revision;
 - FIPS-validated deployment is explicitly out of scope;
 - no algorithm negotiation, fallback, mixed active suites, or in-place suite
   mutation is permitted;
 - no production provider dependency, adapter, or cryptographic implementation
   lands.
+- a verifier other than the artifact author cites the exact revision and reruns
+  the primary-source/size calculations before closure; a solo rerun is recorded
+  honestly and does not count as independent verification.
 
 Dependencies: none.
 
 Unblocks: J01B, J05.
 
 ### J01B — Select and prove the cryptographic provider set
+
+Why this task exists:
+
+Algorithm names do not establish provider behavior. Pinning actual
+implementations, feature surfaces, vectors, and wrapper normalization before
+product code lands prevents silent fallback, accidental dependency expansion,
+and security claims that exceed reproducible evidence.
 
 Outcome:
 
@@ -5989,6 +6115,9 @@ Scope:
   hashes;
 - document actual zeroization, fallible entropy, allocation, error, and
   malformed-input behavior without extending guarantees by inference;
+- document source-backed constant-time guarantees, secret-dependent branches or
+  memory access, implicit-rejection behavior, comparison APIs, and all relevant
+  compiler, feature, target, or hardware caveats;
 - define thin typed wrapper contracts and forbid raw provider calls outside
   those modules;
 - record rejected alternatives and the anticipated minimal dependency tree;
@@ -6007,28 +6136,38 @@ Tests:
   and error behavior;
 - inject entropy/provider failure and confirm no partial output or hidden panic;
 - inspect and test zeroization on success, error, and cancellation boundaries;
+- challenge decapsulation, authentication, comparison, and wrapper paths with
+  targeted differential/statistical timing tests where measurements are
+  meaningful, without presenting a passing timing test as proof of constant-
+  time behavior;
 - prove unsupported algorithms, unknown suites, and fallback attempts fail
   before private work.
 
 Acceptance:
 
 - every provider and wrapper claim has reproducible dated evidence;
-- selected providers implement exactly one J01A suite with no extra runtime
-  selection path;
-- independent implementations agree on accepted outputs and rejection
-  semantics, or every unavoidable difference is normalized and tested;
-- the anticipated feature/dependency tree excludes unrelated plugin, SSH, PEM,
-  legacy, and hazmat surfaces;
-- no provider dependency, adapter, or cryptographic implementation lands before
-  the J01A/J01B direct gate is accepted, and no witnessed implementation lands
-  before J19's additional independent-review gate;
-- the gate makes no certification or independent-review claim.
+- every J01A side-channel requirement maps to provider source evidence and a
+  wrapper invariant; an unknown or violated requirement keeps J01B open;
+- selected providers implement exactly one J01A direct suite with no runtime fallback;
+- independent implementations agree on accepted outputs and rejection semantics, or differences are normalized and tested;
+- the dependency tree excludes unrelated plugin, SSH, PEM, legacy, and hazmat surfaces;
+- the minimal direct-crypto gate binds the exact suite, provider revisions, specifications, and vectors;
+- no provider dependency, adapter, or cryptographic implementation lands before the J01A/J01B direct gate is accepted, and no witnessed implementation lands before J19's additional exact-artifact gate;
+- no certification or independent-review claim is made;
+- J19 consumes the exact pinned provider behavior and vectors; no witnessed implementation may treat this direct gate as a substitute for J19 verification and binding.
 
 Dependencies: J01A.
 
-Unblocks: J19.
+Unblocks: J04, J19A.
 
 ### J02 — Extract protected bytes, redaction, and hardened filesystem primitives
+
+Why this task exists:
+
+Secret lifetime and filesystem publication are cross-cutting security
+boundaries. Extracting only generic hardened behavior preserves battle-tested
+failure cases without importing Jig's whole-vault architecture or runtime
+dependency.
 
 Outcome:
 
@@ -6037,7 +6176,19 @@ Jig history, sanitized fixtures, and no Jig runtime dependency.
 
 Scope:
 
-- execute the filtered-history workflow from section 0.19 in a disposable clone;
+- use `https://github.com/bpcakes/jig-sh.git` at exact commit
+  `eed70cee337b0067ed92deb9fa05017b0b284605`; a sibling `../jig-sh` is only an
+  object source after the commit and selected paths verify;
+- preserve pre-existing Jury changes, create a disposable `mktemp -d` clone,
+  detach at the baseline, review the whole-file allowlist, and run
+  `git filter-repo` only inside that clone;
+- rename the filtered paths into a temporary `jury-legacy-components` tree, add
+  the filtered clone as a temporary Jury remote, merge the unrelated history
+  with explicit provenance, then move and decouple files in ordinary reviewable
+  commits;
+- verify that resulting file history reaches the original Jig commits and remove
+  the temporary remote; if the exact source object is unavailable, stop rather
+  than substituting another revision, build output, or the source-plan snapshot;
 - import only reviewed whole files and their tests;
 - rename APIs into neutral Jury language;
 - preserve non-growing `SecretBytes` behavior;
@@ -6076,6 +6227,8 @@ Tests:
 
 Acceptance:
 
+- the exact source commit is obtained from the canonical remote or verified
+  sibling; unavailable source blocks work rather than causing substitution;
 - `cargo tree` contains no Jig crate;
 - imported file history resolves to original Jig commits;
 - every reusable invariant has a ported test or an explicit rejection rationale;
@@ -6083,6 +6236,10 @@ Acceptance:
   Jury-owned allocations; degraded operation is explicit, stable, and tested;
 - discovered repository paths fail closed before private work, and no plaintext
   or private local state is created below the worktree;
+- repository crates retain `unsafe_code = "forbid"`; absent a safe dependency
+  that proves the complete native-memory contract, J02 blocks pending an
+  explicit source-backed architecture decision, threat-model update, and
+  adversarial tests;
 - generic fixtures contain no private names or paths.
 
 Dependencies: none.
@@ -6090,6 +6247,12 @@ Dependencies: none.
 Unblocks: J04, J07, J08, J12.
 
 ### J03 — Implement native domain identifiers and the external adapter seam
+
+Why this task exists:
+
+Jury must be a standalone product rather than a renamed Jig subsystem. Native
+identifiers keep storage and signatures stable while downstream adapters
+translate project-specific references outside the security domain.
 
 Outcome:
 
@@ -6122,16 +6285,23 @@ Tests:
 Acceptance:
 
 - native wire and domain types contain no `jig://`, project home, or Jig env;
-- repository selection cannot change signed identity or make Git/PR identity a
-  Jury principal;
 - adapter input cannot alter signed cryptographic identity;
 - public display types never accidentally confirm inaccessible names.
+- Git storage context never enters cryptographic identity or signed state;
+- Git authorship, signatures, and review state cannot grant or broaden Jury authority.
 
 Dependencies: none.
 
-Unblocks: J05, J06, J13, J15, J19.
+Unblocks: J05, J06, J13, J15, J19A.
 
 ### J04 — Deliver encrypted vault, approver, and witness identities
+
+Why this task exists:
+
+The witnessed trust model collapses if one private-key container can silently
+act in several roles. Separately encrypted identities and typed private
+operations keep vault-principal, approver, and witness authority distinct and
+keep every private authority outside portable vault artifacts.
 
 Outcome:
 
@@ -6187,22 +6357,25 @@ Tests:
 Acceptance:
 
 - private keys cannot be returned through a public API;
-- identity files never enter normal transfers;
-- exact KDF profiles and downgrade rules are tested;
-- passphrase encoding and length behavior is byte-exact across supported
-  platforms and input sources;
-- every advertised device provider passes deterministic protocol tests and gated
-  real-hardware conformance; unsupported providers are reported unavailable and
-  never silently substituted;
-- public descriptor vectors are stable.
-- approver and witness keys cannot be silently derived from or substituted for
-  vault-principal keys.
+- identity files never enter normal transfers or portable vault artifacts;
+- vault-principal, approver, and witness keys have disjoint purposes and cannot be silently derived, reused, or substituted;
+- witness contribution operations are bound to the exact J19 suite and revision-scoped input;
+- role-preserving rotation and replacement retain explicit public lineage without retaining old private authority;
+- exact KDF profiles and downgrade rules are tested, passphrase bytes are exact across supported platforms and input sources, and public descriptor vectors are stable;
+- every advertised device provider passes deterministic protocol tests and gated real-hardware conformance; unsupported providers report unavailable and never silently fall back.
 
 Dependencies: J01B, J02, J19.
 
-Unblocks: J07, J08, J09, J17, J20, J22, J23.
+Unblocks: J07, J08, J09, J17, J20.
 
 ### J05 — Freeze the bounded direct/witnessed Jury vault format
+
+Why this task exists:
+
+Signatures, cross-implementation vectors, parser bounds, and safe Git transport
+all depend on one byte-exact public format. Freezing direct and witnessed fields
+together prevents a later schema amendment from introducing downgrade,
+negotiation, or incompatible preimages after implementation begins.
 
 Outcome:
 
@@ -6250,23 +6423,28 @@ Tests:
 
 Acceptance:
 
-- magic is `jury-vault` and version is `1`;
+- magic is `jury-vault` and format version is `1`;
 - no Jig format field is reused by implication;
-- no plaintext private name appears in any vector artifact;
-- `.jury/vault.json` contains the complete shared artifact and no
-  installation-local state;
-- direct slot encodings match the accepted J01A/J01B suite;
-- witnessed slot encodings match the accepted J19 contract and no
-  epoch root or reusable contribution field exists;
-- suite migration preserves the old lineage unchanged and never creates a
-  dual-suite lineage;
-- unknown recipient slots fail closed.
+- direct and witnessed fields are final J19 inputs, not placeholders requiring later evolution;
+- no plaintext private name, epoch root, or reusable contribution appears in vectors or public state;
+- direct slot encodings match J01A/J01B and witnessed slot encodings match the accepted J19 construction;
+- a witnessed-only item can omit direct slots, while any usable direct slot is detectable and suppresses its quorum claim;
+- suite migration preserves the old lineage unchanged and never creates a dual-suite lineage;
+- unknown recipient slots and direct downgrade attempts fail closed;
+- `.jury/vault.json` is byte-stable and contains no installation-local custody or witness state.
 
 Dependencies: J01A, J03, J19.
 
 Unblocks: J06, J07, J09, J15, J16.
 
 ### J06 — Implement signed policy replay and exact access evaluation
+
+Why this task exists:
+
+Authorization must come from one replayable signed history rather than current
+configuration, private catalog contents, or caller interpretation. A
+deterministic normalized state makes ownership, direct access, both witnessed
+quorums, and every downgrade independently auditable and deny-by-default.
 
 Outcome:
 
@@ -6308,19 +6486,24 @@ Tests:
 Acceptance:
 
 - every accepted mutation has a unique normalized result;
-- non-owner policy changes fail before key work;
-- read and write authority are exact and deny by default;
-- witnessed membership and both quorums are exact and deny by default;
-- unknown, duplicated, revoked, or cross-role subjects and operations fail
-  closed;
-- policy status explains direct, witnessed-only, mixed/unilateral, and
-  unsatisfiable-quorum states without revealing private item names.
+- non-owner governance changes fail before key work;
+- direct read/write authority and witnessed membership/quorum authority are exact and deny by default;
+- any usable direct slot is visible as unilateral and suppresses the quorum claim;
+- unknown, duplicated, revoked, or cross-role subjects and operations fail closed;
+- policy status can explain why an item is direct, witnessed-only, or unable to reach quorum without revealing private names.
 
 Dependencies: J03, J05.
 
-Unblocks: J07, J09, J10, J11, J13, J16, J20, and post-`0.x` J15.
+Unblocks: J07, J09, J10, J16, J20, and deferred post-`0.x` J15.
 
 ### J07 — Implement direct/witnessed item envelopes and rekeying
+
+Why this task exists:
+
+Per-item, per-revision secrets bound the damage of any authorized release and
+prevent whole-vault or epoch material from becoming an ambient capability.
+Direct and witnessed access therefore converge only at the same narrowly scoped
+revision-secret boundary.
 
 Outcome:
 
@@ -6333,7 +6516,7 @@ Scope:
 - implement descriptor and body bucket encoding;
 - implement typed descriptor/body revision-secret types;
 - implement revision-scoped direct HPKE capsules through provider adapters;
-- implement the J19-reviewed witnessed capsule construction without exposing an
+- implement the exact J19-bound witnessed capsule construction without exposing an
   epoch root or reusable contribution;
 - ensure both paths release only exact revision secrets and zeroize all
   intermediate state before calling item code;
@@ -6365,14 +6548,12 @@ Tests:
 
 Acceptance:
 
-- no vault-wide DEK exists;
-- private item names are absent from public state;
-- every slot is tagged and authenticated;
-- the common item consumer can receive only `ProtectedRevisionSecrets`;
-- governed items can omit direct slots entirely; if any usable direct slot is
-  present, status and receipts suppress the item-level quorum claim;
-- witnessed material cannot yield an epoch root, reusable contribution, or a
-  later revision secret;
+- no vault-wide DEK exists and private item names are absent from public state;
+- every direct and witnessed slot is tagged, authenticated, and revision scoped;
+- witnessed-only items contain no direct fallback;
+- any usable direct slot is surfaced as unilateral and suppresses the quorum claim;
+- the common item consumer receives only ProtectedRevisionSecrets;
+- witnessed material cannot yield an epoch root, reusable contribution, or later-revision secret;
 - rekey operations are atomic or make no change.
 
 Dependencies: J02, J04, J05, J06, J19.
@@ -6380,6 +6561,13 @@ Dependencies: J02, J04, J05, J06, J19.
 Unblocks: J08, J11, J15, J16, J17.
 
 ### J08 — Implement the mode-neutral `ItemAccessProvider`
+
+Why this task exists:
+
+CLI and TUI callers must not gain a bypass merely because direct and witnessed
+authorization use different machinery. One narrow provider contract keeps mode,
+private keys, contributions, and revision secrets behind the owning boundary
+while giving consumers identical cleanup and failure semantics.
 
 Outcome:
 
@@ -6414,11 +6602,10 @@ Tests:
 
 Acceptance:
 
-- CLI/TUI-facing APIs cannot request an identity private key;
-- every provider can release only one selected descriptor/body revision to the
-  scoped consumer;
-- the public interface has no direct-only assumption or witness-material escape
-  hatch;
+- CLI/TUI-facing APIs cannot request an identity private key, epoch root, contribution, or revision secret;
+- every provider can release only one selected descriptor/body revision to a scoped consumer;
+- the public interface contains no direct-only assumption;
+- direct and witnessed backends share the same success and cleanup boundary;
 - guard cleanup is observable through test instrumentation.
 
 Dependencies: J02, J04, J07.
@@ -6426,6 +6613,13 @@ Dependencies: J02, J04, J07.
 Unblocks: J10.
 
 ### J09 — Implement per-principal audit, checkpoints, and local receipts
+
+Why this task exists:
+
+A vault-wide audit key would require unrelated authority to be unlocked and
+would turn local verification into another shared secret. Principal-local roots
+and monotonic checkpoints detect tamper and rollback without putting private
+evidence into the portable Git artifact.
 
 Outcome:
 
@@ -6466,20 +6660,25 @@ Tests:
 Acceptance:
 
 - normal transfer excludes all local state;
-- normal Git status/history contains no identity, checkpoint, audit, receipt,
-  lock, or recovery transaction state;
-- retained state detects conforming-client checkout rollback across clones and
-  worktrees and never silently lowers its accepted ancestry;
 - audit deletion is documented as detectable only with retained checkpoint;
 - event reason codes are bounded and value-free.
-- witnessed entries bind bounded request/decision/receipt identifiers without
-  containing authorization material or private values.
+- normal Git history contains no identity, checkpoint, audit, receipt, lock, or recovery state;
+- retained state detects conforming-client checkout rollback across clones/worktrees and never silently lowers accepted ancestry;
+- platform-state paths are disjoint from the worktree and safely locked across processes.
+- witnessed audit entries bind bounded request/decision/receipt identifiers without containing authorization material or private values;
 
 Dependencies: J04, J05, J06.
 
 Unblocks: J10, J16, J17, and post-`0.x` J15.
 
 ### J10 — Deliver witnessed-aware partial-unlock sessions and scoped snapshots
+
+Why this task exists:
+
+Session scope is the secret-lifetime boundary visible to product surfaces. It
+must release only the selected descriptor or body, keep inaccessible names out
+of memory, and apply the same cancellation and cleanup rules whether authority
+is direct or witnessed.
 
 Outcome:
 
@@ -6514,17 +6713,24 @@ Tests:
 
 Acceptance:
 
-- ordinary open decrypts no item body;
-- inaccessible names never enter model state;
-- direct and witnessed access use the same guarded session contract for
-  descriptors and bodies;
-- ordinary open and witness-pending states decrypt no item body.
+- ordinary open and witness-pending states decrypt no item body;
+- inaccessible names never enter model or snapshot state;
+- direct and witnessed descriptor/body access share one guarded session contract;
+- approvals cannot broaden, refresh, or retarget a request;
+- cancellation and every terminal witnessed state wipe partial material and cannot fall back to direct access.
 
 Dependencies: J06, J08, J09, J19.
 
-Unblocks: J11, J13, J14, J15, J16, J17, J24.
+Unblocks: J11, J13, J14, J16, J17, J22, J24, and deferred post-`0.x` J15.
 
 ### J11 — Implement authorized atomic policy and item mutations
+
+Why this task exists:
+
+Policy, slots, item revisions, audit, and checkpoints form one authorization
+transition even though they cross storage boundaries. Complete preflight plus
+single-primary publication prevents partial revocation, implicit downgrade,
+stale Git overwrite, and unsafe retry after a committed mutation.
 
 Outcome:
 
@@ -6575,20 +6781,26 @@ Tests:
 
 Acceptance:
 
-- no partial reader-set change can publish;
-- no partial witnessed-governance change can publish;
-- witnessed-only mode cannot retain a usable direct slot or unsatisfiable
-  quorum, and a direct downgrade cannot be implicit;
-- dry-run writes no shared or local bytes;
-- committed state always validates from scratch.
-- a worktree mutation cannot overwrite a different Git or Jury ancestry, and a
-  post-commit local-state failure is reported as committed rather than retried.
+- no partial reader-set or witnessed-governance change can publish;
+- witnessed-only mode cannot retain a usable direct slot or unsatisfiable quorum;
+- any direct downgrade is explicit, authenticated, and suppresses the quorum claim;
+- dry-run writes no shared or local bytes and is commit-compatible;
+- committed state validates from scratch;
+- a Git-backed mutation cannot overwrite different Git or Jury ancestry;
+- post-publication local-state failure is reported as committed and never replays the shared mutation;
+- Jury mutations have no implicit Git side effects.
 
 Dependencies: J07, J10.
 
 Unblocks: J13, J18, J25.
 
 ### J12 — Extract or replace process-tree execution safely
+
+Why this task exists:
+
+Child cleanup and streaming semantics are generic but security-critical. Jury
+must own or depend on a neutral containment contract so it can preserve hardened
+behavior without acquiring a runtime dependency on Jig.
 
 Outcome:
 
@@ -6624,6 +6836,13 @@ Dependencies: J02.
 Unblocks: J14.
 
 ### J13 — Deliver native identity, admin, read, and inject CLI
+
+Why this task exists:
+
+The native CLI is Jury's operator authority boundary, not a thin spelling of
+internal APIs. Routing every operation through the same guarded backend keeps
+automation and interactive use from bypassing policy, decrypting unrelated
+items, or leaking private values through structured output.
 
 Outcome:
 
@@ -6685,21 +6904,26 @@ Tests:
 
 Acceptance:
 
-- selected-item operations do not decrypt unrelated bodies;
-- policy previews are authenticated and commit-compatible;
-- a fresh operator can configure witnessed-only access, both memberships, and
-  both quorums entirely through native CLI commands;
+- a fresh operator can configure witnessed-only access, approver membership, witness membership, and both quorums entirely through native CLI commands;
 - impossible quorums and implicit direct downgrades fail before mutation;
-- native CLI help does not imply Jig ownership.
-- inside a Git worktree the default shared artifact is the committed
-  `.jury/vault.json`, while plaintext, identities, and local state never enter
-  Git through a Jury command.
+- selected-item operations do not decrypt unrelated bodies or bypass ItemAccessProvider;
+- policy previews are authenticated and commit-compatible;
+- structured status reports direct-slot suppression and pending-request invalidation without private data;
+- inside a Git worktree, the default shared artifact is committed .jury/vault.json while identities and local state remain outside Git;
+- native CLI help does not imply Jig ownership or whole-product cryptographic review.
 
 Dependencies: J03, J10, J11.
 
 Unblocks: J14, J22, J24.
 
 ### J14 — Deliver transparent exec and brokered run
+
+Why this task exists:
+
+Starting a child is an irreversible plaintext-release event. Jury must resolve
+and authorize every reference before spawn, deliver only the approved values,
+and own the complete descendant process tree so timeout, cancellation, signal,
+and output failures cannot leave secrets or processes behind.
 
 Outcome:
 
@@ -6737,14 +6961,23 @@ Acceptance:
 
 Dependencies: J10, J12, J13.
 
-Unblocks: J22, J25, J26.
+Unblocks: J22, J25.
 
 ### J15 — Deliver post-0.x read-only Jig compatibility and copy-on-write migration
 
 Release status:
 
-J15 is optional work after the witnessed-access `0.x` release. It is not a
-child of the active release epic and does not block J17, J25, or J26.
+J15 is deferred and out of scope for the witnessed-access `0.x` release. It is
+not a child of the active release epic, is excluded from active readiness and
+estimate rollups, and does not block J17, J25, or J26. An operator may reactivate
+it only after J26 under a separately approved post-`0.x` compatibility scope.
+
+Why this task exists:
+
+Legacy migration can corrupt the only source copy or reproduce the security
+boundary Jury is replacing. A read-only, copy-on-write import into a fresh
+lineage makes every attempt reversible and independently verifiable while
+leaving retained legacy exposure explicit.
 
 Outcome:
 
@@ -6781,16 +7014,23 @@ Tests:
 Acceptance:
 
 - source artifact and audit hashes are identical before and after;
-- destination is `jury-vault` format v1 with new vault ID;
-- repository-local migration leaves only the portable shared artifact and public
-  integration metadata in Git;
-- no dual-write or in-place option exists.
+- destination is an absent Jury-v1 home with a fresh vault identifier;
+- no dual-write, in-place, or down-migration option exists;
+- identities and rollback/operational state remain outside Git;
+- compatibility work is absent from the witnessed 0.x release gate.
 
 Dependencies: J03, J05, J06, J07, J09, J10.
 
 Unblocks: post-`0.x` compatibility only.
 
 ### J16 — Implement transfer, inspection, and ancestry merge
+
+Why this task exists:
+
+Transfer distributes portable ciphertext, not recovery authority. Signed
+envelopes, ancestry validation, and typed fork rejection permit safe offline
+exchange without including identities or pretending local export proves
+delivery.
 
 Outcome:
 
@@ -6837,17 +7077,25 @@ Acceptance:
 
 - raw copy and transfer semantics are documented honestly;
 - import cannot silently discard a valid local branch;
-- Git diff/merge output is value-free by default, Git identity never grants Jury
-  authority, and ordinary textual merge cannot produce an accepted artifact;
-- merge never silently selects a direct downgrade, lower quorum, revived
-  witness/approver, or stale quorum claim;
 - export status never claims recipient delivery.
+- ordinary textual Git merge cannot produce an accepted Jury artifact;
+- semantic diff is value-free by default and inaccessible names remain hidden;
+- three-way merge cannot discard a valid local branch or accept Git identity as Jury authority;
+- old and divergent checkouts never lower retained local ancestry.
+- merge never silently selects a direct downgrade, lower quorum, revived witness/approver, or stale quorum claim;
 
 Dependencies: J05, J06, J07, J09, J10.
 
 Unblocks: J18, J24, J25.
 
 ### J17 — Deliver owner backup, restore, and recovery drills
+
+Why this task exists:
+
+Portable ciphertext alone cannot recover role-specific identities, local
+checkpoints, or witness-service safety state. Separating those custody domains
+and proving real restore drills prevents a backup file from being presented as
+recovery for authority or availability it does not contain.
 
 Outcome:
 
@@ -6882,6 +7130,8 @@ Tests:
 - exact UTF-8 passphrase byte contract and 11/12/1,024/1,025-byte boundaries;
 - witnessed-only recovery with available, unavailable, lost, and explicitly
   rotated witness sets;
+- backup create, verify, drill, and restore never add a direct slot, rewrite an
+  item's access mode, or change whether its quorum claim is valid;
 - all three identity roles, impossible post-restore quorum, stale topology, and
   outstanding external witness recovery;
 - identity/vault mismatch;
@@ -6895,17 +7145,27 @@ Tests:
 Acceptance:
 
 - backup is clearly more sensitive than transfer;
-- backup status states exactly which direct items, identity roles, and local
-  verification state it can recover and never claims juryd or quorum recovery;
+- backup status states exactly which direct items, role-specific identities, and local verification state it can recover;
+- backup create, verify, drill, and restore never add a direct slot, rewrite an
+  item's access mode, or change whether its quorum claim is valid;
+- client or owner backup never claims to recover juryd, witness replay state, quorum availability, or external anchors;
 - restore never overwrites an existing identity or vault;
-- restore never writes private identity or local rollback evidence into Git;
-- recovery readiness distinguishes creation, verification, and real drill.
+- recovery readiness distinguishes creation, verification, a real drill, and outstanding external witness recovery;
+- witnessed private use remains blocked when restored policy/topology/checkpoint state is stale or quorum is unavailable;
+- repository-local restore never writes identity or rollback evidence into Git and performs no implicit Git operation.
 
 Dependencies: J04, J07, J09, J10.
 
 Unblocks: J18, J24, J25.
 
 ### J18 — Implement capacity preflight and authenticated rollover
+
+Why this task exists:
+
+Bounded append-only histories eventually reach hard limits, but pruning would
+erase evidence and mutate the lineage being verified. Authenticated rollover to
+a fresh lineage is the only capacity escape that preserves the old artifact,
+requires new trust, and keeps retained-copy limitations honest.
 
 Outcome:
 
@@ -6959,190 +7219,423 @@ Tests:
 
 Acceptance:
 
-- no in-place history pruning exists;
-- rollover is available at hard cap;
-- source is never replaced or deleted.
-- new-lineage witnessed readiness requires registered topology plus a durable
-  initial checkpoint and external anchor;
-- old authorization material cannot authorize the new lineage, and incomplete
-  witness recovery never creates a direct fallback;
-- repo-local rollover never edits Git automatically and cannot claim that Git
-  history, clones, or old recipient keys were erased;
-- old retained artifacts remain governed by their old suite and are never
-  described as retroactively HNDL protected.
+- no in-place history pruning exists and rollover remains available at the hard cap;
+- source state is never replaced or deleted;
+- new-lineage witnessed readiness requires registered topology plus a durable initial replay checkpoint and external anchor;
+- old contributions, receipts, approvals, and revision secrets cannot authorize the new lineage;
+- missing or incomplete witness recovery never creates a direct fallback;
+- suite migration never negotiates, mixes suites, or claims retroactive protection for retained old artifacts;
+- repo-local rollover has no implicit Git mutation and adoption requires fresh external trust and backup.
 
 Dependencies: J11, J16, J17, J23.
 
 Unblocks: J24, J25, J26.
 
-### J19A-J19D — Freeze and independently review the witnessed construction corpus
+### J19A-J19C — Freeze the witnessed construction corpus
 
-Work split:
+J19A-J19C are active product outcomes. They produce the exact construction,
+protocol, and conformance corpus consumed by J05, J07, J20, J22, and separate
+implementations. No witnessed cryptographic implementation may land before J19
+binds that exact corpus after a fresh solo verification pass. J19R/J19D are
+optional deferred external-review work and have no edge back into the active
+release path. Direct slots remain explicitly unilateral and outside every
+quorum claim.
 
-- J19A selects the construction and freezes the threat model, trust boundaries,
-  compromise assumptions, revocation limits, and endpoint-retention claim.
-- J19B freezes canonical protocol-v1 schemas plus request, approval,
-  contribution, replay, expiry, checkpoint, rotation, and recovery state
-  machines.
-- J19C publishes implementation-independent positive/negative vectors and the
-  executable endpoint-retention model.
-- J19D obtains independent cryptographic review of the exact J19A-J19C corpus
-  and keeps the gate closed until every material remediation is reviewed.
+#### J19A — Select the witnessed construction and freeze its threat model
 
-These are separately schedulable delivery outcomes, not review ceremony. J19A-
-J19C produce the product contracts consumed by implementations. J19D supplies
-the external review required by the security boundary.
+Why this task exists:
+
+The endpoint-retention promise is a property of a complete construction and its
+compromise model, not of “using multiple witnesses.” Selecting the construction
+before schemas or provider adapters prevents availability, coordination, or a
+static share-release shortcut from being mislabeled distributed authority.
 
 Outcome:
 
-The repository contains a reviewed witnessed threat model, selected
-distributed-decryption construction, authenticated approval and action-manifest
-protocol, monotonic freshness and rollback-anchor design, bounded protocol-v1
-schemas, downgrade rules, an endpoint-retention proof, and independent
-deterministic vectors. This is the gate before production identity, item,
-backup, or witnessed encryption implementation.
+`docs/security/witness-v1/construction.md` and
+`docs/security/witness-v1/threat-model.md` select one implementable construction
+and freeze its exact trust boundaries, compromise assumptions, availability and
+revocation limits, direct-slot interaction, and falsifiable endpoint-retention
+claim.
 
-Scope:
+Required work:
 
-- analyze endpoint, witness, quorum, retention, rotation, recovery, and
-  collusion cases;
-- compare standard threshold KEM/distributed-decryption and other reviewed
-  candidates; select only a construction whose exact security model and
-  implementation are independently reviewed, without calling coordination
-  “threshold” by default;
-- specify direct and witnessed-v1 slot fields needed by the final vault format;
-- specify mixed-slot authorization, downgrade, status, receipt, and product-claim
-  semantics so one direct slot defeats any item-level quorum claim;
-- specify canonical requests, action manifests, approver descriptors and signed
-  decisions, responses, receipts, policy checkpoints, state anchors, and error
-  codes;
-- specify `ApprovalTargetV1`, including owner-signed non-secret review labels,
-  entitlement-bound private-name display, field/working-directory/output-sink
-  openings, label rotation, and fail-closed human approval when any meaningful
-  verified representation is unavailable;
-- bind vault/item/epoch/content-role/revision/`RevisionSealId`/policy/principal/
-  operation/workload/expiry/session;
-- define one common validator that rejects every individually valid but
-  semantically inconsistent request/action-manifest pair before display,
-  automatic approval, approval signing, or witness counting;
-- define independent approver and witness membership, key lifecycle, quorum,
-  replay, and rotation;
-- define first registration, strict-descendant checkpoint updates,
-  witness-behind/stale/fork behavior, revocation propagation, and the exact limit
-  of witnessed freshness;
-- define an external rollback-anchor interface and at least one fully public,
-  self-hostable production profile; a restored witness cannot contribute until
-  its checkpoint and replay high-water marks are proven current enough;
-- freeze the serialized database-commit, signed-candidate, external compare-and-
-  swap, readback, response-release, and crash-reconciliation state machine;
-- make every witnessed capsule and response revision scoped, never release or
-  reconstruct an epoch root, and define what an authorized endpoint can retain;
-- prove against the selected construction that a malicious endpoint retaining
-  its long-term keys, all prior requests, approvals, witness responses,
-  contributions, revision secrets, ciphertexts, and plaintext cannot open a
-  later `RevisionSealId` without a fresh authorized quorum, absent a direct
-  path or compromise threshold already excluded by the threat model;
-- define exact action-manifest rendering and make opaque-digest-only interactive
-  approval and opaque-target interactive approval invalid;
-- produce `docs/security/jury-v1-crypto-gate.toml` plus a CI validator that binds
-  accepted specifications, vectors, reviewed commit, review metadata, and
-  finding dispositions and closes the gate after any bound hash changes;
-- publish independent positive and negative vector corpus;
-- obtain independent cryptographic review before implementation gate opens.
+- compare maintained threshold-KEM, distributed-decryption, and other publicly
+  specified candidates with applicable public analysis against the exact J01B
+  primitive/provider evidence and J03 domain semantics; record every rejected
+  candidate and concrete rejection reason;
+- specify approver, witness, endpoint, `juryd`, storage, clock, network, and
+  external-anchor trust boundaries;
+- state quorum, collusion, malicious-client, compromised-approver,
+  compromised-witness, offline-witness, rollback, replay, expiry, restored-state,
+  rotation, and recovery assumptions;
+- decide whether construction-internal epoch material exists and prove that no
+  conforming endpoint reconstructs or receives an epoch root or reusable
+  contribution;
+- define exactly what a previously authorized endpoint may retain and why that
+  state can reopen only its already released revision, not a later
+  `RevisionSealId` without a fresh authorized quorum;
+- state direct and mixed-slot semantics: any usable direct slot is unilateral,
+  defeats the item-level quorum claim, and is never an implicit fallback;
+- pin the exact construction and provider-binding inputs that J19B, J19C, and
+  J19 must use, while retaining the pre-alpha/no-real-secrets boundary.
 
-Tests/deliverables:
+Required verification:
 
-- exact language-neutral vectors;
-- alternate-implementation verification;
-- downgrade, request/approval replay, stale/fork/rollback, collusion, malicious
-  endpoint, approval-rendering, and retention matrices;
-- retained-endpoint vectors that authorize revision N, preserve all endpoint-
-  visible state, then reject N+1 and prove the state cannot decrypt N+1;
-- cross-revision, cross-role, and cross-seal capsule/response substitution plus
-  repeated seal-identifier rejection;
-- recovery, lost-witness, stale-database, missing/conflicting-anchor, and new-
-  witness-identity scenarios;
-- faults before/after database commit, anchor compare-and-swap, anchor readback,
-  and response release, including the sole safe one-candidate reconciliation;
-- proof that transport authentication cannot substitute for an approver
-  signature;
-- proof that an opaque selector or unauthenticated display label cannot produce
-  an interactive approval;
-- negative vectors changing each duplicated request/manifest field while both
-  objects and their signatures remain individually valid;
-- proof that no service has unilateral decryption under stated assumptions;
-- proof that no witnessed transcript yields an epoch root or reusable
-  contribution material.
+- actor/compromise and quorum matrices cover every stated threshold and excluded
+  compromise case;
+- a retained-state inventory covers long-term endpoint keys, all prior requests,
+  approvals, responses, contributions, revision secrets, ciphertexts, and
+  plaintext;
+- each claimed property maps to a construction assumption or remains an explicit
+  nonclaim;
+- alternative comparison uses current primary specifications and exact provider
+  behavior rather than names or popularity.
 
 Acceptance:
 
-- no static share-release shortcut survives without an honest retention claim;
-- the chosen construction is a reviewed distributed-decryption/threshold-KEM or
-  equally analyzed scheme, not a bespoke static share/KDF composition;
-- the endpoint-retention proof establishes fresh authorization for every new
-  revision seal while explicitly allowing retention of an already released
-  revision;
-- exact nonclaims are prominent;
-- every counted approval is a current approver signature over the exact request
-  and verified action-manifest digest;
-- old valid artifacts, stale witness databases, and unanchored restores cannot
-  obtain contribution material after a durably propagated revocation;
-- normal split-write crashes either reconcile the exact signed candidate before
-  output or fail closed without allowing an old database to advance the anchor;
-- direct and witnessed slot fields are final inputs to J05 and J07 rather than
-  placeholder formats requiring later amendment;
-- `docs/architecture.md` production-crypto gate opens only after independent
-  review and disposition of every material finding;
-- the machine gate rejects missing, stale, malformed, or hash-mismatched review
-  evidence before a production cryptographic target can land.
+- one construction and provider binding are selected with no unresolved design
+  alternatives;
+- endpoint-retention and revision-freshness claims are explicit, falsifiable, and
+  bounded by named assumptions;
+- trust, compromise, revocation, rollback, replay, rotation, recovery, and
+  availability limits are complete;
+- no static share-release or coordination-only shortcut survives;
+- direct access is explicitly unilateral and outside the witnessed claim.
 
-Component dependencies:
+Dependencies: J01B and J03.
 
-- J19A: J01B, J03.
-- J19B: J19A.
-- J19C: J19B.
-- J19D: J19C.
+Unblocks: J19B.
 
-Unblocks: J19.
+#### J19B — Freeze witnessed protocol schemas and authorization state machines
 
-### J19 — Bind the independently reviewed witnessed construction gate
+Why this task exists:
+
+Individually valid signatures do not make a semantically consistent request.
+The protocol must freeze one canonical meaning and one crash-safe authorization
+state machine before vectors, servers, or clients can implement it differently.
 
 Outcome:
 
-One machine-checked gate binds the exact J19A-J19D threat model, construction,
-protocol corpus, conformance vectors, endpoint-retention proof, independent
-review, remediations, and provider versions consumed by witnessed
-implementation and J26.
+`docs/security/witness-v1/protocol.md` and
+`docs/security/witness-v1/state-machines.md` freeze canonical protocol-v1
+schemas, preimages, meaningful approval rules, and deterministic request,
+approval, contribution, replay, expiry, cancellation, checkpoint, anchor,
+rotation, and recovery transitions for the J19A construction.
+
+Required work:
+
+- define bounded canonical encodings and domain-separated preimages for requests,
+  action manifests, approver descriptors and decisions, witness contributions,
+  decisions, receipts, checkpoints, anchors, rotation, and recovery records;
+- bind vault, genesis, item, epoch, content role, revision,
+  `RevisionSealId`, policy, requester, operation, workload, expiry, nonce,
+  request-specific session key, witness set, and protocol suite;
+- specify `ApprovalTargetV1`, owner-signed non-secret review labels,
+  entitlement-bound private-name display, field/working-directory/output-sink
+  openings, label rotation, and fail-closed human approval whenever a complete
+  verified meaningful representation is unavailable;
+- define one common request/action-manifest validator that rejects every
+  semantically inconsistent pair before display, automatic approval, approval
+  signing, policy matching, or witness counting;
+- define independent approver and witness membership, both quorums, duplicate
+  and substitution rejection, replay, skew, not-before, expiry, cancellation,
+  concurrency, key rotation, and direct-downgrade behavior;
+- define first registration, strict-descendant checkpoint advancement,
+  witness-behind/stale/fork outcomes, revocation propagation, restored-witness
+  recovery, and the exact limit of witnessed freshness;
+- define a public self-hostable external rollback-anchor interface;
+- freeze database commit, signed next-candidate creation, external
+  compare-and-swap, exact readback, response release, and crash reconciliation;
+  only one exact signed pending candidate may reconcile, and every other
+  database/anchor disagreement fails closed;
+- define bounded value-free rejection codes; unknown versions, implicit direct
+  downgrade, opaque-only human approval, and transport-authentication-as-consent
+  fail closed.
+
+Required verification:
+
+- transition tables cover replay, expiry, cancellation, concurrent identical and
+  conflicting requests, rotation, restore, rollback, anchor loss/conflict, and
+  the sole safe pending-candidate recovery;
+- every duplicated request/manifest field has an individually valid mismatch
+  case rejected before display or counting;
+- complete meaningful rendering and opaque-target refusal are specified at every
+  supported presentation boundary;
+- no accepted state or message releases an epoch root or reusable contribution.
+
+Acceptance:
+
+- every accepted message has one canonical encoding and one domain-separated
+  signature or contribution preimage;
+- request/manifest mismatch fails before display, approval, policy evaluation,
+  or contribution assembly;
+- approval requires a complete policy-authenticated meaningful target, not only
+  a digest, opaque selector, or unauthenticated label;
+- replay, expiry, cancellation, concurrency, rotation, restore, rollback, and
+  split-write transitions are deterministic;
+- unknown versions, transport-only consent, and implicit direct downgrade fail
+  closed.
+
+Dependencies: J19A.
+
+Unblocks: J19C, J19R.
+
+#### J19R — Optionally commission external witnessed-construction review (deferred)
+
+Why this task exists:
+
+If a review budget and qualified reviewer become available later, the project
+needs an honest engagement boundary before claiming any external review. The
+current one-person, zero-budget project cannot satisfy this task, so it is
+deferred and does not gate J19 or J26.
+
+Outcome:
+
+Only after explicit operator activation, a minimal engagement record names a
+qualified external reviewer, the optional J19D consumer, the exact J19A-J19C
+scope, independence basis, budget, publication terms, and a schedule that
+accepts the final frozen corpus without claiming that review has occurred.
+
+Required work:
+
+- keep this task deferred until the operator explicitly confirms both budget and
+  a qualified external reviewer; no agent may activate it speculatively;
+- name J19D as the concrete consumer and an operator-approved future externally
+  reviewed assurance profile as the feature boundary it may enable;
+- record the observed defect class: fabricated, conflicted, draft-only, or
+  scope-inflated external-review claims;
+- establish reviewer identity or organization, independence basis, conflicts,
+  scope, expected inputs, delivery format, finding-severity scheme, remediation
+  loop, publication permissions, and availability window;
+- require the reviewer to examine the final exact J19A-J19C revisions and hashes,
+  not a draft substituted as release evidence;
+- retain only the minimal identity, independence, scope, and provenance needed
+  by J19D; delete non-provenance scheduling details when J19D supersedes them;
+- make no cryptographic conclusion, finding disposition, certification, or
+  whole-product assurance claim in the engagement record.
+
+Required verification:
+
+- an operator confirms the engagement with the named reviewer through an
+  external channel and records only non-secret, publishable confirmation;
+- the reviewer has no authorship or implementation conflict that defeats the
+  stated independence basis;
+- the scope explicitly includes every J19D review area and permits final-corpus
+  hash binding plus remediation review;
+- absence, withdrawal, scope refusal, funding loss, or schedule failure leaves
+  J19R deferred or open and has no effect on the active `0.x` release.
+
+Acceptance:
+
+- one independent reviewer is concretely engaged for the final exact J19A-J19C
+  corpus;
+- the engagement names J19D as consumer, the optional future assurance profile,
+  reviewer independence, full scope, final-hash binding, remediation review,
+  budget, and publication terms;
+- no implementation agent or automated system fabricates reviewer identity,
+  availability, confirmation, or conclusions;
+- the record makes no claim that review is complete and contains no secret or
+  private operational detail;
+- J19D supersedes the scheduling record and removes non-provenance details after
+  the final review record is accepted.
+
+Dependencies: J19B.
+
+Unblocks: J19D.
+
+#### J19C — Publish witnessed conformance vectors and endpoint-retention proof
+
+Why this task exists:
+
+Prose permits incompatible interpretations at exactly the malformed and crash
+boundaries attackers exploit. Language-neutral vectors and an executable
+retention model make the J19A/J19B claims reproducible before provider code
+lands.
+
+Outcome:
+
+`conformance/witness-v1/` contains implementation-independent positive and
+negative vectors plus an executable model proving the exact endpoint-retention
+and revision-freshness property for the J19A construction and J19B protocol.
+
+Required work:
+
+- publish canonical vectors for every message, preimage, signature,
+  contribution, assembly, decision, receipt, checkpoint, anchor, rotation, and
+  recovery record;
+- publish one-bit, malformed-bound, unknown-version/algorithm, wrong-domain,
+  cross-vault/item/role/revision/seal/session, replay, expiry, quorum
+  substitution, duplicate actor, stale policy, stale revision, restored witness,
+  and anchor rollback negatives;
+- publish validly signed request/manifest pairs with each duplicated scope,
+  policy, expiry, command, working-directory, field, and sink binding changed;
+- publish approval negatives for missing, digest-mismatched, lossy, truncated,
+  opaque, forged-label, stale-label, wrong-binding, and absent-entitlement
+  presentations;
+- publish split-write vectors before/after database commit, signed-candidate
+  creation, external compare-and-swap, anchor readback, and response release,
+  including the sole safe one-candidate reconciliation;
+- model all state visible to requester endpoints, approvers, witnesses, `juryd`,
+  and storage after revision N, including long-term keys and all released
+  material;
+- demonstrate that retained allowed state from N can reopen N but cannot
+  authorize or decrypt N+1 without fresh authorization under J19A assumptions;
+- publish cross-provider normalization rules, stable rejection classes, and
+  generic fixtures containing no reusable secrets or private context.
+
+Required verification:
+
+- at least one standalone consumer can run the vectors without repository-
+  private state;
+- an alternate implementation or model runner agrees on accepted outputs and
+  normalized rejection semantics;
+- the retention model exercises every selected construction, compromise
+  threshold, direct/mixed-mode exclusion, and later seal;
+- deterministic regeneration changes nothing unless an explicitly accepted
+  corpus input changes; regeneration is never used to bless an implementation
+  mismatch.
+
+Acceptance:
+
+- separately implemented consumers can consume the corpus without repository-
+  private context;
+- the model covers all endpoint-visible retained state and explicitly lists
+  excluded compromise cases;
+- revision-N state cannot satisfy revision-N+1 authorization or decryption under
+  the accepted model;
+- protocol, meaningful-approval, anchor-crash, and retained-state positives and
+  negatives are deterministic, bounded, and generic;
+- no vector or transcript yields an epoch root or reusable contribution.
+
+Dependencies: J19B.
+
+Unblocks: J19; J19D only if the optional review work is activated.
+
+#### J19D — Optionally obtain external cryptographic review (deferred)
+
+Why this task exists:
+
+External expert review could find construction defects that solo verification
+misses. The project currently has neither reviewer nor budget, so this task is
+optional future assurance work and is not an active implementation or release
+gate.
+
+Outcome:
+
+After explicit activation through J19R, the review record identifies the
+external reviewer, exact J19A-J19C revisions and hashes, scope, report, findings,
+remediations, and reviewed dispositions without implying whole-product
+certification or retroactively changing the claims of an earlier `0.x` release.
+
+Required work:
+
+- consume the J19R engagement, reconfirm reviewer independence, funding, and availability,
+  and fail closed if the reviewer, scope, final-hash binding, or publication
+  terms no longer match; no implementation agent may fabricate reviewer
+  availability, identity, independence, or conclusions;
+- give the reviewer exact revision identifiers and hashes for the complete
+  J19A-J19C corpus and every provider/specification input;
+- require review of construction selection and assumptions, canonical preimages,
+  meaningful approval and request/manifest consistency, contribution assembly,
+  replay/expiry, rollback anchors, split-write recovery, rotation/recovery,
+  downgrade behavior, and endpoint-retention proof;
+- record reviewer identity or organization, independence basis, scope, date,
+  reviewed revision, findings, severity, and dispositions;
+- remediate every material finding in its owning J19A-J19C artifact and obtain
+  review of the exact resulting revision;
+- leave J19D open when no independent reviewer is available, the corpus changes,
+  review scope is incomplete, or any material finding remains unresolved;
+- publish only review material the reviewer permits, but publish enough exact
+  metadata and finding dispositions for the optional assurance profile to remain
+  narrowly scoped;
+- retain the record only while the reviewed corpus is supported; supersede it
+  when a later review binds changed corpus inputs.
+
+Required verification:
+
+- hashes in the review record resolve to the exact frozen corpus;
+- every material finding maps to a remediation revision and explicit reviewer
+  disposition;
+- a changed bound artifact invalidates the review status;
+- review wording is checked against the pre-alpha/no-real-secrets and narrow-
+  construction-scope nonclaims.
+
+Acceptance:
+
+- the reviewer is independent of the corpus authors and implementation team;
+- the review identifies every artifact, provider input, and exact revision
+  examined;
+- every material finding is remediated and that remediation is independently
+  reviewed;
+- missing, stale, incomplete, or unresolved review prevents only the optional
+  externally reviewed assurance claim; it does not block active J19 or J26;
+- review language is scoped to the witnessed construction and never presented as
+  whole-product assurance.
+
+Dependencies: J19C, J19R.
+
+Unblocks: J19E only if the optional implementation/build review is activated.
+
+### J19 — Bind the exact solo-verified pre-implementation construction gate
+
+Why this task exists:
+
+Construction prose, vectors, provider inputs, and verification results can
+drift independently. A machine-checked binding and fresh solo pass make that
+drift visible before witnessed implementation begins without pretending that
+the project received external review.
+
+Outcome:
+
+One machine-checked gate binds the exact J19A-J19C threat model, construction,
+protocol corpus, conformance vectors, endpoint-retention proof, solo
+verification record, and provider versions consumed by witnessed
+implementation. It makes no claim about implementation source that does not yet
+exist and no claim of independent review, certification, or suitability for
+real secrets.
 
 Scope:
 
 - emit a bounded gate manifest containing exact artifact revisions and hashes,
-  suite/provider identifiers, reviewer and scope metadata, findings,
-  remediations, and accepted assumptions;
-- verify every referenced artifact and reviewed remediation before passing;
-- fail closed when an artifact, provider version, vector, review scope, finding
-  disposition, or implementation binding is absent, stale, or mismatched;
-- invalidate the gate and require a new J19D review whenever a construction,
-  preimage, state machine, vector, proof, provider, or material remediation
-  changes;
-- expose only scoped construction-review status and never imply whole-product
-  certification or protection of real secrets.
+  suite/provider identifiers, accepted assumptions, verification commands, and
+  the revision on which the fresh solo pass ran;
+- recompute every referenced hash and run the J19C vectors, retention model,
+  schema/state-machine checks, negative cases, and provider-bound checks from a
+  clean checkout or equivalent clean worktree;
+- inspect the complete corpus in a fresh pass, record confirmed findings and
+  their fixes, and leave the gate closed while a material finding is unresolved;
+- fail closed when an artifact, provider version, vector, verification command,
+  finding disposition, or bound revision is absent, stale, or mismatched;
+- invalidate the gate whenever a construction, preimage, state machine, vector,
+  proof, provider input, verifier, or material remediation changes;
+- label alternate implementations, models, agents, tests, and the fresh pass as
+  engineering evidence, never as independent review.
 
 Acceptance:
 
-- the gate passes only for one exact corpus and implementation/provider binding;
-- all material findings are resolved and their remediations independently
-  reviewed;
-- missing or stale independent review blocks witnessed cryptographic
-  implementation and J26;
-- output states the narrow review scope and retains the pre-alpha/no-real-
-  secrets warning.
+- the gate passes only for one exact J19A-J19C corpus and provider binding after
+  the declared fresh solo verification commands pass;
+- every confirmed finding is dispositioned and no unresolved material finding
+  remains;
+- any gated change invalidates the gate until the fresh solo pass is rerun and
+  rebound;
+- gate output states that the corpus and future implementation are externally
+  unreviewed, experimental, and unsuitable for real secrets;
+- no model, agent, test, alternate implementation, or clean build is represented
+  as an independent reviewer.
 
-Dependencies: J19D.
+Dependencies: J19C.
 
 Unblocks: J04, J05, J07, J10, J20, J22, J23.
 
 ### J20 — Implement witness policy, replay, expiry, and contribution engine
+
+Why this task exists:
+
+The transport-independent engine must enforce the accepted per-revision
+construction, replay state, approval rules, freshness, and rollback anchors
+before releasing any contribution.
 
 Outcome:
 
@@ -7160,7 +7653,7 @@ Scope:
 - implement the common request/action-manifest semantic-equality validator and
   apply it before policy matching or approval counting;
 - after J19 acceptance, implement any protocol-specific cryptographic adapters
-  selected by the reviewed construction; raw providers remain private to those
+  selected by the J19-bound construction; raw providers remain private to those
   modules;
 - inject clock, randomness, policy checkpoint, external anchor, key provider,
   and persistence;
@@ -7180,7 +7673,31 @@ Scope:
 
 Tests:
 
-- complete matrix in section 22.12;
+- canonical request, action-manifest, approver-descriptor, approval-decision,
+  policy-checkpoint, witness-state-anchor, response, and receipt-material
+  preimages, with one-bit mutations and unknown algorithm/version rejection;
+- wrong vault, genesis, item, epoch, slot, principal, role, policy, operation,
+  workload digest, session key, request ID, witness set, and revision seal;
+- individually valid request/manifest pairs with each duplicated scope, policy,
+  expiry, command, working-directory, field, and sink binding changed in turn;
+- issuance immediately inside and outside skew, not-before, and expiry bounds;
+- identical and conflicting duplicate request IDs, replayed signatures, and
+  response replay against a different request session key;
+- forged, stale, revoked, wrong-policy, wrong-request, wrong-manifest, expired,
+  duplicate, and conflicting approver decisions;
+- witness membership rotation during a request; insufficient, duplicate, and
+  unauthorized witness responses; mixed denial/approval; and corrupted
+  contribution material;
+- endpoint cancellation before and after durable decision, signing/contribution
+  key rotation, and retained endpoint material against later revision seals;
+- replay-database restore/rollback, checkpoint downgrade or fork, skipped
+  checkpoint update, witness-behind refusal, external-anchor loss/conflict, and
+  recovery under a new witness identity;
+- crash before reservation, after reservation, after decision, after database
+  commit, after external compare-and-swap, after anchor readback, and before
+  response release;
+- retry without a second contribution, clock rollback/forward jump, and replay
+  compaction at the safety horizon;
 - state-machine/property model for crashes and retries;
 - fault injection at every database/anchor/output boundary, including exact
   candidate republish, already-published recovery, DB-behind, anchor-behind,
@@ -7209,6 +7726,8 @@ Acceptance:
 - checkpoint or replay rollback and unanchored recovery stop contribution
   service, while the sole signed one-candidate crash state reconciles without
   weakening the external predecessor check;
+- the engine derives membership, quorum, operation, lifetime, workload, and
+  direct-slot claim status only from validated J06 policy state;
 - core engine contains no HTTP or database-specific types.
 
 Dependencies: J04, J06, J19.
@@ -7216,6 +7735,12 @@ Dependencies: J04, J06, J19.
 Unblocks: J21, J23, J25.
 
 ### J21 — Deliver self-hostable `juryd` adapters
+
+Why this task exists:
+
+Self-hosting is meaningful only when operators run the same security-critical
+engine as the managed product. Adapters own transport and durability while the
+protocol engine remains shared and independently testable.
 
 Outcome:
 
@@ -7228,6 +7753,8 @@ Scope:
 - implement TLS/auth integration boundaries without trusting transport alone;
 - implement monotonic checkpoint persistence and the J19-selected public
   external rollback-anchor profile;
+- enforce an anchor control plane, write credential, restore path, and failure
+  domain independent from database administration and backup/restore authority;
 - implement authenticated compare-and-swap, exact readback, and the bounded
   startup reconciliation state machine without acknowledging unanchored state;
 - enforce request/concurrency/rate bounds;
@@ -7242,6 +7769,8 @@ Tests:
 - conformance suite against real server processes;
 - database/anchor crash/restart at each split-write boundary and backup/restore
   rollback;
+- simultaneous database-and-anchor rollback attempts under shared and separated
+  administrative credentials; shared authority must fail deployment validation;
 - missing, older, newer, corrupted, and conflicting external rollback anchors;
 - oversized/slow/malformed requests;
 - rate-limit enumeration resistance;
@@ -7255,6 +7784,9 @@ Acceptance:
 - startup and restore cannot serve contributions until checkpoint and replay
   high-water marks match a valid external rollback anchor or the sole exact
   signed next-candidate case is safely published and read back;
+- external-anchor write, administration, and restore authority and its failure
+  domain are independent from database backup/restore authority; shared
+  authority cannot serve contributions;
 - health output contains no policy, item, or principal enumeration.
 
 Dependencies: J20.
@@ -7262,6 +7794,11 @@ Dependencies: J20.
 Unblocks: J22, J23, J25.
 
 ### J22 — Deliver witnessed open, approval, and execution UX
+
+Why this task exists:
+
+Witnessed UX must bind meaningful approval to the exact revision seal and call
+the same narrow item-access boundary without leaking contribution material.
 
 Outcome:
 
@@ -7318,8 +7855,6 @@ Tests:
 Acceptance:
 
 - direct and witnessed modes share use-case APIs;
-- a witnessed-only item can complete read, inject, and exec without any direct
-  slot, raw key, epoch-root, or reusable-contribution path;
 - request broadening always changes the digest;
 - interactive approval signs only after complete verified action-manifest
   rendering with policy-authenticated meaningful target, field, working-
@@ -7328,12 +7863,21 @@ Acceptance:
 - every counted approval is a current independent approver signature, not a
   transport-authenticated action;
 - receipt nonclaims appear in user documentation.
+- a witnessed-only item completes read, inject, and exec without a direct slot, raw key, epoch root, or reusable contribution;
+- the next revision seal remains inaccessible until a fresh authorized quorum completes.
 
 Dependencies: J10, J13, J14, J19, J21, J23.
 
 Unblocks: J24, J25, J26.
 
 ### J23 — Deliver offline receipts and witness operations
+
+Why this task exists:
+
+Receipts should remain verifiable after witness rotation and while offline, but
+must not overclaim endpoint execution. Replay backup and restoration are
+security operations because stale persistence can resurrect already-used
+requests.
 
 Outcome:
 
@@ -7375,9 +7919,16 @@ Acceptance:
 
 Dependencies: J19, J20, J21.
 
-Unblocks: J24, J25, J26.
+Unblocks: J18, J22, J24, J25, J26.
 
 ### J24 — Deliver the witnessed access-aware CLI-backed TUI
+
+Why this task exists:
+
+The TUI exposes broad workflows but must not become a second authorization or
+cryptographic implementation. Building it over stable CLI/core contracts keeps
+one backend authority path, preserves a secret-free model, and makes witnessed
+approval behavior testable through deterministic user interactions.
 
 Outcome:
 
@@ -7421,19 +7972,28 @@ Tests:
 
 Acceptance:
 
-- no private key, revision secret, or field value enters Ratatui model;
-- every mutation uses one backend authority path;
-- Git-backed status and merge surfaces remain value-free for inaccessible items
-  and cannot lower retained local ancestry;
-- keyboard-only operation is complete.
-- witnessed-only read/inject/exec and independent approval are keyboard-complete
-  without a direct-slot fallback.
+- no private key, revision secret, contribution, epoch root, or field value enters the Ratatui model;
+- complete verified manifests are keyboard-reviewable and opaque/digest-only approvals are impossible;
+- witnessed-only read/inject/exec completes without a direct fallback;
+- every operation uses one backend authority path;
+- direct mode is visibly unilateral and never an implicit recovery from witness failure;
+- Git-backed status and merge surfaces remain value-free for inaccessible items and cannot lower retained local ancestry;
+- keyboard-only operation is complete, including witnessed read/inject/exec and independent approval without a direct-slot fallback;
+- deterministic compact/wide interaction tests pass.
 
 Dependencies: J10, J13, J16, J17, J18, J22, J23.
 
 Unblocks: J25, J26.
 
 ### J25 — Complete the witnessed adversarial corpus and measured budgets
+
+Why this task exists:
+
+The release claim spans parsers, durable state, Git transport, cryptographic
+providers, witness services, user interfaces, and child processes. Separately
+authored adversarial cases and measured budgets are required because happy-path
+unit tests or guessed limits cannot expose cross-boundary downgrade, rollback,
+leakage, or resource-exhaustion failures.
 
 Outcome:
 
@@ -7470,8 +8030,26 @@ Scope:
   exact accepted misuse-resistance claim or fail-closed duplicate detection;
 - exhaust every public KDF/Argon2 work, memory, lanes, length, and allocation
   limit before expensive work or allocation;
-- measure all section 22.9 scenarios on documented machines;
+- on documented machines, measure public validation at 1/50/256 principals and
+  10/100/1,000 items; policy replay at 1/100/4,096 revisions; item proofs at
+  1/1,000/65,536 proofs; one-item unlock; descriptor catalogs at
+  1/10/100/1,000 granted items; ten-item inject preflight; reader grant; read
+  revocation/reseal at 1 KiB, 1 MiB, and near file cap; multi-item principal
+  replacement; rollover at policy/proof/file caps; independent-item merge;
+  transfer inspect/dry-run and Jig migration near file cap;
+- measure portable/hardened identity and backup KDF wall time plus peak RSS,
+  bounded rejection of hostile KDF headers, protected-memory lock/unlock/zeroize
+  cost and locked-byte budget on Linux/macOS, hardware-provider cold/warm unlock
+  and cancellation/concurrency behavior, every padding bucket, and proof-history
+  growth under documented cover cadences;
+- record no guessed absolute latency SLO; pathological superlinear behavior
+  outside documented local-audit verification blocks release, and non-KDF peak
+  memory stays within the 16 MiB artifact cap plus bounded touched-item state;
 - scan logs, errors, JSON, receipts, snapshots, fixtures, and crash artifacts.
+- challenge secret-dependent provider and wrapper paths with source-backed
+  side-channel review plus targeted differential/statistical timing tests where
+  measurement is meaningful; a passing timing test never replaces a constant-
+  time contract.
 
 Acceptance:
 
@@ -7483,27 +8061,124 @@ Acceptance:
   semantics across the cross-provider corpus;
 - nonce/key reuse faults and KDF resource exhaustion meet the exact J01A oracle;
 - no guessed performance claim appears in release docs;
-- unresolved high-severity security findings block J26.
+- every confirmed finding is dispositioned; unresolved medium-or-higher
+  security findings block J26 and any optionally activated J19E work. Risk
+  acceptance does not resolve such a finding for release. Exceptional acceptance
+  of a lower-severity finding requires a named owner, source-backed
+  exploitability analysis, expiry, remediation date, and disclosure or embargo
+  treatment. Severity labeling alone never makes a material defect releasable.
 
 Dependencies: J11, J14, J16, J17, J18, J20, J21, J22, J23, J24.
 
-Unblocks: J26.
+Unblocks: J26; J19E only if the optional review work is activated.
+
+### J19E — Optionally review the exact release implementation externally (deferred)
+
+Why this task exists:
+
+If a qualified reviewer and budget become available for a future release
+profile, external source/build review could find divergences that solo
+verification misses. The current one-person, zero-budget `0.x` scope cannot
+satisfy that condition, so J19E is deferred and does not block J26.
+
+Outcome:
+
+Only after explicit operator activation, an external reviewer examines the exact
+security-critical source and minimal gate verifier for one future candidate,
+dispositions every material finding, and binds the reviewed source, J19 corpus,
+provider lock data, build inputs, and externally reproduced binary digests to an
+operator-approved future externally reviewed release profile. The work does not
+retroactively review or certify an earlier `0.x` build.
+
+Scope:
+
+- keep this task deferred until an explicit scope revision names the concrete
+  future release consumer, qualified reviewer, and actual budget;
+- name that future release profile and its verifier as the consumers and
+  post-J19 implementation or verifier drift as the observed defect class;
+- require a reviewer independent of the candidate authors and implementation
+  team; the J19D reviewer may continue only if that independence and the expanded
+  implementation scope are reconfirmed;
+- review the exact revision of cryptographic wrappers, identity and protected-
+  memory boundaries, parsers and canonical encodings, direct/witnessed item
+  access, approval and replay state machines, contribution assembly, persistence
+  and external-anchor handling, guarded CLI/TUI release, and plaintext sinks;
+- review the minimal J19 and candidate-binding verifier itself, including negative tests for
+  missing, stale, substituted, or partially updated source, provider, review,
+  vector, build, and binary bindings;
+- externally rebuild the release from pinned inputs and bind matching binary
+  digests, checksums, SBOM, provenance, provider lock data, verifier revision,
+  and the exact J19 manifest into the release gate;
+- disposition every finding. Unresolved medium-or-higher findings block only the
+  optional externally reviewed profile; lower findings require an explicit
+  reviewed disposition and may not disappear through relabeling;
+- invalidate J19E whenever security-critical source, the verifier, provider lock
+  data, build inputs, or resulting binaries change;
+- retain the accepted record only as provenance for the supported exact build;
+  supersede it on the next candidate and remove it when that build leaves the
+  supported release set after the reporting-policy retention period.
+
+Required verification:
+
+- every reviewed path and build input resolves inside the exact candidate
+  revision and every recorded digest is recomputed;
+- the external reviewer or a separately named external builder reproduces the
+  bound binaries from the pinned source and lock data;
+- verifier mutation, omitted-file, stale-review, changed-provider, and
+  source/binary-substitution fixtures all fail closed;
+- each material finding maps to a remediation revision and explicit independent
+  reviewer disposition;
+- review wording states its exact implementation/build scope and preserves the
+  pre-alpha/no-real-secrets warning.
+
+Acceptance:
+
+- the exact security-critical implementation and gate verifier are externally
+  reviewed after J19D and J25, not inferred safe from conformance alone;
+- every confirmed finding is dispositioned and no unresolved medium-or-higher
+  finding remains;
+- source, provider lock, verifier, build, binary, SBOM, provenance, review, and
+  J19 corpus bindings identify one reproducible candidate;
+- any bound change invalidates the optional externally reviewed profile without
+  changing the status of an earlier active-scope J26 release;
+- no whole-product certification or real-secret protection claim is made.
+
+Dependencies: J19D, J25.
+
+Unblocks: an explicitly approved future externally reviewed release milestone,
+not active J26.
 
 ### J26 — Publish the experimental witnessed-access 0.x release
+
+Why this task exists:
+
+J26 is the single release join that prevents a direct-only build, stub witness
+service, receipt demonstration, or incomplete security corpus from being called
+the witnessed product. It binds the exact source/build scope and explicit
+externally-unreviewed pre-alpha language to what operators can actually build
+and rehearse.
 
 Outcome:
 
 A fresh operator can verify, build, configure witnessed governance, self-host,
 run, back up, and recover the experimental witnessed-access release while
-understanding that Jury as a whole is pre-alpha and not suitable for real
-secrets. J15 compatibility is post-`0.x` and is not advertised as shipped.
+understanding that Jury is externally unreviewed pre-alpha software and is not
+suitable for real secrets. J15 compatibility and J19R/J19D/J19E external-review
+work are not advertised as shipped.
 
 Scope:
 
 - finalize license selection and add exact texts;
 - publish format, direct/witnessed slot, protocol, receipt, and rollback-anchor
-  specifications plus the vector corpus and exact J19 review scope;
-- produce signed binaries, checksums, SBOM, provenance, and build instructions;
+  specifications plus the vector corpus and exact J19 gate scope;
+- produce signed binaries, checksums, SBOM, provenance, and clean-environment
+  reproducible build instructions bound to the exact J26 candidate;
+- freeze the release-signing trust root before any signing credential exists:
+  use an offline or hardware-backed key, or a protected keyless identity with an
+  immutable workflow identity; keep signing authority out of ordinary validation
+  CI, require least privilege and an explicit solo-maintainer release decision,
+  and publish auditable rotation, revocation, compromise-recovery, and trusted
+  replacement-key procedures;
 - document upgrades, rollback, backup, drills, and incident response;
 - document and dogfood repo-local `.jury/vault.json` init, clone, external
   genesis trust, public verify, identity-scoped use, CI pinning, value-free diff,
@@ -7518,7 +8193,7 @@ Scope:
 - document that direct slots are unilateral for their recipient, suppress the
   quorum claim for affected items, and are never an implicit fallback;
 - dogfood a witnessed-only lifecycle across request creation, complete manifest
-  rendering, independent approval, self-hosted witness contributions,
+  rendering, a distinct approver decision, self-hosted witness contributions,
   read/inject/exec, receipt verification, revision change, denial/replay/stale
   failure, witness rotation, and recovery;
 - document the exact J01A HNDL and PQ-authenticity decisions, that HNDL does not
@@ -7526,15 +8201,22 @@ Scope:
   re-encryption cannot revoke retained old-lineage copies, that FIPS-validated
   deployment is not claimed, and that suite migration creates a separately
   trusted lineage with no negotiation or fallback;
-- publish the exact independent review performed for J19 without extending it
-  to a whole-product assurance claim;
-- self-review the exact candidate in a fresh pass and report it honestly as
-  self-review; unresolved high-severity findings still block release;
+- state prominently that no independent professional security review was
+  performed and that J19R/J19D/J19E remain deferred optional work;
+- self-review the exact candidate in a fresh pass, report it honestly as
+  self-review, rerun all release checks from a clean checkout or equivalent
+  clean worktree, and bind the exact source, J19 manifest, verifier, provider
+  lock data, build inputs, binary digests, checksums, SBOM, and provenance;
+  every confirmed finding requires disposition and unresolved medium-or-higher
+  findings block release;
 - dogfood one generic owner/developer/machine lifecycle across identity
   protection, private-name grants, retained pre-grant ciphertext, direct
   execution, transfer, revocation, principal replacement, cover,
   backup verify/drill/restore, witnessed recovery, and rollover;
 - verify source and binary version identity;
+- refresh dependency ownership, checksums, feature trees, licenses, RustSec, and
+  upstream advisories immediately before signing; J01B's dated snapshot
+  alone is insufficient;
 - add security reporting, embargo, and key-compromise procedures;
 - retain the pre-alpha/no-real-secrets warning throughout `0.x`.
 
@@ -7542,15 +8224,27 @@ Acceptance:
 
 - all active dependency leaves are complete with task-local test evidence;
 - direct and witnessed release candidates pass the public conformance suite;
-- the J19 machine gate binds an independent review of the exact witnessed
-  construction and rejects any changed or undispositioned revision;
+- the J19 machine gate binds the exact solo-verified witnessed construction and
+  rejects any changed or undispositioned revision without claiming independent
+  review;
+- the J26 release binding identifies one exact security-critical implementation,
+  gate verifier, provider lock data, reproducible build, and artifact set after
+  a fresh solo verification pass; any change invalidates the binding;
+- signing authority is segregated from ordinary CI, least-privileged, approved
+  by the named solo maintainer, and covered by published rotation, revocation,
+  trusted-key replacement, and compromise-recovery procedures;
+- every confirmed finding is dispositioned and no unresolved medium-or-higher
+  security finding remains;
+- release-time provider and dependency ownership, checksum, feature, license,
+  RustSec, and upstream-advisory evidence is fresh for the exact signed
+  candidate;
 - no Jury Cargo package depends on Jig;
 - documentation states endpoint-retention, offline-freshness, revocation, and
-  the exact narrow scope of J19 independent review prominently;
+  the absence of independent professional security review prominently;
 - a fresh generic repository lifecycle proves committed ciphertext travels with
   code while every private and installation-local artifact remains outside Git;
 - product, CLI, and release language claim witnessed authority only for items
-  and deployments that satisfy the exact reviewed construction, policy,
+  and deployments that satisfy the exact J19-bound construction, policy,
   topology, checkpoint, and no-direct-slot assumptions;
 - no product, CLI, or release language claims HNDL, PQ authenticity, FIPS
   validation, forward secrecy, or retroactive migration protection beyond the
@@ -7567,6 +8261,11 @@ Unblocks: the experimental Jury `0.x` witnessed-access release.
 
 This record explains prior decisions. It requires no new review rounds and is
 not release evidence.
+
+The solo-project feasibility cut on 2026-08-30 supersedes historical statements
+below that describe J19R/J19D/J19E as active gates or count 32 active outcomes.
+Those passages remain only to explain how the earlier graph evolved; they do not
+define current scope.
 
 The retired planning workflow required at least four review rounds before Beads
 conversion.
@@ -8004,9 +8703,10 @@ Revisions:
 - synchronized Git-backed amendments and acceptance criteria into the epic,
   portable track, and J02/J03/J05/J09/J11/J13/J15/J16/J17/J18/J24/J25/J26;
 - added a `git-backed` label to those 15 tracker records;
-- left the 34-node, 86-edge graph unchanged.
+- left the then-current 34-node, 86-blocking-edge graph unchanged, before the
+  later J19A-J19D decomposition.
 
-Validation:
+Historical validation at that round:
 
 - all 15 selected records contain exactly one Git-backed amendment and the old
   J09 required path is absent;
@@ -8019,21 +8719,196 @@ Validation:
 - `scripts/jig check contract` remains unavailable because no contract-
   compatible Jig binary is installed; it made no repository mutation.
 
+### Round 15 — Live-contract restoration audit
+
+Findings:
+
+- the dependency DAG had remained exact, but live J01A, J19A-J19D, J25, and J26
+  bodies had lost load-bearing requirements carried only by the master plan;
+- J02 named an exact Jig commit but not the canonical source repository and was
+  incorrectly treated as unavailable when only the old `../jig` path was
+  checked;
+- J02, J20, and J25 required implementation agents to reopen numbered master-
+  plan sections for extraction, protocol tests, or performance scenarios;
+- unfiltered `br ready` exposed six non-executable feature rollups, while the
+  plan intended only task outcomes to be claim candidates;
+- the portable-track and epic estimates exceeded their active descendant sums
+  by 240 minutes; and
+- the current 38-record `jury-qv4` ID family had no current synchronization
+  record because round 14 described the earlier 34-node graph; the ID family
+  includes standalone post-`0.x` J15 even though J15 has no active-epic parent
+  relationship.
+
+Revisions:
+
+- pinned `https://github.com/bpcakes/jig-sh.git` plus commit
+  `eed70cee337b0067ed92deb9fa05017b0b284605`, accepted only a verified
+  `../jig-sh` object source, and inlined J02's fail-closed disposable extraction
+  workflow;
+- restored J01A's alternative/property analysis and independent re-execution,
+  split the collective J19 corpus into four self-contained artifact/test/review
+  contracts, restored J25's Git/provider/KDF adversarial boundary, and restored
+  J26's licensing, signed-release, provenance, and security-reporting work;
+- inlined J20's engine protocol matrix and J25's declared benchmark scenarios;
+- changed implementation selection guidance to
+  `br ready --epic jury-qv4 --type task --json` and explicitly classified feature
+  parents as rollup containers;
+- reconciled the portable track and epic estimates to active descendant sums;
+- synchronized the affected live Bead descriptions and acceptance fields without
+  adding a planning, review, source-fetch, or conversion bead.
+
+Validation:
+
+- the canonical or verified sibling Jig repository contains the exact commit and
+  all J02 source paths;
+- all affected live tasks carry rationale, outcome, work, verification,
+  acceptance, and exact dependency ownership, with no numbered-section lookup;
+- the `jury-qv4` ID family has 38 records, 31 tasks, and 93 blocking edges when
+  standalone J15 is included; the explicit active release hierarchy excludes
+  J15 and has 37 nodes, 30 tasks, 87 blocking edges, 36 hierarchy edges, zero
+  cycles, and J26 as its only terminal task;
+- task-filtered readiness exposes exactly J01A, J02, and J03;
+- feature sums, the epic estimate, and active task estimates all equal 33,600
+  minutes; the portable track and its active children both equal 13,680 minutes.
+
+### Round 16 — Post-restoration steady-state reread
+
+Findings:
+
+- the second pass found one remaining J25 reference to section 22.9, several
+  legacy-sensitive live tasks that named only a commit rather than the canonical
+  source locator, and missing local rationale paragraphs on J25/J26;
+- no task split, dependency edge, priority, release boundary, or architecture
+  change was needed.
+
+Revisions:
+
+- inlined every declared performance scenario into J25;
+- normalized all live legacy-source references to the canonical remote, exact
+  commit, and verified sibling object-source rule;
+- added local rationale for the adversarial and release joins.
+
+Validation:
+
+- all live `jury-qv4` task descriptions are free of numbered-section
+  dependencies;
+- obscure-task reread of J19B identifies exact artifacts, meaningful approval,
+  semantic consistency, anchor/CAS crash behavior, tests, acceptance, and live
+  dependencies without consulting this plan;
+- sampled rationale for J01A, J02, J19B, J25, and J26 explains why each boundary
+  exists and what weaker outcome it prevents;
+- the DAG and readiness results from round 15 are unchanged, so this pass is
+  marginal contract polish rather than structural redesign;
+- this was a solo planning re-execution, not independent cryptographic review or
+  whole-product assurance.
+
+### Round 17 — Task-contract and release-graph repair
+
+Findings:
+
+- J15 still appeared close enough to the active release hierarchy to be mistaken
+  for current work even though compatibility is outside the witnessed `0.x`
+  scope;
+- eight extraction-sensitive live tasks depended on task-specific Jig baselines
+  that existed only in this plan, while J20 and J22 referred too vaguely to
+  plan-owned inputs;
+- 18 live acceptance fields had drifted from their authoritative task sections,
+  16 live tasks lacked local rationale, and eight task sections lacked the
+  rationale already present in their Beads;
+- several task-local `Unblocks` summaries named transitive consumers or had
+  drifted from the executable blocking edges; and
+- J19D required independent review but reviewer sourcing could not start until
+  the entire J19C corpus was complete, leaving avoidable external lead-time risk.
+
+Revisions:
+
+- made J15 a standalone deferred post-`0.x` task with no active parent-child
+  relationship, no active dependent, no active estimate contribution, and an
+  explicit operator-controlled post-J26 reactivation boundary;
+- copied the exact canonical repository, commit, verified-sibling, selected-path,
+  reuse/replace, and fail-closed provenance into every extraction-sensitive live
+  task, and made J20/J22 explicitly Jury-native with no task-specific Jig
+  extraction authority;
+- restored task-local rationale everywhere and synchronized all 32 plan
+  acceptance sections, Bead acceptance fields, and embedded acceptance blocks;
+- defined every `Unblocks` list as immediate blocking-edge consumers and
+  synchronized task bodies, plan bodies, and tracker edges; and
+- added J19R after J19B to commission a concrete independent reviewer while J19C
+  finishes, then made J19D depend on both J19C and J19R. J19R names its consumer,
+  gated feature, observed late-sourcing/fabrication defect class, and deletion or
+  supersession condition; it cannot claim that review occurred.
+
+Validation:
+
+- all 32 task contracts have local rationale and exact acceptance-field,
+  embedded-acceptance, dependency, and immediate-`Unblocks` parity;
+- the active hierarchy has 38 nodes, 31 tasks, 89 blocking edges, 37 hierarchy
+  edges, zero cycles, and J26 as its only terminal task; the 39-record ID family
+  additionally includes standalone deferred J15 and has 95 blocking edges;
+- active task, immediate-track, and epic estimates all equal 33,600 minutes, and
+  the portable track and its active tasks both equal 13,680 minutes;
+- task-filtered readiness exposes exactly J01A, J02, and J03; J15 is deferred,
+  parentless, and absent from that result; and
+- the verified `../jig-sh` object source resolves the canonical commit and all 51
+  named task-specific files or directories.
+
+### Round 18 — Post-repair steady-state reread
+
+Findings:
+
+- the second pass found two older task-local provenance gaps: J02 omitted the
+  verified-sibling rule from its local baseline and J12 did not explicitly fail
+  closed when the pinned object or a selected path was unavailable;
+- five live task titles had harmless but real naming drift from their canonical
+  plan headings, including shortened J09 and J10 outcome names;
+- no further task split, dependency, priority, estimate, ownership, acceptance,
+  rationale, or architecture change was needed.
+
+Revisions:
+
+- normalized J02 and J12 to the same exact-object, selected-path verification,
+  and no-substitution rule used by the other extraction-sensitive tasks;
+- synchronized all five drifted live titles to their canonical plan headings;
+- resynchronized the Beads export without adding a planning, audit, conversion,
+  source-fetch, or self-certification issue.
+
+Validation:
+
+- the final 32-task comparison reports no plan/live title, acceptance,
+  dependency, or `Unblocks` mismatch, no missing rationale, and no numbered-plan
+  dependency;
+- `br dep cycles --json` reports zero cycles and filtered readiness remains J01A,
+  J02, and J03;
+- `bv --robot-triage --format toon` fell back to JSON because `tru` is not
+  installed, but successfully read all 40 repository issues and reported no
+  graph cycle;
+- `scripts/jig check fmt`, `scripts/jig check clippy`,
+  `scripts/jig check test`, and `scripts/jig check contract` pass; and
+- this was a solo planning re-execution. It did not engage an external reviewer,
+  perform J19D, independently verify cryptography, or make Jury suitable for
+  real secrets.
+
 ## 26. Completion criteria for this plan
 
 The witnessed-first plan is ready for implementation when:
 
-- all 30 active outcomes exist in Beads with the same dependency direction:
-  J01A, J01B, J02-J14, J16-J26, and J19A-J19D; J19-J23 are mandatory release
-  work and J15 is explicitly post-`0.x`;
-- `br ready --json` exposes only genuinely unblocked outcomes;
+- all 29 active outcomes exist in Beads with the same dependency direction:
+  J01A, J01B, J02-J14, J16-J26, and J19A-J19C; J19-J23 and J25 are mandatory
+  release work, while J15 and J19R/J19D/J19E are parentless deferred tasks
+  excluded from active readiness and estimates;
+- `br ready --epic jury-qv4 --type task --json` exposes only genuinely
+  unblocked implementation outcomes; feature parents are rollup containers and
+  are not claim candidates;
 - `bv --robot-plan` shows no cycles or orphan implementation leaves;
 - the exact source snapshot and digest remain preserved;
 - `docs/jig-cutover-plan.md` owns downstream integration;
 - repository checks pass;
 - no tracker issue exists solely to plan, review, or convert this document.
 
-Implementation completion requires J26 to satisfy both the J01A/J01B shared and
-direct gate and J19's independently reviewed witnessed-construction gate. The
-pre-alpha/no-real-secrets warning remains after completion: J19 review is scoped
-to its exact construction and does not certify the whole `0.x` product.
+Implementation completion requires J26 to satisfy the J01A/J01B shared and
+direct gate, J19's exact solo-verified witnessed-construction gate, J25's
+adversarial checks, and J26's exact candidate binding after fresh solo
+re-execution. The pre-alpha/no-real-secrets/externally-unreviewed warning remains
+after completion. J19R/J19D/J19E are optional future work and their absence must
+never be disguised as independent review by an agent, model, alternate
+implementation, test suite, or clean build.
