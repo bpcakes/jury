@@ -3,6 +3,12 @@
 //! Names use a small version-independent ASCII profile. External routing,
 //! filesystem locations, and source-control metadata belong to adapters and
 //! cannot be represented by these types.
+//!
+//! Serde representations in this module are semantic transport forms, not
+//! canonical signed preimages. The protocol layer owns the versioned binary
+//! preimages introduced by J05. Serialized item and field names belong only in
+//! encrypted descriptor or body plaintext; public state identifies objects by
+//! opaque identifiers.
 
 mod access;
 mod catalog;

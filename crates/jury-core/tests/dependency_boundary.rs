@@ -20,8 +20,17 @@ fn core_manifest_and_lock_have_no_jig_crate() -> Result<(), Box<dyn std::error::
 #[test]
 fn production_sources_embed_no_external_routing_literals() -> Result<(), Box<dyn std::error::Error>>
 {
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut pending = vec![source_root];
+    let crates_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or("jury-core manifest has no crates directory")?;
+    let mut pending = Vec::new();
+
+    for entry in fs::read_dir(crates_root)? {
+        let source_root = entry?.path().join("src");
+        if source_root.is_dir() {
+            pending.push(source_root);
+        }
+    }
 
     while let Some(path) = pending.pop() {
         for entry in fs::read_dir(path)? {
@@ -34,7 +43,8 @@ fn production_sources_embed_no_external_routing_literals() -> Result<(), Box<dyn
                 for forbidden in ["jig://", "JIG_", "refs/heads/", ".git/"] {
                     assert!(
                         !source.contains(forbidden),
-                        "production source contains external routing literal {forbidden:?}"
+                        "production source {} contains external routing literal {forbidden:?}",
+                        entry.path().display()
                     );
                 }
             }

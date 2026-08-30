@@ -54,7 +54,9 @@ impl From<ItemRole> for Role {
 /// A normalized vault-wide owner grant or item-scoped read/write grant.
 ///
 /// The enum shape makes invalid combinations such as an item-scoped owner or a
-/// vault-wide reader unrepresentable.
+/// vault-wide reader unrepresentable. This Serde form is a semantic transport
+/// representation; J05 defines the separate, versioned binary preimage used
+/// for signatures.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Grant {

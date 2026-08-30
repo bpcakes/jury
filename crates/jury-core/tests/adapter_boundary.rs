@@ -125,6 +125,13 @@ fn native_selectors_cannot_store_uri_or_path_syntax() {
         assert!(FieldSelector::parse(item, "EXAMPLE_FIELD").is_err());
     }
     assert!(FieldSelector::parse("ExampleItem", "EXAMPLE/FIELD").is_err());
+
+    assert!(
+        serde_json::from_str::<FieldSelector>(
+            r#"{"item":"ExampleItem","field":"EXAMPLE_FIELD","route":"ExampleRoute"}"#,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -141,6 +148,14 @@ fn storage_context_is_bounded_redacted_and_non_domain() -> Result<(), Box<dyn st
     );
     assert!(!format!("{context:?}").contains("ExampleVault"));
 
+    assert_eq!(
+        AbsoluteVaultHome::new(PathBuf::new()),
+        Err(StorageContextError::Empty)
+    );
+    assert_eq!(
+        AbsoluteVaultHome::new(std::env::temp_dir().join("Example\0Vault")),
+        Err(StorageContextError::Nul)
+    );
     assert_eq!(
         AbsoluteVaultHome::new(PathBuf::from("relative/ExampleVault")),
         Err(StorageContextError::NotAbsolute)

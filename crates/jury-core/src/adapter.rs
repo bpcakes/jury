@@ -45,7 +45,12 @@ impl fmt::Debug for StorageContext {
 pub struct AbsoluteVaultHome(PathBuf);
 
 impl AbsoluteVaultHome {
-    /// Validates an explicit home without resolving or publishing it.
+    /// Applies only syntactic bounds to an explicit home without resolving or
+    /// publishing it.
+    ///
+    /// This does not establish filesystem identity or safety across symlinks,
+    /// mount changes, or races. The J02 storage adapter must enforce those
+    /// properties while opening the location.
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, StorageContextError> {
         let path = path.into();
         let encoded = path.as_os_str().as_encoded_bytes();
@@ -67,7 +72,7 @@ impl AbsoluteVaultHome {
         }
         if path
             .components()
-            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+            .any(|component| matches!(component, Component::ParentDir))
         {
             return Err(StorageContextError::Traversal);
         }

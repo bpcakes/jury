@@ -83,7 +83,15 @@ macro_rules! canonical_name {
             /// Parses an already-canonical name without trimming, folding, or
             /// normalization.
             pub fn parse(value: impl Into<String>) -> Result<Self, NameError> {
-                let value = value.into();
+                Self::parse_owned(value.into())
+            }
+
+            fn parse_borrowed(value: &str) -> Result<Self, NameError> {
+                validate_name(value, $maximum)?;
+                Ok(Self(value.to_owned()))
+            }
+
+            fn parse_owned(value: String) -> Result<Self, NameError> {
                 validate_name(&value, $maximum)?;
                 Ok(Self(value))
             }
@@ -97,7 +105,7 @@ macro_rules! canonical_name {
             type Err = NameError;
 
             fn from_str(value: &str) -> Result<Self, Self::Err> {
-                Self::parse(value)
+                Self::parse_borrowed(value)
             }
         }
 
@@ -105,7 +113,7 @@ macro_rules! canonical_name {
             type Error = NameError;
 
             fn try_from(value: String) -> Result<Self, Self::Error> {
-                Self::parse(value)
+                Self::parse_owned(value)
             }
         }
 
@@ -113,7 +121,7 @@ macro_rules! canonical_name {
             type Error = NameError;
 
             fn try_from(value: &str) -> Result<Self, Self::Error> {
-                Self::parse(value)
+                Self::parse_borrowed(value)
             }
         }
 
@@ -137,8 +145,35 @@ macro_rules! canonical_name {
             where
                 D: Deserializer<'de>,
             {
-                let value = String::deserialize(deserializer)?;
-                Self::parse(value).map_err(de::Error::custom)
+                struct NameVisitor;
+
+                impl<'de> de::Visitor<'de> for NameVisitor {
+                    type Value = $name;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(
+                            formatter,
+                            "a canonical ASCII name containing at most {} bytes",
+                            $maximum
+                        )
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+                    where
+                        E: de::Error,
+                    {
+                        $name::parse_borrowed(value).map_err(E::custom)
+                    }
+
+                    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+                    where
+                        E: de::Error,
+                    {
+                        $name::parse_owned(value).map_err(E::custom)
+                    }
+                }
+
+                deserializer.deserialize_string(NameVisitor)
             }
         }
 
@@ -169,6 +204,10 @@ macro_rules! canonical_name {
         pub struct $confirmed($name);
 
         impl $confirmed {
+            #[cfg_attr(not(test), expect(
+                dead_code,
+                reason = "J04 decryptors are the first production callers of this crate-private seam"
+            ))]
             pub(crate) fn from_accessible_name(name: $name) -> Self {
                 Self(name)
             }
@@ -186,10 +225,7 @@ macro_rules! canonical_name {
 
         impl fmt::Debug for $confirmed {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_tuple(stringify!($confirmed))
-                    .field(&format_args!("{self}"))
-                    .finish()
+                formatter.write_str($redacted)
             }
         }
     };

@@ -56,6 +56,19 @@ impl std::error::Error for CatalogError {}
 
 /// One decrypted item descriptor known to be accessible to the active
 /// principal. Its name is safe to display to that caller.
+///
+/// External callers cannot manufacture the confirmed projection:
+///
+/// ```compile_fail
+/// use jury_core::domain::{AccessibleCatalogEntry, ItemId, ItemName, Role};
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let item_id = ItemId::from_bytes([1; 32])?;
+/// let name = ItemName::parse("ExampleItem")?;
+/// let _entry = AccessibleCatalogEntry::from_decrypted(item_id, name, Role::Reader);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Eq, PartialEq)]
 pub struct AccessibleCatalogEntry {
     item_id: ItemId,
@@ -66,7 +79,14 @@ pub struct AccessibleCatalogEntry {
 impl AccessibleCatalogEntry {
     /// Creates an entry from an already decrypted accessible descriptor.
     #[must_use]
-    pub fn from_decrypted(item_id: ItemId, name: ItemName, role: Role) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "J04 decryptors are the first production callers of this crate-private seam"
+        )
+    )]
+    pub(crate) fn from_decrypted(item_id: ItemId, name: ItemName, role: Role) -> Self {
         Self {
             item_id,
             name: ConfirmedItemName::from_accessible_name(name),
@@ -158,7 +178,14 @@ pub struct AccessibleField {
 impl AccessibleField {
     /// Creates a display projection from an already decrypted accessible body.
     #[must_use]
-    pub fn from_decrypted(name: FieldName) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "J04 decryptors are the first production callers of this crate-private seam"
+        )
+    )]
+    pub(crate) fn from_decrypted(name: FieldName) -> Self {
         Self {
             name: ConfirmedFieldName::from_accessible_name(name),
         }
@@ -180,5 +207,112 @@ impl AccessibleField {
 impl fmt::Debug for AccessibleField {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("AccessibleField(<redacted-confirmed-name>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inaccessible_and_nonexistent_names_have_one_result() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let visible = AccessibleCatalogEntry::from_decrypted(
+            ItemId::from_bytes([0x41; 32])?,
+            ItemName::parse("ExampleVisible")?,
+            Role::Reader,
+        );
+        let catalog = AccessibleCatalog::try_new(vec![visible])?;
+
+        let inaccessible = catalog.resolve(&ItemSelector::parse("ExampleHidden")?);
+        let nonexistent = catalog.resolve(&ItemSelector::parse("ExampleMissing")?);
+        assert_eq!(inaccessible, Err(ItemUnavailable));
+        assert_eq!(nonexistent, Err(ItemUnavailable));
+        assert_eq!(inaccessible.map(|_| ()), nonexistent.map(|_| ()));
+        assert_eq!(ItemUnavailable.to_string(), "requested item is unavailable");
+
+        let found = catalog.resolve(&ItemSelector::parse("ExampleVisible")?)?;
+        assert_eq!(found.item_id(), ItemId::from_bytes([0x41; 32])?);
+        assert_eq!(found.name().to_string(), "ExampleVisible");
+        assert_eq!(found.role(), Role::Reader);
+        assert!(!format!("{found:?}").contains("ExampleVisible"));
+        Ok(())
+    }
+
+    #[test]
+    fn accessible_catalog_rejects_duplicate_ids_and_names() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let item_id = ItemId::from_bytes([0x51; 32])?;
+        let first = AccessibleCatalogEntry::from_decrypted(
+            item_id,
+            ItemName::parse("ExampleItem")?,
+            Role::Reader,
+        );
+        let duplicate_id = AccessibleCatalogEntry::from_decrypted(
+            item_id,
+            ItemName::parse("ExampleOther")?,
+            Role::Writer,
+        );
+        assert_eq!(
+            AccessibleCatalog::try_new(vec![first.clone(), duplicate_id]),
+            Err(CatalogError::DuplicateItemId)
+        );
+
+        let duplicate_name = AccessibleCatalogEntry::from_decrypted(
+            ItemId::from_bytes([0x52; 32])?,
+            ItemName::parse("ExampleItem")?,
+            Role::Writer,
+        );
+        assert_eq!(
+            AccessibleCatalog::try_new(vec![first, duplicate_name]),
+            Err(CatalogError::DuplicateItemName)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn accessible_catalog_enforces_its_entry_bound() -> Result<(), Box<dyn std::error::Error>> {
+        let entry = AccessibleCatalogEntry::from_decrypted(
+            ItemId::from_bytes([0x53; 32])?,
+            ItemName::parse("ExampleItem")?,
+            Role::Reader,
+        );
+        let actual = MAX_ACCESSIBLE_CATALOG_ITEMS + 1;
+
+        assert_eq!(
+            AccessibleCatalog::try_new(vec![entry; actual]),
+            Err(CatalogError::TooManyEntries {
+                maximum: MAX_ACCESSIBLE_CATALOG_ITEMS,
+                actual,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn field_display_requires_a_decrypted_accessible_projection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let field = AccessibleField::from_decrypted(FieldName::parse("EXAMPLE_FIELD")?);
+        assert_eq!(field.name().to_string(), "EXAMPLE_FIELD");
+        assert!(field.matches(&FieldNameInput::parse("EXAMPLE_FIELD")?));
+        assert!(!field.matches(&FieldNameInput::parse("EXAMPLE_OTHER")?));
+        assert!(!format!("{field:?}").contains("EXAMPLE_FIELD"));
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_name_debug_is_redacted() -> Result<(), Box<dyn std::error::Error>> {
+        let entry = AccessibleCatalogEntry::from_decrypted(
+            ItemId::from_bytes([0x54; 32])?,
+            ItemName::parse("ExampleSensitiveItem")?,
+            Role::Reader,
+        );
+        let field = AccessibleField::from_decrypted(FieldName::parse("EXAMPLE_SENSITIVE_FIELD")?);
+
+        assert_eq!(format!("{:?}", entry.name()), "<redacted-item-name>");
+        assert_eq!(format!("{:?}", field.name()), "<redacted-field-name>");
+        assert!(!format!("{:?}", entry.name()).contains("ExampleSensitiveItem"));
+        assert!(!format!("{:?}", field.name()).contains("EXAMPLE_SENSITIVE_FIELD"));
+        Ok(())
     }
 }

@@ -89,18 +89,32 @@ fn canonical_ascii_name() -> impl Strategy<Value = String> {
         Just(b'_'),
     ];
 
-    (
-        endpoint.clone(),
-        prop::collection::vec(middle, 0..=62),
-        endpoint,
-    )
-        .prop_map(|(first, middle, last)| {
-            let mut value = String::with_capacity(middle.len() + 2);
-            value.push(char::from(first));
-            value.extend(middle.into_iter().map(char::from));
-            value.push(char::from(last));
-            value
-        })
+    prop_oneof![
+        endpoint
+            .clone()
+            .prop_map(|value| char::from(value).to_string()),
+        (
+            endpoint.clone(),
+            prop::collection::vec(middle, 0..=62),
+            endpoint,
+        )
+            .prop_map(|(first, middle, last)| {
+                let mut value = String::with_capacity(middle.len() + 2);
+                value.push(char::from(first));
+                value.extend(middle.into_iter().map(char::from));
+                value.push(char::from(last));
+                value
+            }),
+    ]
+}
+
+#[test]
+fn serde_rejects_names_over_the_domain_bound() {
+    let oversized = format!("\"{}\"", "A".repeat(MAX_ITEM_NAME_BYTES + 1));
+    assert!(serde_json::from_str::<ItemName>(&oversized).is_err());
+
+    let escaped = format!("\"{}\"", "\\u0041".repeat(MAX_FIELD_NAME_BYTES + 1));
+    assert!(serde_json::from_str::<FieldName>(&escaped).is_err());
 }
 
 proptest! {

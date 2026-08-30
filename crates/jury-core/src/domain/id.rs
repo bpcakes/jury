@@ -26,7 +26,7 @@ impl fmt::Display for IdentifierError {
             Self::WrongLength { expected, actual } => {
                 write!(
                     formatter,
-                    "identifier must be exactly {expected} bytes, got {actual}"
+                    "identifier must be exactly {expected} hexadecimal characters, got {actual}"
                 )
             }
             Self::NonCanonicalEncoding => {
@@ -177,8 +177,27 @@ macro_rules! opaque_identifier {
             where
                 D: Deserializer<'de>,
             {
-                let encoded = String::deserialize(deserializer)?;
-                encoded.parse().map_err(de::Error::custom)
+                struct IdentifierVisitor;
+
+                impl<'de> de::Visitor<'de> for IdentifierVisitor {
+                    type Value = $name;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        write!(
+                            formatter,
+                            "exactly {IDENTIFIER_HEX_LENGTH} lowercase hexadecimal characters"
+                        )
+                    }
+
+                    fn visit_str<E>(self, encoded: &str) -> Result<Self::Value, E>
+                    where
+                        E: de::Error,
+                    {
+                        encoded.parse().map_err(E::custom)
+                    }
+                }
+
+                deserializer.deserialize_str(IdentifierVisitor)
             }
         }
     };

@@ -34,6 +34,14 @@ fn identifiers_reject_sentinels_and_noncanonical_text() {
         })
     );
     assert_eq!(
+        IdentifierError::WrongLength {
+            expected: IDENTIFIER_HEX_LENGTH,
+            actual: 2,
+        }
+        .to_string(),
+        "identifier must be exactly 64 hexadecimal characters, got 2"
+    );
+    assert_eq!(
         VaultId::from_str(&format!("{}0g", "01".repeat(31))),
         Err(IdentifierError::NonCanonicalEncoding)
     );
