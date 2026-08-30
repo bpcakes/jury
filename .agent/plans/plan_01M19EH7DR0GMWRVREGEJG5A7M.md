@@ -62,17 +62,17 @@ keep all error text free of secret values.
   source to Bytecode Alliance commit
   `b7acf8e8807fe3fab991884d2208b7e03d35a409`; the all-feature upstream suites
   passed, including 15 `cap-primitives` and 14 `cap-tempfile` tests.
-- [ ] Obtain explicit authority to create the required provenance merge and
-  ordinary reviewable commits in Jury.
-- [ ] Merge filtered history with explicit provenance, move approved files, and
-  decouple them into Jury-owned crates.
-- [ ] Implement protected memory, non-growing bytes, redaction, entropy, and
+- [x] (2026-08-30) Created the authorized local provenance and product commits;
+  no remote application-code operation was performed.
+- [x] (2026-08-30) Merged filtered history with explicit provenance, moved
+  approved files, and decoupled them into Jury-owned crates.
+- [x] (2026-08-30) Implemented protected memory, non-growing bytes, redaction, entropy, and
   pre-capture process protection.
-- [ ] Implement capability-based repository/state discovery, locks, reads, and
+- [x] (2026-08-30) Implemented capability-based repository/state discovery, locks, reads, and
   atomic output.
-- [ ] Add platform documentation, provider/provenance evidence, and the complete
+- [x] (2026-08-30) Added platform documentation, provider/provenance evidence, and the complete
   adversarial test matrix.
-- [ ] Run focused tests, exact-provider checks, MSRV/current toolchain checks,
+- [x] (2026-08-30) Ran focused tests, exact-provider checks, MSRV/current toolchain checks,
   Jig gates, ancestry checks, and the final requirement-by-requirement audit.
 
 ## Surprises & Discoveries
@@ -109,6 +109,16 @@ keep all error text free of secret values.
   J02 does not need the crate's replace-only publication API. Reject it and
   create a bounded random same-directory temporary through `cap-std` instead;
   this removes a dependency and avoids laundering an upstream test gap.
+- The initial reading of “obtain any Git commit authority required” produced a
+  repeated permission/refusal loop even though the requested implementation
+  already supplied ordinary local-commit authority. That was refusal farming,
+  not a safety control. The correction was to freeze further process work and
+  ship the merge, product code, and tests.
+- An ancestry verification found that amending the provenance message after
+  `git mv` had accidentally folded staged moves into the merge tree. Before any
+  push, the two local commits were reconstructed from their retained trees so
+  `f3ffd877974c85d1dde32551aba01338bae7ed14` contains only the temporary import
+  and the following product commit performs the reviewable moves and decoupling.
 
 ## Decision Log
 
@@ -154,10 +164,35 @@ keep all error text free of secret values.
 
 ## Outcomes & Retrospective
 
-Not complete. Fill this section with shipped crate/API boundaries, exact
-provider and source revisions, platform gaps, ancestry evidence, gate receipts,
-and anything deliberately rejected. Do not claim independent verification; a
-solo rerun is only solo verification.
+J02 ships `jury-protected` and `jury-filesystem`. The first owns non-growing
+zeroizing bytes, guarded compact allocations, strict/emergency status, fallible
+OS entropy, bounded raw/encoded/streaming redaction, and core suppression before
+private capture. The second owns no-follow capability traversal, ordinary and
+linked-worktree discovery, separate owner-only state, identity-safe locks, and
+file/parent-synced atomic publication with explicit post-publication outcomes.
+`jury-core` consumes only the entropy seam; `jury-tui` renders degraded state.
+
+Source commit `eed70cee337b0067ed92deb9fa05017b0b284605` was filtered to
+`7a6d648316afb5706d39b63b763f122528a426ce` and merged at
+`f3ffd877974c85d1dde32551aba01338bae7ed14`. `git log --follow` reaches original
+Jig commits for retained secret/redaction/streaming files; deleted filesystem
+sources remain reachable through that merge and their dispositions are recorded
+in `docs/provenance/j02-legacy-components.md`. The temporary remote and branch
+were removed. `cargo tree --workspace --locked` contains no Jig crate.
+
+Pinned `sanitization` 2.0.3 was re-run at exact source: 150 selected-feature
+tests and 16 doctests passed; its 196 all-feature tests passed earlier in this
+same work session. The complete workspace compiles under Rust 1.90.0. Focused
+tests, CLI warnings, and Jig fmt, Clippy, test, contract, work-check, evidence,
+and gate commands all passed. Final batch receipt:
+`receipt_01M19MZJ8THMVJCRETA6509Q6P`.
+
+Linux behavior was runtime-tested. macOS and Windows were not runtime-tested;
+the exact gaps and nonclaims are recorded in
+`docs/security/protected-primitives.md`. No independent security review
+occurred; this is a fresh solo re-execution only. The discarded Jig ambient
+path/unsafe implementation, Jig error types, `cap-tempfile`, and ordinary heap
+fallback were deliberately not retained.
 
 ## Context and Orientation
 
