@@ -64,7 +64,6 @@ impl Default for NativeIdGenerator<OsRandom> {
 }
 
 impl<R: RandomSource> NativeIdGenerator<R> {
-    #[cfg(test)]
     pub(crate) fn from_source(source: R) -> Self {
         Self { source }
     }

@@ -5,13 +5,16 @@
 #![forbid(unsafe_code)]
 
 mod capability;
+mod identity_selection;
 mod lock;
+mod private_input;
 mod private_output;
 mod repository;
 mod state_root;
 
 use std::fmt;
 
+pub use identity_selection::{IdentityName, IdentitySelectionError, IdentitySelector};
 pub use lock::{ExclusiveStateLock, LockError};
 pub use private_output::{
     PreparedPrivateFile, PrivateFilePrecondition, PublicationOutcome, PublicationPolicy,
@@ -24,6 +27,7 @@ pub enum FilesystemOperation {
     Open,
     DiscoverRepository,
     OpenStateRoot,
+    Read,
     Preview,
     Prepare,
     Publish,

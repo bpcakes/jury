@@ -12,15 +12,18 @@ mod validate;
 
 pub use bytes::{
     BoundedBytes, ByteStringError, DescriptorCiphertext272, Digest32, DirectCiphertext48,
-    Encapsulation1120, FieldId, FixedBytes, ItemCiphertext, ItemId, MigrationId, Nonce12,
-    PrincipalId, RecipientPublicKey1216, RevisionSealId, RolloverId, ShareCiphertext49,
-    Signature64, SlotId, VaultId, VerificationPublicKey32, WitnessPolicyId,
+    Encapsulation1120, FieldId, FixedBytes, IdentityPayloadCiphertext149, ItemCiphertext, ItemId,
+    MigrationId, Nonce12, PrincipalId, RecipientPublicKey1216, ResponseId, RevisionSealId,
+    RolloverId, RootWrapCiphertext48, Salt16, ShareCiphertext49, Signature64, SlotId, VaultId,
+    VerificationPublicKey32, WitnessPolicyId,
 };
 pub use plaintext::{
     ITEM_DESCRIPTOR_PLAINTEXT_BYTES, ItemDescriptorV1, ItemFieldKind, ItemFieldV1, ItemFieldValue,
     ItemStateV1, MAX_FIELD_VALUE_BYTES, MAX_ITEM_FIELDS, MIN_CONCEALED_VALUE_BYTES, PlaintextError,
 };
-pub use preimage::{CanonicalError, item_body_aad, item_descriptor_aad};
+pub use preimage::{
+    CanonicalError, item_body_aad, item_descriptor_aad, recipient_public_key_fingerprint,
+};
 pub use types::{
     AccessRole, ContentRole, DescriptorMetadataV1, DirectSlotV1, EmptyGenesisEntryV1,
     ItemAccessMode, ItemEnvelopeV1, ItemKind, PolicyGenesisV1, PolicyJournalV1, PolicyOperationV1,

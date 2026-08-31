@@ -19,6 +19,12 @@ pub trait RandomSource {
     fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError>;
 }
 
+impl<T: RandomSource + ?Sized> RandomSource for &mut T {
+    fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        (**self).fill(destination)
+    }
+}
+
 /// Operating-system CSPRNG with no fallback source.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsRandom;

@@ -9,7 +9,7 @@ pub fn help_text(version: &str) -> String {
         "{name} {version}\n{tagline}\n\n\
          WARNING: {maturity}.\n\n\
          Usage: jury [--help | --version]\n\n\
-         The vault, protocol, witness service, and product commands are not implemented.\n",
+         The product command surface is not implemented.\n",
         name = jury_core::PRODUCT_NAME,
         tagline = jury_core::PRODUCT_TAGLINE,
         maturity = jury_core::MATURITY,

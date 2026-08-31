@@ -6,8 +6,9 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
 use jury_filesystem::{
-    ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, PreparedPrivateFile,
-    PublicationOutcome, PublicationPolicy, RepositoryLocation,
+    ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
+    IdentitySelector, PreparedPrivateFile, PublicationOutcome, PublicationPolicy,
+    RepositoryLocation,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -176,6 +177,178 @@ fn private_publication_is_owner_only_atomic_and_policy_bound() -> Result<(), Box
     )?
     .publish()?;
     assert_eq!(fs::read(output)?, b"ExampleSecret-two");
+    Ok(())
+}
+
+#[test]
+fn identity_selection_is_single_explicit_and_portable() -> Result<(), Box<dyn Error>> {
+    let default = IdentitySelector::select(None, None)?;
+    assert_eq!(
+        format!("{default:?}"),
+        "IdentitySelector::Named(<redacted>)"
+    );
+    assert!(IdentitySelector::select(Some("Example-Identity_1"), None).is_ok());
+
+    for invalid in [
+        "",
+        ".hidden",
+        "trailing-",
+        "../escape",
+        "nested/name",
+        "not portable",
+        "Příliš",
+    ] {
+        assert_eq!(
+            IdentitySelector::select(Some(invalid), None),
+            Err(IdentitySelectionError::InvalidName)
+        );
+    }
+    assert_eq!(
+        IdentitySelector::select(Some(&"a".repeat(65)), None),
+        Err(IdentitySelectionError::InvalidName)
+    );
+    assert_eq!(
+        IdentitySelector::select(
+            Some("ExampleIdentity"),
+            Some(Path::new("/tmp/Example.identity.json").to_path_buf()),
+        ),
+        Err(IdentitySelectionError::Ambiguous)
+    );
+    assert_eq!(
+        IdentitySelector::select(
+            None,
+            Some(Path::new("relative/Example.identity.json").to_path_buf()),
+        ),
+        Err(IdentitySelectionError::InvalidExplicitPath)
+    );
+    assert_eq!(
+        IdentitySelector::select(
+            None,
+            Some(Path::new("/tmp/../Example.identity.json").to_path_buf()),
+        ),
+        Err(IdentitySelectionError::InvalidExplicitPath)
+    );
+    Ok(())
+}
+
+#[test]
+fn named_and_explicit_identity_files_use_hardened_bounded_io() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let named_root = HardenedStateRoot::open_or_create(&temp.path().join("named"), &[])?;
+    let named = IdentitySelector::select(Some("ExampleIdentity"), None)?;
+    let contents = protected(b"ExampleEncryptedIdentity")?;
+    assert_eq!(
+        named
+            .prepare(&named_root, &[], &contents, PublicationPolicy::CreateNew,)?
+            .publish()?,
+        PublicationOutcome::PublishedAndSynced
+    );
+    assert_eq!(
+        named.read(&named_root, &[], 64)?,
+        b"ExampleEncryptedIdentity"
+    );
+    let named_path = temp.path().join("named/ExampleIdentity.identity.json");
+    assert_eq!(
+        fs::metadata(named_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+
+    let explicit_parent = temp.path().join("explicit");
+    fs::create_dir(&explicit_parent)?;
+    fs::set_permissions(&explicit_parent, fs::Permissions::from_mode(0o700))?;
+    let explicit_path = explicit_parent.join("Chosen.identity.json");
+    let explicit = IdentitySelector::select(None, Some(explicit_path.clone()))?;
+    explicit
+        .prepare(&named_root, &[], &contents, PublicationPolicy::CreateNew)?
+        .publish()?;
+    assert_eq!(
+        explicit.read(&named_root, &[], 64)?,
+        contents.expose(|bytes| bytes.to_vec())?
+    );
+    assert_eq!(
+        fs::metadata(explicit_path)?.permissions().mode() & 0o777,
+        0o600
+    );
+    Ok(())
+}
+
+#[test]
+fn identity_reads_reject_links_modes_sizes_and_worktree_paths() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let named_path = temp.path().join("named");
+    let named_root = HardenedStateRoot::open_or_create(&named_path, &[])?;
+
+    let outside = temp.path().join("outside");
+    fs::write(&outside, b"ExampleEncryptedIdentity")?;
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600))?;
+    symlink(&outside, named_path.join("Link.identity.json"))?;
+    let link = IdentitySelector::select(Some("Link"), None)?;
+    assert_eq!(
+        link.read(&named_root, &[], 64)
+            .err()
+            .ok_or("symlink should fail")?
+            .kind(),
+        FilesystemErrorKind::HardLinkOrSize
+    );
+
+    let linked = named_path.join("Linked.identity.json");
+    fs::hard_link(&outside, &linked)?;
+    let hard_link = IdentitySelector::select(Some("Linked"), None)?;
+    assert_eq!(
+        hard_link
+            .read(&named_root, &[], 64)
+            .err()
+            .ok_or("hard link should fail")?
+            .kind(),
+        FilesystemErrorKind::HardLinkOrSize
+    );
+
+    let open = named_path.join("Open.identity.json");
+    fs::write(&open, b"ExampleEncryptedIdentity")?;
+    fs::set_permissions(&open, fs::Permissions::from_mode(0o644))?;
+    let permissive = IdentitySelector::select(Some("Open"), None)?;
+    assert_eq!(
+        permissive
+            .read(&named_root, &[], 64)
+            .err()
+            .ok_or("permissive mode should fail")?
+            .kind(),
+        FilesystemErrorKind::Permission
+    );
+
+    let large = named_path.join("Large.identity.json");
+    fs::write(&large, [0xa5; 65])?;
+    fs::set_permissions(&large, fs::Permissions::from_mode(0o600))?;
+    let oversized = IdentitySelector::select(Some("Large"), None)?;
+    assert_eq!(
+        oversized
+            .read(&named_root, &[], 64)
+            .err()
+            .ok_or("oversized file should fail")?
+            .kind(),
+        FilesystemErrorKind::HardLinkOrSize
+    );
+
+    let repository = repository(&temp.path().join("worktree"))?;
+    let private = temp.path().join("worktree/private");
+    fs::create_dir(&private)?;
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+    let in_worktree =
+        IdentitySelector::select(None, Some(private.join("ExampleIdentity.identity.json")))?;
+    let contents = protected(b"ExampleEncryptedIdentity")?;
+    assert_eq!(
+        in_worktree
+            .prepare(
+                &named_root,
+                &[&repository],
+                &contents,
+                PublicationPolicy::CreateNew,
+            )
+            .err()
+            .ok_or("worktree identity should fail")?
+            .kind(),
+        FilesystemErrorKind::Containment
+    );
     Ok(())
 }
 

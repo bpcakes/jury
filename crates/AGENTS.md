@@ -2,8 +2,8 @@
 
 ## Purpose
 
-The `crates` tree owns Jury's Rust implementation. The current code is only a
-compiling boundary scaffold; it is not a cryptographic implementation.
+The `crates` tree owns Jury's Rust implementation. It is a pre-alpha
+implementation and must not be used for real secrets.
 
 ## Key entrypoints
 
@@ -41,4 +41,3 @@ compiling boundary scaffold; it is not a cryptographic implementation.
 - `scripts/jig check test`
 - `cargo run -p jury -- --help`
 - `cargo run -p jury-witness --bin juryd -- --help`
-

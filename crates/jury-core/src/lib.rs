@@ -1,12 +1,14 @@
 //! Domain boundary for Jury.
 //!
-//! This crate intentionally contains no cryptographic implementation yet.
+//! Cryptographic providers stay private behind typed Jury operations.
 
 #![forbid(unsafe_code)]
 
 pub mod adapter;
+mod crypto;
 pub mod domain;
 pub mod entropy;
+pub mod identity;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";

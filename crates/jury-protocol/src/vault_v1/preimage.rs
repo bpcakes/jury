@@ -2,7 +2,7 @@ use std::fmt;
 
 use sha2::{Digest as _, Sha256};
 
-use super::bytes::{Digest32, FixedBytes};
+use super::bytes::{Digest32, FixedBytes, RecipientPublicKey1216};
 use super::types::{
     DescriptorMetadataV1, DirectSlotV1, PolicyGenesisV1, PolicyOperationV1, PrincipalDescriptorV1,
     SignedItemRevisionV1, SignedPolicyRevisionV1, SignedRolloverV1, SignedSuiteMigrationV1,
@@ -105,6 +105,14 @@ fn optional_bytes(output: &mut Vec<u8>, value: Option<&[u8]>) -> Result<(), Cano
 
 fn sha256(value: &[u8]) -> Digest32 {
     FixedBytes::new(Sha256::digest(value).into())
+}
+
+/// Fingerprints one exact suite-1 recipient public bundle.
+#[must_use]
+pub fn recipient_public_key_fingerprint(key: &RecipientPublicKey1216) -> Digest32 {
+    let mut output = jce("jury-v1/recipient-public-bundle/fingerprint");
+    output.extend_from_slice(key.as_bytes());
+    sha256(&output)
 }
 
 impl PrincipalDescriptorV1 {

@@ -282,6 +282,7 @@ identifier!(SlotId);
 identifier!(WitnessPolicyId);
 identifier!(MigrationId);
 identifier!(RolloverId);
+identifier!(ResponseId);
 
 pub type Digest32 = FixedBytes<32>;
 pub type Signature64 = FixedBytes<64>;
@@ -290,6 +291,9 @@ pub type RecipientPublicKey1216 = FixedBytes<1216>;
 pub type VerificationPublicKey32 = FixedBytes<32>;
 pub type Encapsulation1120 = FixedBytes<1120>;
 pub type DirectCiphertext48 = FixedBytes<48>;
+pub type RootWrapCiphertext48 = FixedBytes<48>;
 pub type ShareCiphertext49 = FixedBytes<49>;
 pub type DescriptorCiphertext272 = FixedBytes<272>;
+pub type IdentityPayloadCiphertext149 = FixedBytes<149>;
+pub type Salt16 = FixedBytes<16>;
 pub type ItemCiphertext = BoundedBytes<8_388_624>;
