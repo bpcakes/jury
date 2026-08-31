@@ -11,6 +11,7 @@ pub mod domain;
 pub mod entropy;
 pub mod identity;
 pub mod item;
+pub mod local_state;
 pub mod policy;
 
 /// Human-readable product name.

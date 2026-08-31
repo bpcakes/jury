@@ -19,6 +19,7 @@ use jury_protocol::{
 use sha2::{Digest as _, Sha256};
 
 use super::*;
+use crate::local_state::PrincipalLocalState;
 
 fn protected(bytes: &[u8]) -> Result<ProtectedMemory, Box<dyn Error>> {
     Ok(ProtectedMemory::initialize(
@@ -236,6 +237,12 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
         vault_statement,
         &vault_identity.sign_validated_statement(vault_statement)?,
     )?;
+    let vault_local = PrincipalLocalState::for_vault_principal(
+        vault_identity,
+        VaultId::from_bytes([0x71; 32])?,
+        Digest32::new([0x72; 32]),
+    )?;
+    assert!(format!("{vault_local:?}").contains("[REDACTED]"));
     let mut tampered_slot = slot;
     let mut tampered_ciphertext = *tampered_slot.ciphertext.as_bytes();
     tampered_ciphertext[0] ^= 1;
@@ -338,6 +345,12 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
                     preimage,
                     &identity.sign_validated_approval(preimage)?,
                 )?;
+                let local = PrincipalLocalState::for_approver(
+                    &identity,
+                    VaultId::from_bytes([0x71; 32])?,
+                    Digest32::new([0x72; 32]),
+                )?;
+                assert!(format!("{local:?}").contains("[REDACTED]"));
             }
             (PrincipalKind::Witness, UnlockedIdentity::Witness(identity)) => {
                 let preimage = b"jury-witness-v1/decision/signature\0\0\x01";
@@ -346,6 +359,12 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
                     preimage,
                     &identity.sign_validated_decision(preimage)?,
                 )?;
+                let local = PrincipalLocalState::for_witness(
+                    &identity,
+                    VaultId::from_bytes([0x71; 32])?,
+                    Digest32::new([0x72; 32]),
+                )?;
+                assert!(format!("{local:?}").contains("[REDACTED]"));
                 let (capsule, expected_share) = witness_capsule(&created.descriptor)?;
                 let share = identity.open_contribution_share(&capsule)?;
                 assert!(

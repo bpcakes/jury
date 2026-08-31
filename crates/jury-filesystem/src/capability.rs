@@ -5,6 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use cap_fs_ext::{DirExt, MetadataExt};
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
+#[cfg(unix)]
+use cap_std::fs::{DirBuilder, DirBuilderExt};
 
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation};
 
@@ -57,6 +59,69 @@ pub(crate) fn open_absolute_dir(
                 dir = dir
                     .open_dir_nofollow(name)
                     .map_err(|error| map_open_error(error, operation))?;
+                let metadata = dir
+                    .dir_metadata()
+                    .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+                lineage.push(FileIdentity::from_metadata(&metadata));
+            }
+            Component::CurDir | Component::ParentDir => {
+                return Err(FilesystemError::new(
+                    operation,
+                    FilesystemErrorKind::Traversal,
+                ));
+            }
+        }
+    }
+    let metadata = dir
+        .dir_metadata()
+        .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+    Ok(HardenedDir {
+        identity: FileIdentity::from_metadata(&metadata),
+        dir,
+        absolute,
+        lineage,
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn open_or_create_absolute_dir(
+    path: &Path,
+    operation: FilesystemOperation,
+) -> Result<HardenedDir, FilesystemError> {
+    let absolute = normalized_absolute(path, operation)?;
+    let mut dir = Dir::open_ambient_dir("/", ambient_authority())
+        .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+    let root_metadata = dir
+        .dir_metadata()
+        .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+    let mut lineage = vec![FileIdentity::from_metadata(&root_metadata)];
+
+    for component in absolute.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::Normal(name) => {
+                reject_nul(name, operation)?;
+                match dir.open_dir_nofollow(name) {
+                    Ok(child) => dir = child,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        let mut builder = DirBuilder::new();
+                        builder.mode(0o700);
+                        match dir.create_dir_with(name, &builder) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                            Err(_) => {
+                                return Err(FilesystemError::new(
+                                    operation,
+                                    FilesystemErrorKind::Io,
+                                ));
+                            }
+                        }
+                        dir = dir
+                            .open_dir_nofollow(name)
+                            .map_err(|error| map_open_error(error, operation))?;
+                    }
+                    Err(error) => return Err(map_open_error(error, operation)),
+                }
                 let metadata = dir
                     .dir_metadata()
                     .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;

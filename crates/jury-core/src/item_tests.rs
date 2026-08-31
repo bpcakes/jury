@@ -7,6 +7,7 @@ use jury_protocol::{
 };
 
 use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};
+use crate::local_state::{CheckpointCandidate, PrincipalLocalState};
 use crate::policy::PolicyCreator;
 
 struct FillByte(u8);
@@ -193,6 +194,25 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
             &ItemArtifactInventory::default(),
         )
         .map_err(|error| format!("prepare create: {error:?}"))?;
+    let mut checkpoint_journal = created_policy.journal.clone();
+    checkpoint_journal
+        .revisions
+        .push(created_item.policy.revision.clone());
+    let checkpoint_candidate = CheckpointCandidate::from_validated(
+        &created_item.policy.state,
+        &checkpoint_journal,
+        std::slice::from_ref(&created_item.envelope),
+    )?;
+    let local_state = PrincipalLocalState::for_vault_principal(
+        &owner,
+        created_item.policy.state.vault_id(),
+        created_item.policy.state.genesis_fingerprint().clone(),
+    )?;
+    let local = local_state.initialize(&checkpoint_candidate, 3)?;
+    assert_eq!(
+        local.checkpoint().accepted_public_revision_hash(),
+        created_item.policy.state.terminal_revision_hash()
+    );
     let created_slots = match &created_item.policy.revision.operations[0] {
         PolicyOperationV1::ItemCreate { direct_slots, .. } => direct_slots,
         _ => return Err("item create operation differs".into()),

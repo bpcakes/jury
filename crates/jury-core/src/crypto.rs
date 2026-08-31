@@ -5,6 +5,7 @@ use argon2::{Algorithm, Argon2, Block, Params, Version};
 use chacha20::ChaCha20Rng;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac as _};
 use hpke::{
     Deserializable, Kem, OpModeR, OpModeS, Serializable, aead::ChaCha20Poly1305, kdf::HkdfSha256,
     kem::XWing, rand_core::SeedableRng, single_shot_open, single_shot_seal_with_rng,
@@ -19,7 +20,8 @@ use jury_protocol::{
         Encapsulation1120, Nonce12, RecipientPublicKey1216, Signature64, VerificationPublicKey32,
     },
 };
-use sha2::Sha256;
+use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
 use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,6 +194,33 @@ pub(crate) fn derive_hkdf_key(
         Ok::<usize, ()>(output.len())
     })
     .map_err(|_| CryptoError::MemoryProtection)
+}
+
+pub(crate) fn hmac_sha256(key: &ProtectedMemory, message: &[u8]) -> Result<[u8; 32], CryptoError> {
+    key.expose(|key_bytes| {
+        let mut mac =
+            Hmac::<Sha256>::new_from_slice(key_bytes).map_err(|_| CryptoError::ProviderFailure)?;
+        mac.update(message);
+        Ok(mac.finalize().into_bytes().into())
+    })
+    .map_err(|_| CryptoError::MemoryProtection)?
+}
+
+pub(crate) fn verify_hmac_sha256(
+    key: &ProtectedMemory,
+    message: &[u8],
+    expected: &[u8; 32],
+) -> Result<(), CryptoError> {
+    let actual = hmac_sha256(key, message)?;
+    if bool::from(actual.ct_eq(expected)) {
+        Ok(())
+    } else {
+        Err(CryptoError::AuthenticationFailed)
+    }
+}
+
+pub(crate) fn sha256(message: &[u8]) -> [u8; 32] {
+    Sha256::digest(message).into()
 }
 
 pub(crate) fn seal(

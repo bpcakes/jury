@@ -686,6 +686,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "hkdf",
+ "hmac",
  "hpke",
  "jury-protected",
  "jury-protocol",

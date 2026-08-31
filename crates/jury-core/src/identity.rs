@@ -264,6 +264,13 @@ impl fmt::Debug for IdentitySecrets {
     }
 }
 
+impl IdentitySecrets {
+    fn derive_local_state_key(&self, info: &[u8]) -> Result<ProtectedMemory, IdentityError> {
+        let seed = payload_component(&self.payload, LOCAL_SEED_RANGE)?;
+        crypto::derive_hkdf_key(&seed, info).map_err(map_crypto_error)
+    }
+}
+
 pub struct VaultPrincipalIdentity(IdentitySecrets);
 pub struct ApproverIdentity(IdentitySecrets);
 pub struct WitnessIdentity(IdentitySecrets);
@@ -454,6 +461,13 @@ macro_rules! role_identity {
             #[must_use]
             pub const fn principal_id(&self) -> WirePrincipalId {
                 self.0.header.principal_id
+            }
+
+            pub(crate) fn derive_local_state_key(
+                &self,
+                info: &[u8],
+            ) -> Result<ProtectedMemory, IdentityError> {
+                self.0.derive_local_state_key(info)
             }
         }
 

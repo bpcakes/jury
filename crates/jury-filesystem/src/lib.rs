@@ -6,6 +6,7 @@
 
 mod capability;
 mod identity_selection;
+mod local_state;
 mod lock;
 mod private_input;
 mod private_output;
@@ -15,6 +16,11 @@ mod state_root;
 use std::fmt;
 
 pub use identity_selection::{IdentityName, IdentitySelectionError, IdentitySelector};
+pub use local_state::{
+    LockedPrincipalState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES, MAX_RECEIPTS_BYTES,
+    PrincipalStateDirectory, PrincipalStateFile, StatePathError, resolve_linux_state_root,
+    resolve_state_root_from_environment,
+};
 pub use lock::{ExclusiveStateLock, LockError};
 pub use private_output::{
     PreparedPrivateFile, PrivateFilePrecondition, PublicationOutcome, PublicationPolicy,
