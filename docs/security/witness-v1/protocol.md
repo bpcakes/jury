@@ -558,10 +558,46 @@ witness-policy digest, and vault policy sequence.
 
 `WitnessShareCapsuleV1` is the context fields, context digest, share commitment,
 HPKE `enc fixed[1120]`, and `ciphertext fixed[49]`. Capsules sort by share index.
-The witnessed slot contains its fixed schema/construction/suite/context, all
-capsules, and SHA-256 of domain `jury-witness-v1/capsule-set/hash` plus the
-ordered complete capsules as `list<bytes>`. The owner-signed J01A witnessed-state
-digest authenticates these exact bytes.
+The witnessed slot is the following exact canonical composite:
+
+    slot_schema u8 = 1
+    slot_algorithm u8 = 2
+    suite u16 = 1
+    protocol u16 = 1
+    construction u16 = 1
+    vault_id id32
+    genesis_fingerprint digest32
+    item_id id32
+    key_epoch u64
+    item_access_mode u8
+    slot_id id32
+    content_role u8
+    revision u64
+    RevisionSealId id32
+    vault_policy_sequence u64
+    witness_policy_id id32
+    witness_policy_revision u64
+    witness_policy_digest digest32
+    threshold u8
+    member_count u8
+    capsules list<bytes> sorted by share_index
+    capsule_set_digest digest32
+
+The capsule-set digest is SHA-256 of domain
+`jury-witness-v1/capsule-set/hash` plus the ordered complete capsules as
+`list<bytes>`. Every repeated capsule context must equal the slot context, and
+the member count must equal the capsule count. The slot digest is SHA-256 of
+domain `jury-witness-v1/slot/hash` with the complete canonical slot composite
+as one `bytes` field.
+
+The J01A witnessed-state digest is SHA-256 of domain
+`jury-witness-v1/slot-set/hash` with the complete witnessed slots as one
+`list<bytes>`, sorted by content role, revision, raw `RevisionSealId`, then raw
+slot ID. The set contains at most one slot for each content role and current
+seal. It is absent exactly when no witnessed slot exists. This digest is the
+`optional<digest32>` carried by J01A `item_create` and `item_slots_replace`;
+the owner-signed policy therefore authenticates both descriptor and body slots
+without introducing a reusable contribution or epoch root.
 
 For an approved request the witness creates one
 `WitnessContributionEnvelopeV1`. Its HPKE Base `info` is domain

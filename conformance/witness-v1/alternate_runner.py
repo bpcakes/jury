@@ -21,6 +21,10 @@ def bytes_field(value: bytes) -> bytes:
     return len(value).to_bytes(4, "big") + value
 
 
+def list_bytes(values: list[bytes]) -> bytes:
+    return len(values).to_bytes(4, "big") + b"".join(bytes_field(value) for value in values)
+
+
 def jce(domain: str, *fields: bytes) -> bytes:
     return domain.encode("ascii") + b"\x00\x00\x01" + b"".join(fields)
 
@@ -135,6 +139,23 @@ def check_construction(corpus: dict) -> None:
         )
         if expected.hex() != capsule["share_commitment_hex"]:
             fail("share commitment mismatch")
+    capsule_bytes = [raw(capsule["capsule_hex"]) for capsule in construction["capsules"]]
+    capsule_set_digest = digest(
+        jce("jury-witness-v1/capsule-set/hash", list_bytes(capsule_bytes))
+    )
+    if capsule_set_digest.hex() != construction["capsule_set_digest_hex"]:
+        fail("capsule-set digest mismatch")
+    witnessed_slot = raw(construction["witnessed_slot_hex"])
+    witnessed_slot_digest = digest(
+        jce("jury-witness-v1/slot/hash", bytes_field(witnessed_slot))
+    )
+    if witnessed_slot_digest.hex() != construction["witnessed_slot_digest_hex"]:
+        fail("witnessed-slot digest mismatch")
+    witnessed_state_digest = digest(
+        jce("jury-witness-v1/slot-set/hash", list_bytes([witnessed_slot]))
+    )
+    if witnessed_state_digest.hex() != construction["witnessed_state_digest_hex"]:
+        fail("witnessed-state digest mismatch")
     for contribution in construction["contributions"]:
         expected = digest(
             jce(

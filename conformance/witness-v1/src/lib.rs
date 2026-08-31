@@ -1029,6 +1029,39 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
         "jury-witness-v1/capsule-set/hash",
         &[list_bytes(&capsules)?],
     );
+    let witnessed_slot = [
+        vec![1],
+        vec![2],
+        u16be(1),
+        u16be(1),
+        u16be(1),
+        vault_id.clone(),
+        genesis.clone(),
+        item_id.clone(),
+        u64be(3),
+        vec![2],
+        slot_id.clone(),
+        vec![2],
+        u64be(4),
+        seal_id.clone(),
+        u64be(7),
+        witness_policy_id.clone(),
+        u64be(1),
+        witness_policy_digest.clone(),
+        vec![2],
+        vec![3],
+        list_bytes(&capsules)?,
+        capsule_set_digest.to_vec(),
+    ]
+    .concat();
+    let witnessed_slot_digest = hash_preimage(
+        "jury-witness-v1/slot/hash",
+        &[bytes_field(&witnessed_slot)?],
+    );
+    let witnessed_state_digest = hash_preimage(
+        "jury-witness-v1/slot-set/hash",
+        &[list_bytes(std::slice::from_ref(&witnessed_slot))?],
+    );
 
     let mut contribution_envelopes = Vec::new();
     let mut contribution_json = Vec::new();
@@ -1163,6 +1196,9 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
             "prior_state_opens_later_revision": false
         },
         "capsule_set_digest_hex": hex_bytes(&capsule_set_digest),
+        "witnessed_slot_hex": hex_bytes(&witnessed_slot),
+        "witnessed_slot_digest_hex": hex_bytes(&witnessed_slot_digest),
+        "witnessed_state_digest_hex": hex_bytes(&witnessed_state_digest),
         "capsules": capsule_json,
         "contributions": contribution_json,
         "selected_share_indexes": [1, 2],
@@ -1912,6 +1948,18 @@ fn build_byte_mutations(vectors: &Map<String, Value>) -> AnyResult<Value> {
         "expected": "invalid-contribution"
     }));
     mutations.push(json!({
+        "name": "witnessed-slot-context-bit-0",
+        "source": "construction.witnessed_slot",
+        "mutation": "context bit 0 xor 1",
+        "expected": "wrong-scope"
+    }));
+    mutations.push(json!({
+        "name": "witnessed-slot-set-bit-0",
+        "source": "construction.witnessed_state_digest",
+        "mutation": "digest bit 0 xor 1",
+        "expected": "wrong-scope"
+    }));
+    mutations.push(json!({
         "name": "contribution-ciphertext-bit-0",
         "source": "construction.contributions[0]",
         "mutation": "ciphertext bit 0 xor 1",
@@ -1934,7 +1982,7 @@ pub fn build_corpus() -> AnyResult<Value> {
             "j01b_revision": "560897e90fa7a7dc840458285ec64eff53a0a284",
             "j19a_construction_sha256": "23ded2718d4b2bb305a6cd83da246b8cecdd03135b4a8529ecd3ced333b8feac",
             "j19a_threat_model_sha256": "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275",
-            "j19b_protocol_sha256": "b64bc048ffb94ef20316e0c6979429e4daf3cd72fcd49a266a06fc4f769634c7",
+            "j19b_protocol_sha256": "1e1c23218f668638f8fe6f24e1193f92783c57f2ee8f175a4a1142a8ea934319",
             "j19b_state_machines_sha256": "7cbf65276bb60fbb1a2b72f9d1f12612ccba402de09eee3fb70a320bfdc5ca6f"
         },
         "normalization": {
@@ -2232,6 +2280,37 @@ fn consume_construction(construction: &Value) -> AnyResult<()> {
         {
             return Err(format!("capsule {index}: mutation opened"));
         }
+    }
+    let capsule_bytes = capsules
+        .iter()
+        .map(|capsule| decode_field(capsule, "capsule_hex"))
+        .collect::<AnyResult<Vec<_>>>()?;
+    let expected_capsule_set = hash_preimage(
+        "jury-witness-v1/capsule-set/hash",
+        &[list_bytes(&capsule_bytes)?],
+    );
+    if expected_capsule_set.as_slice() != decode_field(construction, "capsule_set_digest_hex")?
+    {
+        return Err("capsule-set digest mismatch".to_owned());
+    }
+    let witnessed_slot = decode_field(construction, "witnessed_slot_hex")?;
+    let expected_slot_digest = hash_preimage(
+        "jury-witness-v1/slot/hash",
+        &[bytes_field(&witnessed_slot)?],
+    );
+    if expected_slot_digest.as_slice()
+        != decode_field(construction, "witnessed_slot_digest_hex")?
+    {
+        return Err("witnessed-slot digest mismatch".to_owned());
+    }
+    let expected_state_digest = hash_preimage(
+        "jury-witness-v1/slot-set/hash",
+        &[list_bytes(std::slice::from_ref(&witnessed_slot))?],
+    );
+    if expected_state_digest.as_slice()
+        != decode_field(construction, "witnessed_state_digest_hex")?
+    {
+        return Err("witnessed-state digest mismatch".to_owned());
     }
 
     let contributions = construction["contributions"]
