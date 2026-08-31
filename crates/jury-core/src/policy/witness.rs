@@ -4,6 +4,7 @@ use jury_protocol::vault_v1::{
     Digest32, FieldId, FixedBytes, ItemId, PrincipalId, RecipientPublicKey1216, Signature64,
     VaultId, VerificationPublicKey32, WitnessPolicyId, recipient_public_key_fingerprint,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::crypto;
@@ -29,7 +30,8 @@ pub enum ApprovalMode {
     Automatic,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum WitnessOperation {
     ReadStdout,
     WritePrivateFile,
@@ -461,6 +463,33 @@ pub struct WitnessAccessRule {
 }
 
 impl PolicyState {
+    /// Digests the exact active witness descriptor set bound to an item's
+    /// current witnessed policy.
+    pub fn intended_witness_set_digest(&self, item_id: &ItemId) -> Result<Digest32, PolicyError> {
+        let authority = self
+            .witness_authority(item_id)?
+            .ok_or_else(|| PolicyError::new(PolicyErrorKind::InvalidRole))?;
+        let policy = self
+            .witness_policies
+            .get(&authority.policy_digest)
+            .ok_or_else(|| PolicyError::new(PolicyErrorKind::MissingWitnessPolicy))?;
+        let entries = policy
+            .witness_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
+            .map(|descriptor| {
+                let mut entry = [0_u8; 97];
+                entry[..32].copy_from_slice(descriptor.witness_id.as_bytes());
+                entry[32] = descriptor.share_index;
+                entry[33..65].copy_from_slice(descriptor.signing_key_fingerprint.as_bytes());
+                entry[65..].copy_from_slice(descriptor.contribution_key_fingerprint.as_bytes());
+                entry
+            });
+        let mut preimage = jce("jury-witness-v1/intended-witness-set/hash");
+        list_fixed(&mut preimage, entries)?;
+        Ok(FixedBytes::new(Sha256::digest(preimage).into()))
+    }
+
     pub fn witness_access_rule(
         &self,
         item_id: &ItemId,

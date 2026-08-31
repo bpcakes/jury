@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use zeroize::Zeroize;
 
 /// Maximum canonical item-name length in bytes.
 pub const MAX_ITEM_NAME_BYTES: usize = 64;
@@ -98,6 +99,11 @@ macro_rules! canonical_name {
 
             pub(crate) fn as_str(&self) -> &str {
                 &self.0
+            }
+
+            #[allow(dead_code, reason = "only decrypted catalog name variants need wiping")]
+            pub(crate) fn clear_sensitive(&mut self) {
+                self.0.zeroize();
             }
         }
 
@@ -204,16 +210,21 @@ macro_rules! canonical_name {
         pub struct $confirmed($name);
 
         impl $confirmed {
-            #[cfg_attr(not(test), expect(
+            #[allow(
                 dead_code,
-                reason = "J04 decryptors are the first production callers of this crate-private seam"
-            ))]
+                reason = "field catalog construction lands with field projections"
+            )]
             pub(crate) fn from_accessible_name(name: $name) -> Self {
                 Self(name)
             }
 
             pub(crate) fn as_name(&self) -> &$name {
                 &self.0
+            }
+
+            #[allow(dead_code, reason = "only populated catalog variants need wiping")]
+            pub(crate) fn clear_sensitive(&mut self) {
+                self.0.clear_sensitive();
             }
         }
 

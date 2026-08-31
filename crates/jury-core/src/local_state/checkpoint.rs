@@ -69,6 +69,14 @@ impl CheckpointCandidate {
         if previous != *policy.terminal_revision_hash() {
             return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
         }
+        if let Some(terminal) = journal.revisions.last()
+            && policy
+                .normalized_state_hash()
+                .map_err(|_| LocalStateError::new(LocalStateErrorKind::InvalidFormat))?
+                != terminal.resulting_policy_state_hash
+        {
+            return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
+        }
 
         let mut seen_items = BTreeSet::new();
         for envelope in envelopes {

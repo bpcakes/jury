@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use super::bytes::{BoundedBytes, FieldId};
 
@@ -70,6 +71,11 @@ impl ItemDescriptorV1 {
         &self.name
     }
 
+    /// Overwrites the decrypted descriptor name before releasing its buffer.
+    pub fn clear_sensitive(&mut self) {
+        self.name.zeroize();
+    }
+
     #[must_use]
     pub fn encode(&self) -> [u8; ITEM_DESCRIPTOR_PLAINTEXT_BYTES] {
         let mut output = [0_u8; ITEM_DESCRIPTOR_PLAINTEXT_BYTES];
@@ -126,6 +132,15 @@ pub struct ItemStateV1 {
 }
 
 impl ItemStateV1 {
+    /// Overwrites decrypted names and values before releasing their buffers.
+    pub fn clear_sensitive(&mut self) {
+        for field in &mut self.fields {
+            field.name.zeroize();
+            field.value.clear_sensitive();
+        }
+        self.fields.clear();
+    }
+
     pub fn validate(&self) -> Result<(), PlaintextError> {
         if self.plaintext_schema != 1 {
             return Err(PlaintextError::UnknownSchema);

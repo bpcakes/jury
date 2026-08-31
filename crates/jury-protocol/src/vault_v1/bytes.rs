@@ -2,6 +2,7 @@ use std::fmt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use zeroize::Zeroize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ByteStringError {
@@ -132,6 +133,11 @@ impl<const MAX: usize> BoundedBytes<MAX> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Overwrites and releases sensitive plaintext held by this buffer.
+    pub fn clear_sensitive(&mut self) {
+        self.0.zeroize();
     }
 }
 

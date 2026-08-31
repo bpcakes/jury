@@ -79,13 +79,6 @@ pub struct AccessibleCatalogEntry {
 impl AccessibleCatalogEntry {
     /// Creates an entry from an already decrypted accessible descriptor.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "J04 decryptors are the first production callers of this crate-private seam"
-        )
-    )]
     pub(crate) fn from_decrypted(item_id: ItemId, name: ItemName, role: Role) -> Self {
         Self {
             item_id,
@@ -166,6 +159,14 @@ impl AccessibleCatalog {
     /// Returns only already-confirmed accessible entries.
     pub fn entries(&self) -> impl ExactSizeIterator<Item = &AccessibleCatalogEntry> {
         self.entries.iter()
+    }
+
+    /// Overwrites decrypted accessible names and empties the catalog.
+    pub(crate) fn clear_sensitive(&mut self) {
+        for entry in &mut self.entries {
+            entry.name.clear_sensitive();
+        }
+        self.entries.clear();
     }
 }
 

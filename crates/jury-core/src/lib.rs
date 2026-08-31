@@ -13,6 +13,7 @@ pub mod identity;
 pub mod item;
 pub mod local_state;
 pub mod policy;
+pub mod session;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";
