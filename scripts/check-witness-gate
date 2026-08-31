@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Check the exact pre-implementation witness-v1 construction inputs."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+
+
+ROOT = Path(__file__).resolve().parent.parent
+GATE_PATH = ROOT / "docs/security/jury-v0-witness-gate.toml"
+
+
+class GateError(Exception):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise GateError(message)
+
+
+def digest_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def repo_file(relative: str) -> Path:
+    path = (ROOT / relative).resolve()
+    require(path.is_relative_to(ROOT), f"gate path escapes repository: {relative}")
+    require(path.is_file(), f"gate path is missing: {relative}")
+    return path
+
+
+def revision_bytes(revision: str, relative: str) -> bytes:
+    process = subprocess.run(
+        ["git", "show", f"{revision}:{relative}"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        check=False,
+    )
+    require(process.returncode == 0, f"cannot read {relative} at {revision}")
+    return process.stdout
+
+
+def check_binding(revision: str, binding: dict[str, object]) -> Path:
+    relative = str(binding["path"])
+    expected = str(binding["sha256"])
+    path = repo_file(relative)
+    require(digest_bytes(path.read_bytes()) == expected, f"hash mismatch: {relative}")
+    require(
+        digest_bytes(revision_bytes(revision, relative)) == expected,
+        f"accepted revision mismatch: {relative}",
+    )
+    return path
+
+
+def dependency_details(value: object) -> tuple[str, bool, list[str], str | None, str | None]:
+    if isinstance(value, str):
+        return value, True, [], None, None
+    require(isinstance(value, dict), "dependency declaration must be a string or table")
+    return (
+        str(value.get("version", "")),
+        bool(value.get("default-features", True)),
+        sorted(str(item) for item in value.get("features", [])),
+        str(value["git"]) if "git" in value else None,
+        str(value["rev"]) if "rev" in value else None,
+    )
+
+
+def run_command(argv: list[str]) -> None:
+    process = subprocess.run(argv, cwd=ROOT, check=False)
+    require(process.returncode == 0, f"check failed ({process.returncode}): {' '.join(argv)}")
+
+
+def run() -> None:
+    with GATE_PATH.open("rb") as handle:
+        gate = tomllib.load(handle)
+
+    require(gate["schema"] == "jury-witness-construction-gate-v1", "unknown gate schema")
+    require(gate["status"] == "accepted-for-implementation", "witness construction gate is closed")
+    require(gate["pre_alpha"] is True, "pre-alpha warning is missing")
+    require(gate["independently_reviewed"] is False, "review status is overstated")
+    warning = str(gate["warning"]).lower()
+    for phrase in ("externally unreviewed", "pre-alpha", "real secrets"):
+        require(phrase in warning, f"warning omits {phrase}")
+
+    control = gate["control"]
+    require(
+        set(control["consumers"]) == {"J04", "J05", "J07", "J10", "J20", "J22", "J23"},
+        "gate consumers changed",
+    )
+    for field in ("gated_feature", "defect_class", "supersession_condition"):
+        require(bool(control[field]), f"control.{field} is empty")
+
+    revision = str(gate["baseline"]["revision"])
+    require(len(revision) == 40, "baseline revision is not a full Git SHA")
+    bindings = gate["bindings"]
+    require(len(bindings) == 15, "bound input count changed")
+    bound_paths = [str(binding["path"]) for binding in bindings]
+    require(len(set(bound_paths)) == len(bound_paths), "duplicate bound path")
+    for binding in bindings:
+        check_binding(revision, binding)
+
+    checker = gate["checker"]
+    checker_path = repo_file(str(checker["path"]))
+    require(digest_bytes(checker_path.read_bytes()) == checker["sha256"], "checker hash mismatch")
+
+    direct_gate = gate["direct_crypto_gate"]
+    require(
+        digest_bytes(repo_file(str(direct_gate["path"])).read_bytes()) == direct_gate["sha256"],
+        "direct crypto gate drifted",
+    )
+    require(len(str(direct_gate["accepted_revision"])) == 40, "J01B revision is not a full Git SHA")
+
+    corpus_path = repo_file(str(gate["corpus"]["path"]))
+    corpus = json.loads(corpus_path.read_bytes())
+    require(corpus["schema"] == "jury-witness-v1-conformance-corpus", "corpus schema changed")
+    require(corpus["construction"] == gate["construction"]["name"], "construction changed")
+    require(corpus["suite"] == gate["construction"]["suite"], "suite changed")
+    for field in (
+        "vectors",
+        "byte_mutations",
+        "scope_cases",
+        "presentation_cases",
+        "protocol_cases",
+        "split_write_cases",
+    ):
+        require(len(corpus[field]) == gate["corpus"][f"{field}_count"], f"{field} count changed")
+    model_result = corpus["retention_model"]["result"]
+    require(model_result["states"] == gate["model"]["states"], "model state count changed")
+    require(model_result["applicable_states"] == gate["model"]["applicable_states"], "model scope changed")
+    require(model_result["counterexamples"] == 0, "model has decryption counterexamples")
+    require(model_result["prior_state_authorizations"] == 0, "model has authorization counterexamples")
+    require(corpus["retention_model"]["formal_proof"] is False, "formal-proof claim appeared")
+    require(corpus["retention_model"]["external_review"] is False, "review claim appeared")
+
+    manifest_path = repo_file(str(gate["conformance"]["manifest_path"]))
+    lock_path = repo_file(str(gate["conformance"]["lock_path"]))
+    with manifest_path.open("rb") as handle:
+        manifest = tomllib.load(handle)
+    dependencies = manifest["dependencies"]
+    provider_records = {record["cargo_name"]: record for record in gate["providers"]}
+    require(set(provider_records) == {"hpke", "vsss-rs"}, "provider set changed")
+    for cargo_name, record in provider_records.items():
+        version, defaults, features, git, provider_revision = dependency_details(
+            dependencies[cargo_name]
+        )
+        require(version == f"={record['version']}", f"{cargo_name} version changed")
+        require(defaults is False, f"{cargo_name} default features enabled")
+        require(features == sorted(record["features"]), f"{cargo_name} features changed")
+        require(git == record.get("git"), f"{cargo_name} source changed")
+        require(provider_revision == record.get("revision"), f"{cargo_name} revision changed")
+
+    with lock_path.open("rb") as handle:
+        packages = tomllib.load(handle)["package"]
+    for record in gate["providers"]:
+        matches = [
+            package
+            for package in packages
+            if package["name"] == record["cargo_name"] and package["version"] == record["version"]
+        ]
+        require(len(matches) == 1, f"{record['cargo_name']} lock entry changed")
+        if "checksum" in record:
+            require(matches[0].get("checksum") == record["checksum"], f"{record['cargo_name']} checksum changed")
+        if "revision" in record:
+            require(matches[0]["source"].endswith(f"#{record['revision']}"), f"{record['cargo_name']} source changed")
+
+    findings = gate["findings"]
+    require(findings["confirmed"] == findings["dispositioned"], "confirmed finding is undispositioned")
+    require(findings["open"] == 0, "open finding remains")
+
+    expected_checks = [
+        ("direct-inputs", "python3 scripts/check-direct-crypto-gate"),
+        ("rust-consumer", "cargo test --manifest-path conformance/witness-v1/Cargo.toml --locked"),
+        ("alternate-consumer", "python3 conformance/witness-v1/alternate_runner.py conformance/witness-v1/vectors.json"),
+        ("deterministic-corpus", "cargo run --manifest-path conformance/witness-v1/Cargo.toml --locked --bin generate -- --check"),
+        ("conformance-clippy", "cargo clippy --manifest-path conformance/witness-v1/Cargo.toml --locked --all-targets -- -D warnings"),
+    ]
+    declared_checks = [(entry["id"], entry["command"]) for entry in gate["checks"]]
+    require(declared_checks == expected_checks, "declared checks changed")
+    commands = [
+        ["python3", "scripts/check-direct-crypto-gate"],
+        ["cargo", "test", "--manifest-path", "conformance/witness-v1/Cargo.toml", "--locked"],
+        ["python3", "conformance/witness-v1/alternate_runner.py", "conformance/witness-v1/vectors.json"],
+        ["cargo", "run", "--manifest-path", "conformance/witness-v1/Cargo.toml", "--locked", "--bin", "generate", "--", "--check"],
+        ["cargo", "clippy", "--manifest-path", "conformance/witness-v1/Cargo.toml", "--locked", "--all-targets", "--", "-D", "warnings"],
+    ]
+    for command in commands:
+        run_command(command)
+
+    print(
+        "witness construction gate: accepted inputs are current; "
+        "externally unreviewed pre-alpha, not for real secrets"
+    )
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except (
+        GateError,
+        KeyError,
+        OSError,
+        subprocess.SubprocessError,
+        tomllib.TOMLDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        print(f"witness construction gate: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

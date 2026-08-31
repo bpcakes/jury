@@ -1,0 +1,150 @@
+schema = "jury-witness-construction-gate-v1"
+status = "accepted-for-implementation"
+checked_at = "2026-08-31"
+pre_alpha = true
+independently_reviewed = false
+warning = "Externally unreviewed pre-alpha construction evidence. This gate does not establish that Jury protects real secrets."
+
+[control]
+consumers = ["J04", "J05", "J07", "J10", "J20", "J22", "J23"]
+gated_feature = "witness-v1 identities, vault format, partial unlock, witness engine, witnessed UX, and witness operations"
+defect_class = "construction, protocol, canonical corpus, provider, state-machine, or retention-model drift before witnessed implementation"
+supersession_condition = "Replace when a new authenticated witness construction/protocol version supersedes witness-v1 or witnessed access is removed."
+
+[baseline]
+revision = "ac460bea98be95a42fbd88de0446261b4e32b3fc"
+
+[checker]
+path = "scripts/check-witness-gate"
+sha256 = "dff1c2cf8ee4b45d2542260265a6e0ec1317e3fcc07f6167a9c0f6fbbe16d350"
+
+[direct_crypto_gate]
+path = "docs/security/jury-v0-direct-crypto-gate.toml"
+sha256 = "1617609d607487d01a11ce449420ea8bf9f76d1e42450dff89bb46d957998ae9"
+accepted_revision = "560897e90fa7a7dc840458285ec64eff53a0a284"
+
+[construction]
+id = 1
+name = "jury-witness-v1-shamir-xwing-hpke"
+suite = 1
+witness_count = 3
+witness_threshold = 2
+approver_count = 2
+approver_threshold = 2
+
+[corpus]
+path = "conformance/witness-v1/vectors.json"
+vectors_count = 34
+byte_mutations_count = 46
+scope_cases_count = 34
+presentation_cases_count = 12
+protocol_cases_count = 20
+split_write_cases_count = 9
+
+[model]
+states = 20736
+applicable_states = 3456
+authorization_counterexamples = 0
+decryption_counterexamples = 0
+
+[conformance]
+manifest_path = "conformance/witness-v1/Cargo.toml"
+lock_path = "conformance/witness-v1/Cargo.lock"
+
+[findings]
+confirmed = 0
+dispositioned = 0
+open = 0
+
+[[checks]]
+id = "direct-inputs"
+command = "python3 scripts/check-direct-crypto-gate"
+
+[[checks]]
+id = "rust-consumer"
+command = "cargo test --manifest-path conformance/witness-v1/Cargo.toml --locked"
+
+[[checks]]
+id = "alternate-consumer"
+command = "python3 conformance/witness-v1/alternate_runner.py conformance/witness-v1/vectors.json"
+
+[[checks]]
+id = "deterministic-corpus"
+command = "cargo run --manifest-path conformance/witness-v1/Cargo.toml --locked --bin generate -- --check"
+
+[[checks]]
+id = "conformance-clippy"
+command = "cargo clippy --manifest-path conformance/witness-v1/Cargo.toml --locked --all-targets -- -D warnings"
+
+[[providers]]
+cargo_name = "hpke"
+version = "0.14.0"
+git = "https://github.com/rozbb/rust-hpke"
+revision = "57b14d8f156da78be61b23203b962b0985561831"
+features = ["alloc", "chacha", "mlkem", "x25519"]
+
+[[providers]]
+cargo_name = "vsss-rs"
+version = "6.0.1"
+checksum = "d6bfc736cfd88115aedb95ba84bc2d428fe351e92a56f69fce090af301402d91"
+features = ["alloc", "zeroize"]
+
+[[bindings]]
+path = "docs/security/witness-v1/construction.md"
+sha256 = "23ded2718d4b2bb305a6cd83da246b8cecdd03135b4a8529ecd3ced333b8feac"
+
+[[bindings]]
+path = "docs/security/witness-v1/threat-model.md"
+sha256 = "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275"
+
+[[bindings]]
+path = "docs/security/witness-v1/protocol.md"
+sha256 = "b64bc048ffb94ef20316e0c6979429e4daf3cd72fcd49a266a06fc4f769634c7"
+
+[[bindings]]
+path = "docs/security/witness-v1/state-machines.md"
+sha256 = "7cbf65276bb60fbb1a2b72f9d1f12612ccba402de09eee3fb70a320bfdc5ca6f"
+
+[[bindings]]
+path = "docs/security/jury-v0-direct-crypto-gate.toml"
+sha256 = "1617609d607487d01a11ce449420ea8bf9f76d1e42450dff89bb46d957998ae9"
+
+[[bindings]]
+path = "docs/security/jury-v0-provider-evidence.md"
+sha256 = "5ea96dd0f7ec7614566fc168549a5e0f757c4944ebcf0d3bce772d71e426c7f0"
+
+[[bindings]]
+path = "docs/security/jury-v1-suite.md"
+sha256 = "d2bc6b7879209bc4e2f65302ce715fe9cdffef37cb7fc01c68c1b48d452c5cfd"
+
+[[bindings]]
+path = "conformance/witness-v1/AGENTS.md"
+sha256 = "89f5772b7e14150cf12ea081ae6d7bb565ae4417119c3eb43698c9d3abbe0068"
+
+[[bindings]]
+path = "conformance/witness-v1/Cargo.lock"
+sha256 = "c9ee7c7800291a56acf78c332732169783d7c6a512e9029ae9aeda1a5a264657"
+
+[[bindings]]
+path = "conformance/witness-v1/Cargo.toml"
+sha256 = "85c22b2b052d79877023bca75116e81590473f0b134a8f3b984ae9510923638e"
+
+[[bindings]]
+path = "conformance/witness-v1/README.md"
+sha256 = "4139e99a9a3137a30450743f0454f31bb872770b23e32a9f064dbefd4a6677a2"
+
+[[bindings]]
+path = "conformance/witness-v1/alternate_runner.py"
+sha256 = "6521acb8f6ac95dbf845197ae704844f3a10d36a5d65822ed6e2e5eb4e63616e"
+
+[[bindings]]
+path = "conformance/witness-v1/src/lib.rs"
+sha256 = "7a6ffa6098ef309f21545b65e0a99f683e161381618b07bbc1bda6c8c43f16b2"
+
+[[bindings]]
+path = "conformance/witness-v1/src/bin/generate.rs"
+sha256 = "c3b7d696a0bb88998248830fd21fd861faa7ec39284e32b194928262a5b174e3"
+
+[[bindings]]
+path = "conformance/witness-v1/vectors.json"
+sha256 = "cc8f4549cf00569ee4bfca5e5b49f2c5aecb66bf20ff593a8e5e139722f11a6b"
