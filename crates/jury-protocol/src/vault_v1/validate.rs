@@ -361,6 +361,19 @@ fn validate_operation(
     Ok(())
 }
 
+/// Validates one policy operation's closed-schema and cryptographic context.
+///
+/// Stateful authorization and lifecycle checks belong to `jury-core`; this
+/// function exposes the format checks needed before that replay begins.
+pub fn validate_policy_operation_context(
+    operation: &PolicyOperationV1,
+    sequence: u64,
+    vault_id: &super::bytes::VaultId,
+    genesis_fingerprint: &Digest32,
+) -> Result<(), FormatError> {
+    validate_operation(operation, sequence, vault_id, genesis_fingerprint)
+}
+
 fn validate_descriptor(
     descriptor: &super::types::PrincipalDescriptorV1,
 ) -> Result<(), FormatError> {

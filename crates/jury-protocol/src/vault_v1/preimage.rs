@@ -349,19 +349,33 @@ impl WitnessedSlotV1 {
 
 impl WitnessedStateV1 {
     pub fn digest_preimage(&self) -> Result<Vec<u8>, CanonicalError> {
-        let slots = self
-            .slots
-            .iter()
-            .map(WitnessedSlotV1::canonical_bytes)
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut output = jce("jury-witness-v1/slot-set/hash");
-        list_bytes(&mut output, &slots)?;
-        Ok(output)
+        witnessed_slot_set_digest_preimage(&self.slots)
     }
 
     pub fn recomputed_digest(&self) -> Result<Digest32, CanonicalError> {
         Ok(sha256(&self.digest_preimage()?))
     }
+}
+
+/// Builds the J19 slot-set digest preimage for an already canonical slot set.
+///
+/// This is also used by policy replay to bind the flattened current witnessed
+/// state when more than one item has witnessed slots.
+pub fn witnessed_slot_set_digest_preimage(
+    slots: &[WitnessedSlotV1],
+) -> Result<Vec<u8>, CanonicalError> {
+    let slots = slots
+        .iter()
+        .map(WitnessedSlotV1::canonical_bytes)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut output = jce("jury-witness-v1/slot-set/hash");
+    list_bytes(&mut output, &slots)?;
+    Ok(output)
+}
+
+/// Recomputes the J19 digest for an already canonical slot set.
+pub fn witnessed_slot_set_digest(slots: &[WitnessedSlotV1]) -> Result<Digest32, CanonicalError> {
+    Ok(sha256(&witnessed_slot_set_digest_preimage(slots)?))
 }
 
 impl SourceAttestationV1 {

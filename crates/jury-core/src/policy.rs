@@ -1,0 +1,28 @@
+//! Owner-signed policy creation, replay, and access evaluation.
+//!
+//! Policy replay consumes only public authenticated state. Item and field names
+//! never enter this module.
+
+mod replay;
+mod state;
+mod witness;
+
+#[cfg(test)]
+mod model_tests;
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod vector_tests;
+#[cfg(test)]
+mod witness_tests;
+
+pub use replay::{CreatedPolicy, PolicyCreator, PreparedPolicyRevision, replay_policy};
+pub use state::{
+    AccessExplanation, AccessPath, AccessReason, ItemPolicyState, PolicyError, PolicyErrorKind,
+    PolicyState, PrincipalPolicyState, TombstoneState, WitnessAuthority,
+};
+pub use witness::{
+    ApprovalMode, ApproverPolicyDescriptor, AutomaticReadTarget, DescriptorStatus, OperationRule,
+    PlatformAssurance, WitnessAccessRule, WitnessOperation, WitnessPolicy, WitnessPolicyDescriptor,
+    replay_policy_with_witness_policies,
+};

@@ -23,6 +23,7 @@ pub use plaintext::{
 };
 pub use preimage::{
     CanonicalError, item_body_aad, item_descriptor_aad, recipient_public_key_fingerprint,
+    witnessed_slot_set_digest, witnessed_slot_set_digest_preimage,
 };
 pub use types::{
     AccessRole, ContentRole, DescriptorMetadataV1, DirectSlotV1, EmptyGenesisEntryV1,
@@ -33,7 +34,7 @@ pub use types::{
 };
 pub use validate::{
     FormatError, MAX_CURRENT_SLOTS, MAX_ITEM_REVISION_PROOFS, MAX_ITEMS, MAX_POLICY_REVISIONS,
-    MAX_PUBLIC_LABEL_BYTES, MAX_VAULT_BYTES,
+    MAX_PUBLIC_LABEL_BYTES, MAX_VAULT_BYTES, validate_policy_operation_context,
 };
 
 impl WitnessedStateV1 {

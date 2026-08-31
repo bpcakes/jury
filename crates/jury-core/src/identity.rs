@@ -456,10 +456,6 @@ role_identity!(ApproverIdentity);
 role_identity!(WitnessIdentity);
 
 impl VaultPrincipalIdentity {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "J06/J07 consume the role-bound signing seam")
-    )]
     pub(crate) fn sign_validated_statement(
         &self,
         preimage: &[u8],

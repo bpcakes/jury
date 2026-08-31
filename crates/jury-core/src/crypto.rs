@@ -3,7 +3,7 @@ use std::fmt;
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce, Tag, aead::AeadInOut};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use chacha20::ChaCha20Rng;
-use ed25519_dalek::{Signer as _, SigningKey};
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use hpke::{
     Deserializable, Kem, OpModeR, OpModeS, Serializable, aead::ChaCha20Poly1305, kdf::HkdfSha256,
@@ -124,6 +124,18 @@ pub(crate) fn sign_bytes(signing_seed: &[u8], message: &[u8]) -> Result<Signatur
     Ok(Signature64::new(
         SigningKey::from_bytes(seed).sign(message).to_bytes(),
     ))
+}
+
+pub(crate) fn verify_bytes(
+    verification_key: &VerificationPublicKey32,
+    message: &[u8],
+    signature: &Signature64,
+) -> Result<(), CryptoError> {
+    let key = VerifyingKey::from_bytes(verification_key.as_bytes())
+        .map_err(|_| CryptoError::AuthenticationFailed)?;
+    let signature = Signature::from_bytes(signature.as_bytes());
+    key.verify_strict(message, &signature)
+        .map_err(|_| CryptoError::AuthenticationFailed)
 }
 
 pub(crate) fn derive_argon2_key(
