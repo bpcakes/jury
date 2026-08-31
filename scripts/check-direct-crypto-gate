@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Check the frozen J01A inputs and isolated J01B provider pins."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import sys
+import tomllib
+
+
+ROOT = Path(__file__).resolve().parent.parent
+GATE_PATH = ROOT / "docs/security/jury-v0-direct-crypto-gate.toml"
+
+
+class GateError(Exception):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise GateError(message)
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def repo_file(relative: str) -> Path:
+    path = (ROOT / relative).resolve()
+    require(path.is_relative_to(ROOT), f"gate path escapes repository: {relative}")
+    require(path.is_file(), f"gate path is missing: {relative}")
+    return path
+
+
+def check_file(binding: dict[str, object]) -> Path:
+    path = repo_file(str(binding["path"]))
+    require(digest(path) == binding["sha256"], f"hash mismatch: {binding['path']}")
+    return path
+
+
+def dependency_details(value: object) -> tuple[str, bool, list[str], str | None, str | None]:
+    if isinstance(value, str):
+        return value, True, [], None, None
+    require(isinstance(value, dict), "dependency declaration must be a string or table")
+    return (
+        str(value.get("version", "")),
+        bool(value.get("default-features", True)),
+        sorted(str(item) for item in value.get("features", [])),
+        str(value["git"]) if "git" in value else None,
+        str(value["rev"]) if "rev" in value else None,
+    )
+
+
+def run() -> None:
+    with GATE_PATH.open("rb") as handle:
+        gate = tomllib.load(handle)
+
+    require(gate["schema"] == "jury-direct-crypto-gate-v1", "unknown gate schema")
+    require(gate["status"] == "accepted-for-implementation", "direct crypto gate is closed")
+    require(gate["pre_alpha"] is True, "pre-alpha warning is missing")
+    require(gate["independently_reviewed"] is False, "review status is overstated")
+    require(
+        set(gate["control"]["consumers"]) == {"J04", "J19A", "J19"},
+        "gate consumers changed",
+    )
+    for field in ("gated_feature", "defect_class", "supersession_condition"):
+        require(bool(gate["control"][field]), f"control.{field} is empty")
+
+    suite_path = check_file(gate["j01a"]["suite_document"])
+    vector_path = check_file(gate["j01a"]["vector_corpus"])
+    require(len(gate["j01a"]["revision"]) == 40, "J01A revision is not a Git SHA")
+    vectors = json.loads(vector_path.read_bytes())
+
+    expected_suite = {
+        "id": 1,
+        "name": "jury-v1-xwing-hkdfsha256-chacha20poly1305-aes256gcmsiv-ed25519",
+        "hpke": {"mode": 0, "kem_id": 25722, "kdf_id": 1, "aead_id": 3},
+        "storage_aead_registry_id": 31,
+    }
+    for key, expected in expected_suite.items():
+        require(vectors["suite"][key] == expected, f"suite.{key} changed")
+        require(gate["suite"][key] == expected, f"gate suite.{key} changed")
+
+    sections = {
+        "preimages": vectors["preimages"],
+        "aead": vectors["aead"],
+        "argon2id": vectors["argon2id"],
+        "ed25519": vectors["ed25519"],
+        "hkdf_sha256": vectors["hkdf_sha256"],
+        "hmac_sha256": vectors["hmac_sha256"],
+        "negative_vectors": vectors["negative_vectors"],
+        "required_cross_provider_checks": vectors["required_cross_provider_checks"],
+        "required_fault_vectors": vectors["required_fault_vectors"],
+        "official_hpke_entry": vectors["official_hpke_selected_entry"]["entry"],
+    }
+    require(len(vectors["preimages"]) == gate["corpus"]["preimage_count"], "preimage count changed")
+    for name, value in sections.items():
+        require(
+            canonical_digest(value) == gate["corpus"]["section_sha256"][name],
+            f"canonical corpus section changed: {name}",
+        )
+
+    official = vectors["official_hpke_selected_entry"]
+    require(official["source_commit"] == gate["official_hpke"]["source_commit"], "official HPKE source changed")
+    require(official["selector"] == gate["suite"]["hpke"], "official HPKE selector changed")
+    require(
+        vectors["source_sha256"] == gate["specifications"]["sha256"],
+        "specification hash map changed",
+    )
+    require(
+        canonical_digest(vectors["source_sha256"]) == gate["specifications"]["canonical_sha256"],
+        "specification map hash changed",
+    )
+
+    conformance = gate["conformance"]
+    conformance_manifest_path = check_file(conformance["manifest"])
+    check_file(conformance["lock"])
+    check_file(conformance["test_source"])
+    with conformance_manifest_path.open("rb") as handle:
+        conformance_manifest = tomllib.load(handle)
+    dependencies = conformance_manifest["dev-dependencies"]
+
+    provider_records = {record["cargo_name"]: record for record in gate["providers"]}
+    require(len(provider_records) == len(gate["providers"]), "duplicate provider record")
+    require(set(provider_records).issubset(dependencies), "provider missing from conformance crate")
+    require(
+        set(dependencies) == set(provider_records) | {"hex", "serde_json"},
+        "unexpected direct conformance dependency",
+    )
+    for cargo_name, record in provider_records.items():
+        version, defaults, features, git, revision = dependency_details(dependencies[cargo_name])
+        require(version == f"={record['version']}", f"{cargo_name} version changed")
+        require(defaults is False, f"{cargo_name} default features enabled")
+        require(features == sorted(record["features"]), f"{cargo_name} features changed")
+        require(git == record.get("git"), f"{cargo_name} Git source changed")
+        require(revision == record.get("revision"), f"{cargo_name} revision changed")
+
+    forbidden_features = {"getrandom", "legacy", "legacy_compatibility", "pem", "pkcs8", "ssh", "plugin", "hazmat"}
+    declared_features = {
+        feature
+        for cargo_name in provider_records
+        for feature in dependency_details(dependencies[cargo_name])[2]
+    }
+    require(not forbidden_features.intersection(declared_features), "forbidden direct feature enabled")
+
+    with repo_file(str(conformance["lock"]["path"])).open("rb") as handle:
+        lock = tomllib.load(handle)
+    packages = lock["package"]
+    critical_actual = {
+        (package["name"], package["version"], package.get("checksum", ""))
+        for package in packages
+        if package["name"] in {item["name"] for item in gate["critical_dependencies"]}
+    }
+    critical_expected = {
+        (item["name"], item["version"], item["checksum"])
+        for item in gate["critical_dependencies"]
+    }
+    require(critical_actual == critical_expected, "security-critical dependency set changed")
+    for cargo_name, record in provider_records.items():
+        matches = [
+            package
+            for package in packages
+            if package["name"] == cargo_name and package["version"] == record["version"]
+        ]
+        require(len(matches) == 1, f"{cargo_name} lock entry changed")
+        if "checksum" in record:
+            require(matches[0].get("checksum") == record["checksum"], f"{cargo_name} checksum changed")
+
+    hpke_package = next(package for package in packages if package["name"] == "hpke")
+    require(hpke_package["version"] == provider_records["hpke"]["version"], "HPKE lock version changed")
+    require(hpke_package["source"].endswith(f"#{provider_records['hpke']['revision']}"), "HPKE lock revision changed")
+    require(suite_path.stat().st_size > 0, "suite document is empty")
+    print("direct crypto gate: accepted inputs are current")
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except (GateError, KeyError, OSError, tomllib.TOMLDecodeError, json.JSONDecodeError) as error:
+        print(f"direct crypto gate: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

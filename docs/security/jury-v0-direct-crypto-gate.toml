@@ -1,0 +1,289 @@
+schema = "jury-direct-crypto-gate-v1"
+status = "accepted-for-implementation"
+checked_at = "2026-08-31"
+pre_alpha = true
+independently_reviewed = false
+warning = "Experimental pre-alpha provider selection. This gate does not establish that Jury protects secrets."
+
+[control]
+consumers = ["J04", "J19A", "J19"]
+gated_feature = "J01A shared primitives and direct cryptographic construction"
+defect_class = "suite, specification, vector, provider, feature, or dependency drift"
+supersession_condition = "Replace when a new authenticated suite lineage supersedes suite 0x0001 or active 0.x direct cryptography is removed."
+
+[j01a]
+revision = "73ea5a36aba6b7a31f309cc6d1e52c8e5ff2bcb3"
+
+[j01a.suite_document]
+path = "docs/security/jury-v1-suite.md"
+sha256 = "d2bc6b7879209bc4e2f65302ce715fe9cdffef37cb7fc01c68c1b48d452c5cfd"
+
+[j01a.vector_corpus]
+path = "docs/security/vectors/jury-v1-suite.json"
+sha256 = "15890c448a3d6efa160e5d5f196dd8b07c672a6662b33086a7ca19bfc4bab79b"
+
+[suite]
+id = 1
+name = "jury-v1-xwing-hkdfsha256-chacha20poly1305-aes256gcmsiv-ed25519"
+storage_aead_registry_id = 31
+
+[suite.hpke]
+mode = 0
+kem_id = 25722
+kdf_id = 1
+aead_id = 3
+
+[corpus]
+preimage_count = 46
+
+[corpus.section_sha256]
+preimages = "c267513061524bf0395172ed8ae975c2529e008e0ea1e3755c79749179b880d0"
+aead = "8740b6c93209dd1e7f508e42b24fe3204d891ce5587779b0d186e9c737efd0cc"
+argon2id = "d86b394ff398ff15645184e1e25712b44fc31e00f52b9d6ba518407fa0556f2a"
+ed25519 = "a1a7cb106e31c222ddbffcc6d3309697336fb190380659c324bd7295203d5137"
+hkdf_sha256 = "e5fac298fde549b17f9be3fb27899f0daa954449283a1689d04e358298816d85"
+hmac_sha256 = "052a9dc3e35a1c5a0a94a983cb9919a510814571ab3aa1c8897f91cb984e7ea1"
+negative_vectors = "54dce30df5a288577c5f4d753de5f47a9831dd32e1fdab00e65c7c860baadd1d"
+required_cross_provider_checks = "7cf68d0711ed279fb2b35c9fe43bfcd71b6f6d3acd67a9779fb5e84e3f312b85"
+required_fault_vectors = "c1d77b7ae71916b19f2d8dd0887da0f835fb2da013abbc5b076c44c36ce4dea1"
+official_hpke_entry = "eb3363f9657c21d9746b47392eae161cb9d4c7713a6ddd6a919e95324f760af0"
+
+[official_hpke]
+source_commit = "6433c8fce0b8b749dfc86c1095081a88698ccfab"
+source_sha256 = "35c59f4a0132e5631e50ac039d8ca3a72e99f5e92dfd94d45338d6ae243f613c"
+source_url = "https://raw.githubusercontent.com/hpkewg/hpke-pq/6433c8fce0b8b749dfc86c1095081a88698ccfab/test-vectors.json"
+
+[conformance]
+command = "cargo +1.90.0 test --manifest-path conformance/direct-crypto/Cargo.toml --locked"
+
+[conformance.manifest]
+path = "conformance/direct-crypto/Cargo.toml"
+sha256 = "06cd376d004d7f5544de29745b37bb89d78e6e41f0d9b504c41cb6036130bfc4"
+
+[conformance.lock]
+path = "conformance/direct-crypto/Cargo.lock"
+sha256 = "cf527f620deb4ebccb74bb3006f9c24def0e0b35137c1bc6b6a84ac89be27970"
+
+[conformance.test_source]
+path = "conformance/direct-crypto/src/lib.rs"
+sha256 = "b9e7adf624e51ea0c7002535429703ce96623fa2e144e7a886cef0d570eb9e73"
+
+[selected_build]
+rust_version = "1.90.0"
+manifest_sha256 = "482356cedf21565772116960f686a4badf17a839e0e882c5e7065779cfb0d1b7"
+lock_sha256 = "8a246455eb52b3013786f97cdefd5d620de685d66a1730a30fcf257f8d352e43"
+feature_tree_sha256 = "5f3e34e8304a46288236c4ec014ac586c3b3b49ccba28f330f91838d9bebdb40"
+dependency_tree_sha256 = "b6dadce105cc2486ad8240a415052cdf6827321c8a182956704c16b625413195"
+
+[advisory_scan]
+command = "cargo audit --file conformance/direct-crypto/Cargo.lock --deny warnings"
+database_revision = "ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5"
+database_revision_time = "2026-08-31T11:44:04+02:00"
+selected_dependency_count = 74
+vulnerabilities = 0
+warnings = 0
+
+[specifications]
+canonical_sha256 = "428085a5012d596d30c41e3f5ba10710cbbfa3bfd7e514df6b6d76b4c6927eaa"
+
+[specifications.sha256]
+"FIPS-202.pdf" = "1592607831ff0908cc590632ce371c6c95e94025bb1a0c8ae90a4d0ec1ed025e"
+"FIPS-203.pdf" = "fe1f12f32a7e44ec9fdebbf400cda843a40b506dee676725234dc6f7923b6cac"
+"RFC-5869.txt" = "7a40eb3835b35fc947eb12a2ed614db079d43b26e50dbc537c31fba16397089c"
+"RFC-7748.txt" = "279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3"
+"RFC-8032.txt" = "ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3"
+"RFC-8439.txt" = "25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c"
+"RFC-8452.txt" = "ca48ec466b401ce5d68d6d1628127a1800adcc16f2573646aaa3d7df284d3c17"
+"RFC-9106.txt" = "855c06f060379e34285e83a217e9069b5c72e161a1e54df9af5cd88dbb231f31"
+"aes-gcm-siv-analysis-2017-168.pdf" = "0256c61be014e9577183095d3426560765659b9f3d86c872fb0a36538d46dcd1"
+"argon2-specs.pdf" = "b492f7c05bfb24eb06cd292006e785080ecbde02b8496255fc52ec4f697de979"
+"draft-connolly-cfrg-xwing-kem-10.txt" = "530900ac0519e28eb1ff50bf80ecdb7648add22e500db72b465bab4fb6b6a5ec"
+"draft-ietf-hpke-hpke-04.txt" = "7c3090db36136e58242216c04bcc744f297800a4a615680930c5a4e3ae7cd733"
+"draft-ietf-hpke-pq-05.txt" = "c3afa3981c7e2aacac4912a8b58eca14a92a10c66c4fd4e9ff078195a1ac9c5d"
+"draft-irtf-cfrg-concrete-hybrid-kems-03.txt" = "2292aa51d2b0e3bfe5f46ae67d945855c6fe8df7792f1e9af3cc7477a7b098b5"
+"draft-irtf-cfrg-hybrid-kems-12.txt" = "3357939858dd988cf34d0d8c17c3d8df3cc992cc76e87fec23672f5bbb031b90"
+"draft-irtf-cfrg-xchacha-03.txt" = "fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd"
+"ed25519-paper.pdf" = "820dcf8ad51f90849fd60f16971fdcfedaeb5e7aaed0f300154fe39c0d3da0e2"
+"hpke-analysis-2020-1499.pdf" = "379bafe1c6efd20f1193f0f1d3d21aa23d87db59cbf980f92372e7e02c4d435f"
+"hpke-analysis-2020-243.pdf" = "73c4980506e4a91e1d8184b117b215b1efb67237cff0718630fbd9d1d5c79f20"
+"hpke-pq-test-vectors.json" = "35c59f4a0132e5631e50ac039d8ca3a72e99f5e92dfd94d45338d6ae243f613c"
+"hpke-psk-analysis-2023-1480.pdf" = "bc825192d1c0274b52cdacb6b855b7763fde03a98dd6ce3e83e598f8b4ce8665"
+"kem-binding-analysis-2023-1933.pdf" = "d8a4d2b4c9e7306d24f07ad77ca265241f22985d54fb2f5b1a1aa01ef3213a0c"
+"mlkem-analysis-2024-843.pdf" = "a5ed0be5587f26b6849657bd571d364dffd2342972e6520056d79bf5e76fcddc"
+"quantum-sponge-analysis-2025-731.pdf" = "dadb7c1066290412255ae2db5cd3e6c66452a838600e5e5497cd81dd88e08a1f"
+"xwing-analysis-2024-039.pdf" = "773d00abefd9e88552c8d5f4f04ae95597ff4844b56964d99be76be45632280d"
+
+[[providers]]
+cargo_name = "hpke"
+version = "0.14.0"
+git = "https://github.com/rozbb/rust-hpke"
+revision = "57b14d8f156da78be61b23203b962b0985561831"
+source_tree = "5200f04caaea1965950ee352e8b98ae9157634ca"
+features = ["alloc", "chacha", "mlkem", "x25519"]
+msrv = "1.85"
+license = "MIT/Apache-2.0"
+
+[[providers]]
+cargo_name = "aes-gcm-siv"
+version = "0.12.1"
+checksum = "4c32325128cb24de2a2d14d92da7569dae7073f9e47334521d494747fa94d902"
+features = ["aes", "alloc", "zeroize"]
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "argon2"
+version = "0.6.0"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
+features = ["alloc", "zeroize"]
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "chacha20"
+version = "0.10.2"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
+features = ["rng", "zeroize"]
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "ed25519-dalek"
+version = "3.0.0"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+features = ["alloc", "fast", "zeroize"]
+msrv = "1.85"
+license = "BSD-3-Clause"
+
+[[providers]]
+cargo_name = "hkdf"
+version = "0.13.0"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+features = []
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "hmac"
+version = "0.13.0"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+features = ["zeroize"]
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "sha2"
+version = "0.11.0"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+features = ["zeroize"]
+msrv = "1.85"
+license = "MIT OR Apache-2.0"
+
+[[providers]]
+cargo_name = "zeroize"
+version = "1.9.0"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+features = []
+msrv = "1.85"
+license = "Apache-2.0 OR MIT"
+
+[hpke_source]
+cargo_toml_sha256 = "7269902e8d93134f6b6453da10bc0b9b190e9ffe3540775ce7847c048257c57c"
+cargo_lock_sha256 = "359407001d44c0e13bd58cc9c08e149634724eb6eb2b78e544c87ba85fb17c8e"
+lib_rs_sha256 = "91eac589fd8099eaafbe5efad044fa62bd55548991fd1ccc2ae1119cac03b960"
+kem_rs_sha256 = "be0373d1ddbf8015ceb28101f5d8c61a29fdd4176565f76d42781e7fa7fbcd81"
+xwing_rs_sha256 = "1ba62673a43686faf5460bb092d406732a5f2fad482e858c034fd81bdcfa06ff"
+setup_rs_sha256 = "e2f045b0b2111bd36e7d20a3888fdf011cf5f163ff9f11b16da1acbf81e9d25c"
+single_shot_rs_sha256 = "3a2cb95b9c64c632ec8294f552996ebdc345d00b10189fba235d4c2c20c6ef9e"
+aead_rs_sha256 = "6edd8663080dc415ba87fe35ec3a0331cc449e49dc2e2bbfb7ddf5134edd9313"
+kdf_rs_sha256 = "f98ac4d280e31f9e535eb6528d1113a3bcc2cafcf10df5b6fec917666be8c951"
+
+[[critical_dependencies]]
+name = "aes"
+version = "0.9.3"
+checksum = "35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32"
+
+[[critical_dependencies]]
+name = "aes-gcm-siv"
+version = "0.12.1"
+checksum = "4c32325128cb24de2a2d14d92da7569dae7073f9e47334521d494747fa94d902"
+
+[[critical_dependencies]]
+name = "argon2"
+version = "0.6.0"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
+
+[[critical_dependencies]]
+name = "chacha20"
+version = "0.10.2"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
+
+[[critical_dependencies]]
+name = "chacha20poly1305"
+version = "0.11.0"
+checksum = "9b89e1c441e926b9c82a8d023f6e1b7ae0adcfaa7d621814e4d60789bac751cb"
+
+[[critical_dependencies]]
+name = "curve25519-dalek"
+version = "5.0.0"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+
+[[critical_dependencies]]
+name = "ed25519-dalek"
+version = "3.0.0"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+
+[[critical_dependencies]]
+name = "hkdf"
+version = "0.13.0"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+
+[[critical_dependencies]]
+name = "hmac"
+version = "0.13.0"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+
+[[critical_dependencies]]
+name = "ml-kem"
+version = "0.3.2"
+checksum = "5e15f3e5b957493873e396a66914e83e616b6afe335cdef7efe5c6e1216aba66"
+
+[[critical_dependencies]]
+name = "polyval"
+version = "0.7.3"
+checksum = "f0fa31d631f2b2cb2a544d0aa321ce847a94764d701ca2becc411138b93d49cd"
+
+[[critical_dependencies]]
+name = "sha2"
+version = "0.11.0"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+
+[[critical_dependencies]]
+name = "sha3"
+version = "0.11.0"
+checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+
+[[critical_dependencies]]
+name = "sha3"
+version = "0.12.0"
+checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
+
+[[critical_dependencies]]
+name = "subtle"
+version = "2.6.1"
+checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[critical_dependencies]]
+name = "x-wing"
+version = "0.1.0"
+checksum = "b51507b887016c3925c84591108dadb8c099f776eb04fec6a60ae3519fee856f"
+
+[[critical_dependencies]]
+name = "x25519-dalek"
+version = "3.0.0"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+
+[[critical_dependencies]]
+name = "zeroize"
+version = "1.9.0"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
