@@ -116,6 +116,104 @@ pub struct PrincipalStateDirectory {
     root: HardenedStateRoot,
 }
 
+/// Capability for one vault/genesis state tuple. Its edit lock is shared by
+/// every principal and every linked worktree for that vault lineage.
+pub struct VaultStateDirectory {
+    root: HardenedStateRoot,
+}
+
+impl VaultStateDirectory {
+    pub fn open_or_create(
+        state_root: &Path,
+        vault_id: &[u8; 32],
+        genesis_fingerprint: &[u8; 32],
+        repositories: &[&RepositoryLocation],
+        vault_homes: &[&Path],
+    ) -> Result<Self, FilesystemError> {
+        let root =
+            HardenedStateRoot::open_or_create_excluding(state_root, repositories, vault_homes)?;
+        let root = descend_hex(&root, vault_id)?;
+        let root = descend_hex(&root, genesis_fingerprint)?;
+        Ok(Self { root })
+    }
+
+    pub fn try_lock(&self) -> Result<LockedVaultState<'_>, crate::LockError> {
+        let lock = ExclusiveStateLock::try_acquire(&self.root, Path::new("vault-edit.lock"))?;
+        Ok(LockedVaultState {
+            directory: self,
+            _lock: lock,
+        })
+    }
+}
+
+impl fmt::Debug for VaultStateDirectory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VaultStateDirectory")
+            .field("path", &"[REDACTED]")
+            .finish()
+    }
+}
+
+pub struct LockedVaultState<'a> {
+    directory: &'a VaultStateDirectory,
+    _lock: ExclusiveStateLock,
+}
+
+impl LockedVaultState<'_> {
+    pub fn read(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+    ) -> Result<Vec<u8>, FilesystemError> {
+        principal_root(&self.directory.root, principal_id)?
+            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+    }
+
+    pub fn preview(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+    ) -> Result<PrivateFilePrecondition, FilesystemError> {
+        principal_root(&self.directory.root, principal_id)?
+            .preview_private_file(Path::new(file.name()))
+    }
+
+    pub fn prepare(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+        contents: &ProtectedMemory,
+    ) -> Result<PreparedPrivateFile, FilesystemError> {
+        if contents.len() > file.maximum_bytes() {
+            return Err(FilesystemError::new(
+                crate::FilesystemOperation::Prepare,
+                crate::FilesystemErrorKind::HardLinkOrSize,
+            ));
+        }
+        let precondition = self.preview(principal_id, file)?;
+        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
+    }
+
+    pub fn publish(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+        contents: &ProtectedMemory,
+    ) -> Result<PublicationOutcome, FilesystemError> {
+        self.prepare(principal_id, file, contents)?.publish()
+    }
+}
+
+impl fmt::Debug for LockedVaultState<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LockedVaultState")
+            .field("path", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl PrincipalStateDirectory {
     pub fn open_or_create(
         state_root: &Path,
@@ -215,4 +313,11 @@ fn descend_hex(
         let _ = write!(&mut name, "{byte:02x}");
     }
     parent.open_or_create_private_child(Path::new(&name))
+}
+
+fn principal_root(
+    root: &HardenedStateRoot,
+    principal_id: &[u8; 32],
+) -> Result<HardenedStateRoot, FilesystemError> {
+    descend_hex(root, principal_id)
 }

@@ -7,6 +7,8 @@ use cap_std::fs::PermissionsExt as _;
 use cap_std::fs::{Metadata, OpenOptions};
 
 use crate::capability::{FileIdentity, single_component};
+use cap_std::fs::Dir;
+
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation, HardenedStateRoot};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -34,9 +36,17 @@ pub(crate) fn read(
     name: &Path,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, FilesystemError> {
+    read_from_dir(&root.root.dir, name, maximum_bytes)
+}
+
+pub(crate) fn read_from_dir(
+    directory: &Dir,
+    name: &Path,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, FilesystemError> {
     #[cfg(not(unix))]
     {
-        let _ = (root, name, maximum_bytes);
+        let _ = (directory, name, maximum_bytes);
         return Err(FilesystemError::new(
             FilesystemOperation::Read,
             FilesystemErrorKind::Unsupported,
@@ -52,7 +62,7 @@ pub(crate) fn read(
             ));
         }
         let name = single_component(name, FilesystemOperation::Read)?;
-        let before = root.root.dir.symlink_metadata(&name).map_err(|error| {
+        let before = directory.symlink_metadata(&name).map_err(|error| {
             let kind = if error.kind() == std::io::ErrorKind::NotFound {
                 FilesystemErrorKind::NotFound
             } else {
@@ -65,7 +75,7 @@ pub(crate) fn read(
 
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
-        let mut file = root.root.dir.open_with(&name, &options).map_err(|_| {
+        let mut file = directory.open_with(&name, &options).map_err(|_| {
             FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
         })?;
         let opened = file.metadata().map_err(|_| {

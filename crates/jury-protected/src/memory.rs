@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_PROTECTED_BYTES: usize = 1024 * 1024;
 
 /// Hard ceiling for an explicitly requested large protected allocation.
-pub const MAX_LARGE_PROTECTED_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_LARGE_PROTECTED_BYTES: usize = 16 * 1024 * 1024;
 
 /// Caller-selected runtime protection policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

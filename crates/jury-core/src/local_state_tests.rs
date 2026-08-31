@@ -223,6 +223,38 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
 }
 
 #[test]
+fn authenticated_audit_tail_rebinds_without_duplicate_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let context = context();
+    let candidate = candidate(context.scope(), &[(0, 0x12)]);
+    let mut state = context.initialize(&candidate, 1)?;
+    let before = context.serialize(&state)?;
+    context.append_event(&mut state, item_read_draft(0x24))?;
+    let after_intent = context.serialize(&state)?;
+
+    let mut interrupted = context.verify_files(
+        Some(after_intent.audit()),
+        Some(before.checkpoint()),
+        Some(before.receipts()),
+    )?;
+    assert_eq!(interrupted.audit_events_after_checkpoint(), 1);
+    let event_count = interrupted.audit().event_count;
+    context.accept_audit_tail(&mut interrupted, 40)?;
+    assert_eq!(interrupted.audit_events_after_checkpoint(), 0);
+    assert_eq!(interrupted.audit().event_count, event_count);
+
+    let recovered = context.serialize(&interrupted)?;
+    let verified = context.verify_files(
+        Some(recovered.audit()),
+        Some(recovered.checkpoint()),
+        Some(recovered.receipts()),
+    )?;
+    assert_eq!(verified.audit_events_after_checkpoint(), 0);
+    assert_eq!(verified.audit().event_count, event_count);
+    Ok(())
+}
+
+#[test]
 fn audit_rejects_edits_reordering_truncation_blank_lines_and_wrong_keys()
 -> Result<(), Box<dyn std::error::Error>> {
     let context = context();

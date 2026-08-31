@@ -53,6 +53,34 @@ fn nearest_nested_repository_is_retained_without_path_disclosure() -> Result<(),
 }
 
 #[test]
+fn repository_ancestry_digest_tracks_head_ref_and_index_without_git() -> Result<(), Box<dyn Error>>
+{
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let repository = repository(&worktree)?;
+    let initial = repository.git_ancestry_digest()?;
+
+    fs::create_dir_all(worktree.join(".git/refs/heads"))?;
+    fs::write(
+        worktree.join(".git/refs/heads/main"),
+        b"1111111111111111111111111111111111111111\n",
+    )?;
+    let with_ref = repository.git_ancestry_digest()?;
+    assert_ne!(with_ref, initial);
+
+    fs::write(
+        worktree.join(".git/refs/heads/main"),
+        b"2222222222222222222222222222222222222222\n",
+    )?;
+    let moved_ref = repository.git_ancestry_digest()?;
+    assert_ne!(moved_ref, with_ref);
+
+    fs::write(worktree.join(".git/index"), b"ExampleIndex")?;
+    assert_ne!(repository.git_ancestry_digest()?, moved_ref);
+    Ok(())
+}
+
+#[test]
 fn linked_worktree_marker_is_bounded_single_link_and_hardened() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let worktree = temp.path().join("worktree");

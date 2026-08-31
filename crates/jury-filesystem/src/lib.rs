@@ -17,9 +17,9 @@ use std::fmt;
 
 pub use identity_selection::{IdentityName, IdentitySelectionError, IdentitySelector};
 pub use local_state::{
-    LockedPrincipalState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES, MAX_RECEIPTS_BYTES,
-    PrincipalStateDirectory, PrincipalStateFile, StatePathError, resolve_linux_state_root,
-    resolve_state_root_from_environment,
+    LockedPrincipalState, LockedVaultState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES,
+    MAX_RECEIPTS_BYTES, PrincipalStateDirectory, PrincipalStateFile, StatePathError,
+    VaultStateDirectory, resolve_linux_state_root, resolve_state_root_from_environment,
 };
 pub use lock::{ExclusiveStateLock, LockError};
 pub use private_output::{

@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod mutation_commit;
+
 /// Render command help without implying that security features are available.
 #[must_use]
 pub fn help_text(version: &str) -> String {

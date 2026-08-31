@@ -297,6 +297,12 @@ impl AuditLog {
         self.events.iter().position(|event| &event.mac == mac)
     }
 
+    pub(super) fn contains_operation(&self, operation_id: &Digest32) -> bool {
+        self.events
+            .iter()
+            .any(|event| &event.operation_id == operation_id)
+    }
+
     pub(super) fn matches_scope(&self, scope: &LocalStateScope) -> bool {
         self.events
             .first()

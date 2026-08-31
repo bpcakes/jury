@@ -674,6 +674,11 @@ name = "jury"
 version = "0.1.0"
 dependencies = [
  "jury-core",
+ "jury-filesystem",
+ "jury-protected",
+ "jury-protocol",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
@@ -708,6 +713,7 @@ dependencies = [
  "getrandom 0.4.3",
  "jury-protected",
  "rustix",
+ "sha2",
  "tempfile",
 ]
 

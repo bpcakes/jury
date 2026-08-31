@@ -4,11 +4,14 @@ use std::path::{Path, PathBuf};
 
 use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
+use sha2::{Digest as _, Sha256};
 
 use crate::capability::{HardenedDir, nofollow_directory_child, open_absolute_dir};
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation};
 
 const MAX_GITDIR_MARKER_BYTES: u64 = 4096;
+const MAX_GIT_CONTROL_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_GIT_INDEX_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Retained capability to the nearest hardened Git worktree.
 pub struct RepositoryLocation {
@@ -91,6 +94,64 @@ impl RepositoryLocation {
         &self,
     ) -> Result<crate::PrivateFilePrecondition, FilesystemError> {
         crate::private_output::preview(&self.jury_dir_clone()?, Path::new("vault.json"))
+    }
+
+    /// Reads the bounded encrypted shared artifact without exposing any other
+    /// worktree leaf through this capability.
+    pub fn read_encrypted_shared_artifact(
+        &self,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, FilesystemError> {
+        crate::private_input::read_from_dir(
+            &self.jury_dir_clone()?,
+            Path::new("vault.json"),
+            maximum_bytes,
+        )
+    }
+
+    /// Opaque digest of the worktree's current Git ancestry and index state.
+    /// This reads control files directly and never invokes Git.
+    pub fn git_ancestry_digest(&self) -> Result<[u8; 32], FilesystemError> {
+        let mut digest = Sha256::new();
+        digest.update(b"jury-repository-ancestry-v1\0");
+        let head = read_git_control(&self._git_dir.dir, Path::new("HEAD"), 1024, false)?
+            .ok_or_else(|| {
+                FilesystemError::new(
+                    FilesystemOperation::Preview,
+                    FilesystemErrorKind::InvalidMarker,
+                )
+            })?;
+        hash_component(&mut digest, b"HEAD", Some(&head));
+
+        let head_text = std::str::from_utf8(&head).map(str::trim).map_err(|_| {
+            FilesystemError::new(
+                FilesystemOperation::Preview,
+                FilesystemErrorKind::InvalidMarker,
+            )
+        })?;
+        let reference = head_text.strip_prefix("ref: ").map(Path::new);
+        let reference_bytes = reference
+            .map(|name| read_git_control(&self._git_dir.dir, name, 1024, true))
+            .transpose()?
+            .flatten();
+        hash_component(&mut digest, b"REF", reference_bytes.as_deref());
+        for (label, name, maximum) in [
+            (
+                b"PACKED".as_slice(),
+                Path::new("packed-refs"),
+                MAX_GIT_CONTROL_BYTES,
+            ),
+            (
+                b"LOG".as_slice(),
+                Path::new("logs/HEAD"),
+                MAX_GIT_CONTROL_BYTES,
+            ),
+            (b"INDEX".as_slice(), Path::new("index"), MAX_GIT_INDEX_BYTES),
+        ] {
+            let bytes = read_git_control(&self._git_dir.dir, name, maximum, true)?;
+            hash_component(&mut digest, label, bytes.as_deref());
+        }
+        Ok(digest.finalize().into())
     }
 
     pub(crate) fn jury_dir_clone(&self) -> Result<Dir, FilesystemError> {
@@ -313,5 +374,80 @@ fn inspect_jury_directory(worktree: &Dir) -> Result<Option<Dir>, FilesystemError
             FilesystemOperation::DiscoverRepository,
             FilesystemErrorKind::Io,
         )),
+    }
+}
+
+fn read_git_control(
+    directory: &Dir,
+    name: &Path,
+    maximum_bytes: u64,
+    optional: bool,
+) -> Result<Option<Vec<u8>>, FilesystemError> {
+    let metadata = match directory.symlink_metadata(name) {
+        Ok(metadata) => metadata,
+        Err(error) if optional && error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Preview,
+                FilesystemErrorKind::Io,
+            ));
+        }
+    };
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > maximum_bytes {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::HardLinkOrSize,
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = directory
+        .open_with(name, &options)
+        .map_err(|_| FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io))?;
+    let opened = file
+        .metadata()
+        .map_err(|_| FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io))?;
+    if opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.nlink() != 1
+        || opened.len() > maximum_bytes
+    {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::IdentityChanged,
+        ));
+    }
+    let capacity = usize::try_from(opened.len()).map_err(|_| {
+        FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::HardLinkOrSize,
+        )
+    })?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io))?;
+    file.take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io))?;
+    if bytes.len() > usize::try_from(maximum_bytes).unwrap_or(usize::MAX) {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::HardLinkOrSize,
+        ));
+    }
+    Ok(Some(bytes))
+}
+
+fn hash_component(digest: &mut Sha256, label: &[u8], bytes: Option<&[u8]>) {
+    digest.update((label.len() as u32).to_be_bytes());
+    digest.update(label);
+    match bytes {
+        Some(bytes) => {
+            digest.update([1]);
+            digest.update((bytes.len() as u64).to_be_bytes());
+            digest.update(bytes);
+        }
+        None => digest.update([0]),
     }
 }

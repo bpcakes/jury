@@ -122,6 +122,19 @@ progress, remains a conflict and requires explicit operator recovery; semantic
 diff and merge are deferred. Checking out an older or divergent artifact is
 evaluated against retained local state and never silently lowers it.
 
+Mutation dry-runs produce the exact canonical artifact bytes later consumed by
+commit; commit does not regenerate signatures, entropy, slots, or policy
+operations. Git-backed commit holds one vault/genesis edit lock shared by all
+principals and linked worktrees using the same state root, rechecks both the
+artifact digest and an opaque digest of `HEAD`, its loose ref, `packed-refs`,
+the worktree reflog, and index without invoking Git, and prepares every bounded
+output before changing a durable destination. It then publishes the acting
+principal's authenticated audit intent, atomically replaces only encrypted
+`.jury/vault.json`, and advances the separate checkpoint. A failure after the
+shared replacement is reported as committed with local recovery required;
+retry reconciles the audit/checkpoint and never republishes the shared
+mutation.
+
 Detached and global homes remain supported for users who do not want the
 documented public policy, principal/grant, size-bucket, and revision-activity
 metadata in a repository.

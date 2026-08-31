@@ -279,6 +279,25 @@ impl PrincipalLocalState {
         Ok(())
     }
 
+    /// Rebinds an authenticated audit tail left by an interrupted mutation to
+    /// the checkpoint without appending a duplicate operation event.
+    pub fn accept_audit_tail(
+        &self,
+        state: &mut VerifiedLocalState,
+        timestamp_ms: u64,
+    ) -> Result<(), LocalStateError> {
+        self.ensure_state_scope(state)?;
+        if state.audit_events_after_checkpoint == 0 {
+            return Ok(());
+        }
+        state
+            .checkpoint
+            .record_audit(state.audit.latest_mac().clone(), timestamp_ms)?;
+        state.checkpoint.authenticate(&self.checkpoint_key)?;
+        state.audit_events_after_checkpoint = 0;
+        Ok(())
+    }
+
     /// Accepts equal or authenticated descendant public state and never lowers
     /// the retained checkpoint.
     pub fn accept_candidate(
@@ -413,6 +432,11 @@ impl VerifiedLocalState {
     #[must_use]
     pub const fn audit_events_after_checkpoint(&self) -> usize {
         self.audit_events_after_checkpoint
+    }
+
+    #[must_use]
+    pub fn contains_operation(&self, operation_id: &Digest32) -> bool {
+        self.audit.contains_operation(operation_id)
     }
 }
 
