@@ -12,7 +12,7 @@ defect_class = "construction, protocol, canonical corpus, provider, state-machin
 supersession_condition = "Replace when a new authenticated witness construction/protocol version supersedes witness-v1 or witnessed access is removed."
 
 [baseline]
-revision = "ac460bea98be95a42fbd88de0446261b4e32b3fc"
+revision = "57f6c834bc71f82e85a97c4660e5e98cfdeae566"
 
 [checker]
 path = "scripts/check-witness-gate"
@@ -35,7 +35,7 @@ approver_threshold = 2
 [corpus]
 path = "conformance/witness-v1/vectors.json"
 vectors_count = 34
-byte_mutations_count = 46
+byte_mutations_count = 48
 scope_cases_count = 34
 presentation_cases_count = 12
 protocol_cases_count = 20
@@ -99,7 +99,7 @@ sha256 = "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275"
 
 [[bindings]]
 path = "docs/security/witness-v1/protocol.md"
-sha256 = "b64bc048ffb94ef20316e0c6979429e4daf3cd72fcd49a266a06fc4f769634c7"
+sha256 = "1e1c23218f668638f8fe6f24e1193f92783c57f2ee8f175a4a1142a8ea934319"
 
 [[bindings]]
 path = "docs/security/witness-v1/state-machines.md"
@@ -135,11 +135,11 @@ sha256 = "4139e99a9a3137a30450743f0454f31bb872770b23e32a9f064dbefd4a6677a2"
 
 [[bindings]]
 path = "conformance/witness-v1/alternate_runner.py"
-sha256 = "6521acb8f6ac95dbf845197ae704844f3a10d36a5d65822ed6e2e5eb4e63616e"
+sha256 = "c5ae145eadf49f03ed0c86afe729966b91e007dca9c36fc71ffa47f67e3116b3"
 
 [[bindings]]
 path = "conformance/witness-v1/src/lib.rs"
-sha256 = "7a6ffa6098ef309f21545b65e0a99f683e161381618b07bbc1bda6c8c43f16b2"
+sha256 = "50969381de3aa907de289987b54e36c1127577d54dfb83bc794260368d9c8fe9"
 
 [[bindings]]
 path = "conformance/witness-v1/src/bin/generate.rs"
@@ -147,4 +147,4 @@ sha256 = "c3b7d696a0bb88998248830fd21fd861faa7ec39284e32b194928262a5b174e3"
 
 [[bindings]]
 path = "conformance/witness-v1/vectors.json"
-sha256 = "cc8f4549cf00569ee4bfca5e5b49f2c5aecb66bf20ff593a8e5e139722f11a6b"
+sha256 = "f414f33adee09a2178609c5fc6b31a5b325bbfa6b2dc6da7ec9e6edb6266d6ff"

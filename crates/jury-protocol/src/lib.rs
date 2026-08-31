@@ -1,12 +1,11 @@
-//! Versioned protocol boundary for Jury witnesses.
-//!
-//! Message schemas and cryptographic encodings are deliberately absent until
-//! the threat model and protocol specification are reviewed.
+//! Versioned public wire formats for Jury vaults and witnesses.
 
 #![forbid(unsafe_code)]
+
+pub mod vault_v1;
 
 /// Stable protocol family name reserved by the scaffold.
 pub const PROTOCOL_FAMILY: &str = "jury";
 
-/// Indicates that no interoperable protocol version has shipped.
+/// No complete interoperable runtime protocol version has shipped.
 pub const IMPLEMENTED_PROTOCOL_VERSION: Option<u16> = None;

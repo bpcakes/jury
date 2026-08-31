@@ -1,0 +1,48 @@
+{
+  "schema": "jury-vault-v1-format-vectors",
+  "schema_version": 1,
+  "status": "pre-alpha-public-generic-fixtures-not-for-real-secrets",
+  "artifact": "example-vault.json",
+  "artifact_sha256": "67c2c921f51422d2229748f0f56aca01d40241f2f518646b0385ebb8dbf1bc73",
+  "sources": {
+    "direct": "docs/security/vectors/jury-v1-suite.json",
+    "witnessed": "conformance/witness-v1/vectors.json"
+  },
+  "negative_cases": [
+    {
+      "name": "wrong-magic",
+      "mutation": "wrong-magic",
+      "expected": "invalid"
+    },
+    {
+      "name": "unknown-version",
+      "mutation": "unknown-version",
+      "expected": "invalid"
+    },
+    {
+      "name": "unknown-suite",
+      "mutation": "unknown-suite",
+      "expected": "invalid"
+    },
+    {
+      "name": "local-state-field",
+      "mutation": "local-state-field",
+      "expected": "invalid"
+    },
+    {
+      "name": "alternate-whitespace",
+      "mutation": "alternate-whitespace",
+      "expected": "non-canonical"
+    },
+    {
+      "name": "conflict-marker",
+      "mutation": "conflict-marker",
+      "expected": "conflict-marker"
+    },
+    {
+      "name": "truncated",
+      "mutation": "truncated",
+      "expected": "invalid"
+    }
+  ]
+}
