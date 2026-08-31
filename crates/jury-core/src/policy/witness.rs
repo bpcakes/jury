@@ -546,7 +546,8 @@ pub(super) fn validate_item_policy_binding(
         || policy.revision != first.witness_policy_revision
         || policy.vault_id != state.vault_id
         || policy.genesis_fingerprint != state.genesis_fingerprint
-        || policy.vault_policy_sequence != state.sequence
+        || policy.vault_policy_sequence != first.vault_policy_sequence
+        || policy.vault_policy_sequence > state.sequence
         || policy.witness_threshold != first.threshold
     {
         return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));

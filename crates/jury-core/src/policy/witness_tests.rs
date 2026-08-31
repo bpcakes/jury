@@ -11,7 +11,7 @@ use super::{
     PolicyErrorKind, WitnessOperation, WitnessPolicy, WitnessPolicyDescriptor,
 };
 
-type AnyResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) type AnyResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn failure(message: &'static str) -> io::Error {
     io::Error::other(message)
@@ -161,7 +161,7 @@ fn parse_witness(bytes: &[u8]) -> AnyResult<WitnessPolicyDescriptor> {
     Ok(descriptor)
 }
 
-fn frozen_policy() -> AnyResult<(WitnessPolicy, Vec<u8>, Digest32)> {
+pub(crate) fn frozen_policy() -> AnyResult<(WitnessPolicy, Vec<u8>, Digest32)> {
     let corpus = corpus()?;
     let approvers = ["approver_descriptor_1", "approver_descriptor_2"]
         .iter()

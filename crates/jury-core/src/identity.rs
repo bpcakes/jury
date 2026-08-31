@@ -314,6 +314,10 @@ impl ProtectedRevisionSecret {
     pub const fn protection_status(&self) -> &jury_protected::ProtectionStatus {
         self.bytes.status()
     }
+
+    pub(crate) fn memory(&self) -> &ProtectedMemory {
+        &self.bytes
+    }
 }
 
 impl ProtectedWitnessShare {

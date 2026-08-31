@@ -169,6 +169,7 @@ pub struct PolicyState {
     pub(crate) sequence: u64,
     pub(crate) terminal_revision_hash: Digest32,
     pub(crate) principals: BTreeMap<PrincipalId, PrincipalPolicyState>,
+    pub(crate) historical_principal_descriptors: BTreeMap<PrincipalId, PrincipalDescriptorV1>,
     pub(crate) historical_principal_ids: BTreeSet<PrincipalId>,
     pub(crate) historical_recipient_keys: BTreeSet<jury_protocol::vault_v1::RecipientPublicKey1216>,
     pub(crate) historical_verification_keys:
@@ -224,6 +225,19 @@ impl PolicyState {
     #[must_use]
     pub fn item(&self, item_id: &ItemId) -> Option<&ItemPolicyState> {
         self.items.get(item_id)
+    }
+
+    pub(crate) fn witness_policy(&self, digest: &Digest32) -> Option<&WitnessPolicy> {
+        self.witness_policies.get(digest)
+    }
+
+    pub(crate) fn verification_key(
+        &self,
+        principal_id: &PrincipalId,
+    ) -> Option<jury_protocol::vault_v1::VerificationPublicKey32> {
+        self.historical_principal_descriptors
+            .get(principal_id)
+            .map(|descriptor| descriptor.verification_public_key.clone())
     }
 
     #[must_use]
@@ -352,6 +366,10 @@ impl PolicyState {
             readers.extend(item.grants.keys().copied());
         }
         readers.into_iter().collect()
+    }
+
+    pub(crate) fn owner_ids(&self) -> impl Iterator<Item = PrincipalId> + '_ {
+        self.owners.iter().copied()
     }
 
     pub fn normalized_state_hash(&self) -> Result<Digest32, PolicyError> {

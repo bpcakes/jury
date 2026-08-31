@@ -309,6 +309,10 @@ fn normalized_state_hash_matches_the_frozen_j01a_vector() -> AnyResult {
         .values()
         .map(|principal| principal.descriptor.verification_public_key.clone())
         .collect();
+    let historical_principal_descriptors = principals
+        .iter()
+        .map(|(id, principal)| (*id, principal.descriptor.clone()))
+        .collect();
     let historical_item_ids = items
         .keys()
         .copied()
@@ -321,6 +325,7 @@ fn normalized_state_hash_matches_the_frozen_j01a_vector() -> AnyResult {
         sequence,
         terminal_revision_hash: FixedBytes::new([0; 32]),
         principals,
+        historical_principal_descriptors,
         historical_principal_ids,
         historical_recipient_keys,
         historical_verification_keys,

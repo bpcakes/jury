@@ -247,6 +247,7 @@ pub(super) fn replay_policy_with_catalog(
                 display_label: "owner".to_owned(),
             },
         )]),
+        historical_principal_descriptors: BTreeMap::from([(owner_id, genesis.owner.clone())]),
         historical_principal_ids: BTreeSet::from([owner_id]),
         historical_recipient_keys: BTreeSet::from([genesis.owner.recipient_public_key.clone()]),
         historical_verification_keys: BTreeSet::from([genesis
@@ -521,6 +522,9 @@ fn add_principal(
         .historical_principal_ids
         .insert(descriptor.principal_id);
     state
+        .historical_principal_descriptors
+        .insert(descriptor.principal_id, descriptor.clone());
+    state
         .historical_recipient_keys
         .insert(descriptor.recipient_public_key.clone());
     state
@@ -702,6 +706,9 @@ fn replace_principal(
         .historical_principal_ids
         .insert(next_descriptor.principal_id);
     state
+        .historical_principal_descriptors
+        .insert(next_descriptor.principal_id, next_descriptor.clone());
+    state
         .historical_recipient_keys
         .insert(next_descriptor.recipient_public_key.clone());
     state
@@ -739,8 +746,8 @@ fn apply_rotations(
         if readers_changed && (reader_rotation.is_none() || slot_rotation.is_none()) {
             return Err(PolicyError::new(PolicyErrorKind::IncompleteRotation));
         }
-        if reader_rotation.is_some() != readers_changed {
-            return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));
+        if reader_rotation.is_some() && slot_rotation.is_none() {
+            return Err(PolicyError::new(PolicyErrorKind::IncompleteRotation));
         }
         let current_epoch = prior
             .items
@@ -838,7 +845,8 @@ fn validate_complete_state(state: &PolicyState) -> Result<(), PolicyError> {
                     )
                 || slot.item_access_mode != mode
                 || slot.key_epoch != item.key_epoch
-                || slot.policy_sequence != state.sequence
+                || slot.policy_sequence == 0
+                || slot.policy_sequence > state.sequence
             {
                 return Err(PolicyError::new(PolicyErrorKind::InvalidRole));
             }
@@ -861,7 +869,8 @@ fn validate_complete_state(state: &PolicyState) -> Result<(), PolicyError> {
                     .collect::<Vec<_>>();
                 if slot.item_access_mode != mode
                     || slot.key_epoch != item.key_epoch
-                    || slot.vault_policy_sequence != state.sequence
+                    || slot.vault_policy_sequence == 0
+                    || slot.vault_policy_sequence > state.sequence
                     || slot.threshold != first.threshold
                     || slot.witness_policy_id != first.witness_policy_id
                     || slot.witness_policy_revision != first.witness_policy_revision

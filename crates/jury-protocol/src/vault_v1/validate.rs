@@ -318,9 +318,7 @@ fn validate_operation(
             }
             validate_sorted_unique(prior_reader_ids, "prior readers are not canonical")?;
             validate_sorted_unique(next_reader_ids, "next readers are not canonical")?;
-            if prior_reader_ids == next_reader_ids
-                || replacement_descriptor.key_epoch != *next_epoch
-            {
+            if replacement_descriptor.key_epoch != *next_epoch {
                 return Err(FormatError::Invalid("reader set does not rotate"));
             }
             validate_descriptor_metadata(replacement_descriptor)?;

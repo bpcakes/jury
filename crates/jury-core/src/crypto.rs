@@ -234,27 +234,30 @@ pub(crate) fn open(
     }
     let (body, tag_bytes) = ciphertext.split_at(plaintext_length);
     let mut initializer_error = CryptoError::AuthenticationFailed;
-    let result =
-        ProtectedMemory::initialize(plaintext_length, key.status().policy(), |destination| {
-            destination.copy_from_slice(body);
-            let opened = match key.expose(|key_bytes| {
-                let cipher = Aes256GcmSiv::new_from_slice(key_bytes).map_err(|_| ())?;
-                let provider_nonce: &Nonce =
-                    nonce.as_bytes().as_slice().try_into().map_err(|_| ())?;
-                let tag: &Tag = tag_bytes.try_into().map_err(|_| ())?;
-                cipher
-                    .decrypt_inout_detached(provider_nonce, aad, destination.into(), tag)
-                    .map_err(|_| ())
-            }) {
-                Ok(opened) => opened,
-                Err(_) => {
-                    initializer_error = CryptoError::MemoryProtection;
-                    return Err(());
-                }
-            };
-            opened?;
-            Ok::<usize, ()>(destination.len())
-        });
+    let initialize = |destination: &mut [u8]| {
+        destination.copy_from_slice(body);
+        let opened = match key.expose(|key_bytes| {
+            let cipher = Aes256GcmSiv::new_from_slice(key_bytes).map_err(|_| ())?;
+            let provider_nonce: &Nonce = nonce.as_bytes().as_slice().try_into().map_err(|_| ())?;
+            let tag: &Tag = tag_bytes.try_into().map_err(|_| ())?;
+            cipher
+                .decrypt_inout_detached(provider_nonce, aad, destination.into(), tag)
+                .map_err(|_| ())
+        }) {
+            Ok(opened) => opened,
+            Err(_) => {
+                initializer_error = CryptoError::MemoryProtection;
+                return Err(());
+            }
+        };
+        opened?;
+        Ok::<usize, ()>(destination.len())
+    };
+    let result = if plaintext_length > jury_protected::MAX_PROTECTED_BYTES {
+        ProtectedMemory::initialize_large(plaintext_length, key.status().policy(), initialize)
+    } else {
+        ProtectedMemory::initialize(plaintext_length, key.status().policy(), initialize)
+    };
     result.map_err(|error| match error.kind() {
         MemoryErrorKind::Initializer => initializer_error,
         _ => CryptoError::MemoryProtection,

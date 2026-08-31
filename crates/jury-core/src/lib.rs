@@ -9,6 +9,7 @@ mod crypto;
 pub mod domain;
 pub mod entropy;
 pub mod identity;
+pub mod item;
 pub mod policy;
 
 /// Human-readable product name.

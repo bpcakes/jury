@@ -22,11 +22,12 @@ zeroization before unmap, rollback reporting, and a permanent application
 maximum. Unsafe native operations stay inside the pinned dependency; Jury
 retains `unsafe_code = "forbid"`.
 
-Jury wraps the provider with a 1 MiB hard maximum and a caller-selected logical
-capacity because native mappings are page-rounded. Provider handles, raw
-pointers, guards, and errors are private. Secret bytes are exposed only during
-checked callbacks and are never returned as owned vectors, strings, Serde
-values, or public provider guards.
+Jury wraps the provider with a 1 MiB hard maximum for compact allocations and a
+separate explicit 8 MiB maximum for authenticated large value buckets. Callers
+select the logical capacity because native mappings are page-rounded. Provider
+handles, raw pointers, guards, and errors are private. Secret bytes are exposed
+only during checked callbacks and are never returned as owned vectors, strings,
+Serde values, or public provider guards.
 
 The provider audit ran all 196 upstream feature-combination tests and all 150
 tests for Jury's selected feature set. A Rust 1.90 probe constructed a strict

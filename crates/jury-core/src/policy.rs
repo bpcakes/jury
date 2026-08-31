@@ -14,7 +14,7 @@ mod tests;
 #[cfg(test)]
 mod vector_tests;
 #[cfg(test)]
-mod witness_tests;
+pub(crate) mod witness_tests;
 
 pub use replay::{CreatedPolicy, PolicyCreator, PreparedPolicyRevision, replay_policy};
 pub use state::{

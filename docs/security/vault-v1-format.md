@@ -78,6 +78,11 @@ Canonical binary operation bytes are exactly section 11.4 of
 raw principal ID. Direct slots sort by content role, recipient ID, then their
 complete bytes.
 
+`item_reader_set_change` also carries the replacement descriptor and current
+body hash for a cover reseal or witnessed-policy rotation. In that case its
+prior and next reader lists are equal, while the epoch, both revision secrets,
+both seal IDs, both nonces, ciphertexts, and complete slot set still advance.
+
 `DescriptorMetadataV1` is revision, `RevisionSealId`, 12-byte nonce,
 ciphertext length `272`, ciphertext digest, plaintext schema `1`, and key
 epoch. Its canonical form is exactly 97 bytes.

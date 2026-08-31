@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 /// Hard ceiling for any one compact protected allocation.
 pub const MAX_PROTECTED_BYTES: usize = 1024 * 1024;
 
+/// Hard ceiling for an explicitly requested large protected allocation.
+pub const MAX_LARGE_PROTECTED_BYTES: usize = 8 * 1024 * 1024;
+
 /// Caller-selected runtime protection policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -188,7 +191,7 @@ impl std::error::Error for MemoryError {}
 /// The provider type and raw mapping never cross this boundary. Bytes are
 /// visible only during checked callbacks.
 pub struct ProtectedMemory {
-    inner: BoundedGuardedSecretVec<MAX_PROTECTED_BYTES>,
+    inner: BoundedGuardedSecretVec<MAX_LARGE_PROTECTED_BYTES>,
     logical_capacity: usize,
     status: ProtectionStatus,
 }
@@ -200,17 +203,38 @@ impl ProtectedMemory {
         policy: ProtectionPolicy,
         initializer: impl FnOnce(&mut [u8]) -> Result<usize, E>,
     ) -> Result<Self, MemoryError> {
-        if capacity == 0 || capacity > MAX_PROTECTED_BYTES {
+        Self::initialize_bounded(capacity, MAX_PROTECTED_BYTES, policy, initializer)
+    }
+
+    /// Allocates a protected owner for an explicitly large bounded value.
+    ///
+    /// Compact callers continue to use [`Self::initialize`]. This constructor
+    /// exists for authenticated formats whose selected public size bucket can
+    /// exceed the compact 1 MiB ceiling.
+    pub fn initialize_large<E>(
+        capacity: usize,
+        policy: ProtectionPolicy,
+        initializer: impl FnOnce(&mut [u8]) -> Result<usize, E>,
+    ) -> Result<Self, MemoryError> {
+        Self::initialize_bounded(capacity, MAX_LARGE_PROTECTED_BYTES, policy, initializer)
+    }
+
+    fn initialize_bounded<E>(
+        capacity: usize,
+        maximum: usize,
+        policy: ProtectionPolicy,
+        initializer: impl FnOnce(&mut [u8]) -> Result<usize, E>,
+    ) -> Result<Self, MemoryError> {
+        if capacity == 0 || capacity > maximum {
             return Err(MemoryError::new(MemoryErrorKind::Capacity));
         }
         let request = request(policy);
-        let inner =
-            BoundedGuardedSecretVec::<MAX_PROTECTED_BYTES>::try_from_capacity_with_protection(
-                capacity,
-                request,
-                initializer,
-            )
-            .map_err(map_fill_error)?;
+        let inner = BoundedGuardedSecretVec::<MAX_LARGE_PROTECTED_BYTES>::try_from_capacity_with_protection(
+            capacity,
+            request,
+            initializer,
+        )
+        .map_err(map_fill_error)?;
         let report = inner.protection_report();
         if policy == ProtectionPolicy::Strict && !report.satisfies(request) {
             return Err(MemoryError::new(MemoryErrorKind::Protection));
@@ -352,6 +376,29 @@ mod tests {
             error.map(|_| ()),
             Err(MemoryError::new(MemoryErrorKind::InvalidLength))
         );
+    }
+
+    #[test]
+    fn large_allocations_require_the_explicit_bounded_constructor() -> Result<(), MemoryError> {
+        let length = MAX_PROTECTED_BYTES + 1;
+        let compact = ProtectedMemory::initialize(
+            length,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            |bytes| Ok::<usize, ()>(bytes.len()),
+        );
+        assert!(matches!(compact, Err(error) if error.kind() == MemoryErrorKind::Capacity));
+
+        let large = ProtectedMemory::initialize_large(
+            length,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            |bytes| {
+                bytes.fill(0xa5);
+                Ok::<usize, ()>(bytes.len())
+            },
+        )?;
+        assert_eq!(large.len(), length);
+        assert_eq!(large.capacity(), length);
+        Ok(())
     }
 
     #[test]
