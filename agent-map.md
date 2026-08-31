@@ -10,6 +10,7 @@ Fast jump index for agent-facing guidance in this repository.
 
 - [crates](./crates/AGENTS.md)
 - [jury-protected](./crates/jury-protected/AGENTS.md)
+- [jury-process](./crates/jury-process/AGENTS.md)
 - [jury-filesystem](./crates/jury-filesystem/AGENTS.md)
 
 ## Suggested usage pattern

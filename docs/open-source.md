@@ -6,7 +6,7 @@ assurance.
 ## Intended public components
 
 - Vault format and cryptographic core
-- CLI for Linux and macOS
+- CLI for Linux in the first `0.x`; macOS is deferred
 - Witness protocol, schemas, verifier, and test vectors
 - Cryptographically relevant witness-server implementation
 - Recovery, rekey, revocation, and receipt-verification logic

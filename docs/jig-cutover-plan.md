@@ -11,7 +11,7 @@ Downstream consumer: Jig.
 Related Jury plan: `docs/jury-v1-master-plan.md`.
 
 Release relation: every task in this document is post-`0.x` work. The first
-Jury `0.x` ships the Linux/macOS CLI and self-hosted `juryd` without Jig
+Jury `0.x` ships the Linux CLI and self-hosted `juryd` without macOS, Jig
 migration, TUI, semantic merge, or runtime rollover/suite migration. This plan
 requires a separate activation after J26 and does not block the active Jury
 release.
@@ -117,7 +117,7 @@ Jury owns:
 - direct and witnessed key unwrapping;
 - approvals and receipts;
 - transfer, backup, restore, and recovery;
-- the Linux/macOS Jury CLI.
+- the Linux Jury CLI.
 
 Jig-vault import, a Jury TUI, and rollover remain separately deferred Jury
 scopes. This downstream plan cannot activate them by implication.

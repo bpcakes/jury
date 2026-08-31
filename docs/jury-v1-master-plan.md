@@ -35,9 +35,11 @@ elsewhere in this document.
 
 - The active deliverable is an experimental witnessed-access Jury `0.x` release
   using `jury-vault` format version 1 and witness protocol version 1. It ships
-  the `jury` CLI and self-hosted `juryd` for Linux and macOS. Both operating
-  systems are release platforms and must pass native CI, lifecycle, filesystem,
-  protected-memory, process-containment, packaging, and recovery checks.
+  the `jury` CLI and self-hosted `juryd` for Linux. Linux is the sole active
+  release platform and must pass native CI, lifecycle, filesystem,
+  protected-memory, process-containment, packaging, and recovery checks. macOS
+  implementation, native validation, packaging, and support are deferred until
+  a separately approved post-`0.x` scope.
 - J19-J23 are release-critical outcomes. Governed items require fresh signed
   approval and witness contributions for the exact revision seal and action
   manifest before read, inject, or exec can cross the guarded item boundary.
@@ -206,7 +208,7 @@ Jury v1 includes:
 - local audit and rollback checkpoints;
 - transfer, backup, and recovery;
 - hard capacity preflight that refuses before mutation;
-- a native `jury` CLI on Linux and macOS;
+- a native `jury` CLI on Linux;
 - adversarial, property, fuzz, failure-injection, and benchmark gates;
 - reproducible experimental releases with inspectable cryptographic code.
 
@@ -340,11 +342,11 @@ Native home selection has this precedence:
 5. the platform global default.
 
 The Linux global default is
-`${XDG_DATA_HOME:-$HOME/.local/share}/jury/vaults/default`. macOS uses
-`~/Library/Application Support/jury/vaults/default`. The first `0.x` rejects
-unsupported platforms rather than guessing a storage location. An explicit Jig
-adapter always passes an absolute home and does not participate in native
-discovery.
+`${XDG_DATA_HOME:-$HOME/.local/share}/jury/vaults/default`. The first `0.x`
+rejects unsupported platforms rather than guessing a storage location. A later
+platform scope must define and test its own native default before activation. An
+explicit Jig adapter always passes an absolute home and does not participate in
+native discovery.
 
 Repository discovery walks ancestors to the nearest bounded no-follow `.git`
 directory or linked-worktree `.git` file and does not place its path, repository
@@ -356,8 +358,7 @@ Private identities remain under the section 12.1 platform data root. Local
 rollback and operational state instead lives below a separate platform state
 root:
 
-- `${XDG_STATE_HOME:-$HOME/.local/state}/jury/vaults` on Linux;
-- `~/Library/Application Support/jury/state/vaults` on macOS.
+- `${XDG_STATE_HOME:-$HOME/.local/state}/jury/vaults` on Linux.
 
 `JURY_STATE_HOME` overrides that state root. The resolved state path is:
 
@@ -1001,9 +1002,10 @@ The owning delivery task compares two acceptable outcomes:
 - implement the same narrow contract using a maintained general dependency plus
   Jury-specific cleanup tests.
 
-The decision is based on cancellation semantics, Linux/macOS process-group
-behavior, signal forwarding, bounded capture, dependency maintenance, and
-license compatibility. Windows containment is deferred with Windows support.
+The decision is based on cancellation semantics, Linux process-group behavior,
+signal forwarding, bounded capture, dependency maintenance, and license
+compatibility. macOS and Windows containment are deferred with their platform
+support.
 
 The public API should express `OwnedChild`, kill-tree, wait, timeout, and cleanup
 outcomes without exposing Jig types.
@@ -1342,11 +1344,12 @@ The feature is complete when all of the following statements are true.
 10. Read, inject, exec, run, audit, backup, and restore flows have explicit Jury
     v1 CLI behavior and fail closed at access boundaries.
 
-11. Linux and macOS have explicit filesystem, protected-memory,
-    process-containment, and packaging behavior.
+11. Linux has explicit filesystem, protected-memory, process-containment, and
+    packaging behavior.
 
-12. Native CI and release rehearsal exercise both supported operating systems;
-    unsupported platforms fail explicitly.
+12. Native CI and release rehearsal exercise Linux; deferred or unsupported
+    platforms are not shipped or advertised and unsupported guarantees fail
+    explicitly.
 
 13. Binaries reject unknown Jury format, slot, protocol, and receipt versions
     rather than silently interpreting them.
@@ -1426,8 +1429,8 @@ The feature is complete when all of the following statements are true.
     page-dedicated protected-memory boundary; compact credentials and keys never
     silently fall back to ordinary pageable allocator storage.
 
-33. Portable passphrase-protected identities behave identically at their public
-    boundary on Linux and macOS; no device or hardware assurance is claimed.
+33. Portable passphrase-protected identities have an explicit Linux public
+    boundary; no device or hardware assurance is claimed.
 
 34. Encrypted item bodies and encrypted backups expose only fixed size buckets
     rather than exact logical/recovery lengths, while optional signed cover reseals are
@@ -2740,16 +2743,13 @@ identity roots and private keys, signing keys, optional epoch secrets, revision 
 audit/checkpoint seeds, and RNG seeds enter it without a prior Jury-owned ordinary
 `String`/`Vec` copy. Future device-protector adapters must define their own
 temporary-buffer contracts before activation; the first `0.x` has no such
-provider path. On Linux protected pages require
-`mlock2(MLOCK_ONFAULT)` with a verified `mlock` fallback,
-`MADV_DONTDUMP`, and `MADV_DONTFORK`; on macOS they require `mlock`, while the
-process-wide zero core limit supplies the dump control. Guard pages and page-
-rounded bounds prevent neighboring general allocations from being locked or
-exposed. Setup is all-or-nothing and drop zeroizes before unlock/unmap. Linux
-fork tests prove `MADV_DONTFORK` mappings are absent in the child. macOS code
-must not execute user-controlled work between fork and exec; post-exec tests
-prove the protected mappings are gone, while the zero core limit remains
-inherited on both platforms.
+provider path. On Linux protected pages require `mlock2(MLOCK_ONFAULT)` with a
+verified `mlock` fallback, `MADV_DONTDUMP`, and `MADV_DONTFORK`. Guard pages and
+page-rounded bounds prevent neighboring general allocations from being locked
+or exposed. Setup is all-or-nothing and drop zeroizes before unlock/unmap. Linux
+fork tests prove `MADV_DONTFORK` mappings are absent in the child. A future
+platform scope must define and natively verify equivalent guarantees before it
+can become supported.
 
 Repository-owned crates keep the workspace `unsafe_code = "forbid"` policy.
 J02 must use a maintained, pinned dependency that exposes the required native
@@ -3163,10 +3163,9 @@ not claim to cover it.
 
 Private identities live outside every vault home.
 
-The default identity root follows the platform data-directory convention:
+The default identity root follows the Linux data-directory convention:
 
-- `${XDG_DATA_HOME:-$HOME/.local/share}/jury/identities` on Linux;
-- `~/Library/Application Support/jury/identities` on macOS.
+- `${XDG_DATA_HOME:-$HOME/.local/share}/jury/identities`.
 
 `JURY_IDENTITY_HOME` overrides that identity root.
 
@@ -3279,7 +3278,7 @@ profile upgrade but never rewrite an identity as a side effect.
 #### Device-bound identity protection (deferred post-`0.x`)
 
 The first `0.x` implements only `portable` passphrase-protected identities on
-Linux and macOS. The provider model below is retained as future design; no
+Linux. The provider model below is retained as future design; no
 keychain, Secure Enclave, TPM2, FIDO2, device-enrollment, or hardware-assurance
 claim may appear in the first release.
 
@@ -5191,7 +5190,7 @@ Use these layers:
 - core API tests for partial unlock and authorization;
 - CLI parser, output, help, and raw-output tests;
 - end-to-end consumer workflows;
-- native Linux and macOS path, protected-memory, process, and restore tests;
+- native Linux path, protected-memory, process, and restore tests;
 - size and latency benchmarks with declared fixtures.
 
 ### 22.2 Required principal matrix
@@ -5417,7 +5416,7 @@ Record on a documented development machine:
 - rejected hostile KDF headers showing bounded pre-KDF work and no requested
   attacker-sized allocation;
 - protected-memory allocation/lock/unlock/zeroize costs and minimum required
-  locked-byte budget on Linux and macOS;
+  locked-byte budget on Linux;
 - body/backup padding overhead at every bucket and proof-history growth under
   documented cover cadences.
 
@@ -5541,7 +5540,7 @@ its conformance suite.
 
 ### 23.1 Release shape
 
-Deliver Jury v1 in one release only after the Linux/macOS core and CLI,
+Deliver Jury v1 in one release only after the Linux core and CLI,
 transfer, backup, witnessed protocol, self-hosted `juryd`, receipts,
 documentation, and supported-platform tests are complete.
 
@@ -5553,13 +5552,13 @@ Internal development may use test-only constructors and fixtures.
 
 ### 23.2 Read matrix
 
-The Linux and macOS binaries:
+The Linux binary:
 
 - creates, reads, and writes Jury format v1 with a selected identity;
 - never writes Jig formats;
 - rejects unknown Jury format versions and unknown slot algorithms.
 
-Windows binaries and Jig migration are not part of the first `0.x`.
+macOS and Windows binaries and Jig migration are not part of the first `0.x`.
 
 Jig binaries:
 
@@ -6268,8 +6267,8 @@ Scope:
   credentials, identity roots, optional item epoch and revision secrets, private
   keys, audit/RNG seeds,
   and provider outputs;
-- implement Linux/macOS page locking, dump exclusion, guard pages, zeroize-before-
-  unmap, and no-fork behavior where supported;
+- implement Linux page locking, dump exclusion, guard pages, zeroize-before-
+  unmap, and no-fork behavior;
 - disable ordinary process core dumps before private capture or unlock and expose
   one explicit fail-closed degraded-mode override that remains visible to callers;
 - preserve zeroization, debug redaction, path alias checks, no-follow opens,
@@ -6297,7 +6296,7 @@ Tests:
 - atomic output crash points;
 - injected randomness failure with typed value-free errors and no returned bytes;
 - secret-free error snapshots;
-- native Linux and macOS platform gates.
+- native Linux platform gates.
 
 Acceptance:
 
@@ -6430,7 +6429,7 @@ Tests:
 - hostile KDF parameters before allocation;
 - key/public descriptor correspondence;
 - selector ambiguity and path attacks;
-- portable identity round trips and identical public behavior on Linux and macOS;
+- portable identity round trips and stable public behavior on Linux;
 - passphrase change preserving principal keys;
 - principal replacement creating new keys;
 - propagated identifier entropy/retry failure, local identifier collision or
@@ -6449,8 +6448,8 @@ Acceptance:
 - witness contribution operations are bound to the exact J19 suite and revision-scoped input;
 - role-preserving rotation and replacement retain explicit public lineage without retaining old private authority;
 - exact KDF profiles and downgrade rules are tested, passphrase bytes are exact across supported platforms and input sources, and public descriptor vectors are stable;
-- Linux and macOS pass the same portable identity lifecycle and protected-memory
-  tests; CLI/help/release output advertises no device or hardware assurance.
+- Linux passes the portable identity lifecycle and protected-memory tests;
+  CLI/help/release output advertises no device or hardware assurance.
 
 Dependencies: J01B, J02, J03, J05, J19.
 
@@ -6937,8 +6936,9 @@ Scope:
 - implement process group/job ownership, timeout, kill tree, signal forwarding,
   bounded capture, pipe closure, wait, and cleanup;
 - preserve streaming redaction and independent output streams;
-- support Linux and macOS capabilities explicitly and reject unsupported
-  platforms;
+- support Linux capabilities explicitly and reject unsupported guarantees;
+- retain any provisional macOS backend only as deferred post-`0.x` work; it is
+  not release-supported and contributes no active acceptance evidence;
 - document unavoidable OS-owned secret copies.
 
 Tests:
@@ -6953,7 +6953,7 @@ Tests:
 Acceptance:
 
 - Jury never imports `jig-owned-process` at runtime;
-- child cleanup tests pass in native Linux and macOS CI;
+- child cleanup tests pass in native Linux CI;
 - unsupported guarantees fail or degrade explicitly.
 
 Dependencies: J02.
@@ -7011,7 +7011,7 @@ Scope:
 Tests:
 
 - interactive and non-interactive workflows;
-- the complete supported CLI suite on native Linux and macOS CI, including
+- the complete supported CLI suite on native Linux CI, including
   platform home discovery and protected input;
 - nested repositories, linked worktrees, explicit/global precedence, absent
   repo home init, malicious `.git`/`.jury` paths, and detached-home workflows;
@@ -7037,7 +7037,7 @@ Acceptance:
 - structured status reports direct-slot suppression and pending-request invalidation without private data;
 - inside a Git worktree, the default shared artifact is committed .jury/vault.json while identities and local state remain outside Git;
 - native CLI help does not imply Jig ownership or whole-product cryptographic review.
-- native CLI help advertises Linux and macOS, rejects unsupported platforms, and
+- native CLI help advertises Linux, rejects unsupported platforms, and
   does not advertise TUI, hardware protectors, managed service, semantic merge,
   rollover, or suite migration.
 
@@ -7264,7 +7264,7 @@ Tests:
 - existing and aliased targets;
 - real drill and failed receipt recording;
 - transfer/backup type confusion.
-- native backup, drill, and restore transactions on Linux and macOS.
+- native backup, drill, and restore transactions on Linux.
 
 Acceptance:
 
@@ -7910,7 +7910,7 @@ Tests:
 - rate-limit enumeration resistance;
 - in-flight shutdown;
 - the same conformance behavior across documented self-host configurations on
-  Linux and macOS hosts where the selected adapters support them.
+  Linux hosts where the selected adapters support them.
 
 Acceptance:
 
@@ -8180,7 +8180,7 @@ Scope:
   replacement; hard-cap refusal; and transfer inspect/strict-descendant dry-run;
 - measure portable/hardened identity and backup KDF wall time plus peak RSS,
   bounded rejection of hostile KDF headers, protected-memory lock/unlock/zeroize
-  cost and locked-byte budget on Linux and macOS, every padding bucket, and
+  cost and locked-byte budget on Linux, every padding bucket, and
   proof-history growth under documented cover cadences;
 - record no guessed absolute latency SLO; pathological superlinear behavior
   outside documented local-audit verification blocks release, and non-KDF peak
@@ -8197,8 +8197,8 @@ Acceptance:
 - every durable transaction has before/during/after crash tests;
 - repo discovery, fresh-clone trust, Git rollback detection, strict-descendant
   import, and divergent-artifact refusal have cross-boundary coverage;
-- the complete suite passes in native Linux and macOS CI with platform-specific
-  filesystem, protected-memory, and process cases enabled;
+- the complete suite passes in native Linux CI with Linux filesystem,
+  protected-memory, and process cases enabled;
 - provider implementations agree on accepted outputs and normalized rejection
   semantics across the cross-provider corpus;
 - nonce/key reuse faults and KDF resource exhaustion meet the exact J01A oracle;
@@ -8303,19 +8303,19 @@ and rehearse.
 Outcome:
 
 A fresh operator can verify, build, configure witnessed governance, self-host,
-run, back up, and recover the experimental witnessed-access release on Linux or
-macOS while understanding that Jury is externally unreviewed pre-alpha software
-and is not suitable for real secrets. J15 compatibility and J19R/J19D/J19E external-review
-work, J18 rollover/suite migration, J24 TUI work, hardware identity protectors,
-managed topology, semantic merge, and Windows support are not advertised as
-shipped.
+run, back up, and recover the experimental witnessed-access release on Linux
+while understanding that Jury is externally unreviewed pre-alpha software and
+is not suitable for real secrets. macOS and Windows support, J15 compatibility,
+J19R/J19D/J19E external-review work, J18 rollover/suite migration, J24 TUI work,
+hardware identity protectors, managed topology, and semantic merge are not
+advertised as shipped.
 
 Scope:
 
 - finalize license selection and add exact texts;
 - publish format, direct/witnessed slot, protocol, receipt, and rollback-anchor
   specifications plus the vector corpus and exact J19 gate scope;
-- produce native Linux and macOS binaries, checksums, SBOM, provenance, and
+- produce a native Linux binary, checksums, SBOM, provenance, and
   clean-environment reproducible build instructions bound to the exact J26
   candidate;
 - freeze the release-signing trust root before any signing credential exists:
@@ -8358,7 +8358,7 @@ Scope:
   creation, private-name grants, retained pre-grant ciphertext, direct
   execution, transfer, strict-descendant import, divergent-artifact refusal,
   revocation, principal replacement, cover, backup verify/drill/restore, and
-  witnessed recovery on both Linux and macOS;
+  witnessed recovery on Linux;
 - verify source and binary version identity;
 - refresh dependency ownership, checksums, feature trees, licenses, RustSec, and
   upstream advisories immediately before signing; J01B's dated snapshot
@@ -8370,8 +8370,8 @@ Acceptance:
 
 - all active dependency leaves are complete with task-local test evidence;
 - direct and witnessed release candidates pass the public conformance suite;
-- native Linux and macOS artifacts pass the complete supported-platform checks
-  and generic lifecycle rehearsal; no Windows artifact is published;
+- the native Linux artifact passes the complete supported-platform checks and
+  generic lifecycle rehearsal; no macOS or Windows artifact is published;
 - the J19 machine gate binds the exact solo-verified witnessed construction and
   rejects any changed or undispositioned revision without claiming independent
   review;

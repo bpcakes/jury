@@ -1,0 +1,23 @@
+[package]
+name = "jury-process"
+description = "Contained child-process supervision and bounded redacted output for Jury"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+jury-protected = { path = "../jury-protected" }
+wait-timeout = "=0.2.1"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "process", "std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc = "=0.14.11"
+
+[dev-dependencies]
+tempfile = "=3.23.0"
+
+[lints]
+workspace = true

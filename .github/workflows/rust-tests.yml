@@ -133,12 +133,8 @@ jobs:
         run: scripts/jig check api:fmt
 
   clippy:
-    name: scripts/jig check api:clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest", "macos-latest"]
+    name: scripts/jig check api:clippy
+    runs-on: "ubuntu-latest"
     defaults:
       run:
         shell: bash
@@ -158,12 +154,8 @@ jobs:
         run: scripts/jig check api:clippy
 
   test:
-    name: scripts/jig check api:test-locked (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-latest", "macos-latest"]
+    name: scripts/jig check api:test-locked
+    runs-on: "ubuntu-latest"
     defaults:
       run:
         shell: bash

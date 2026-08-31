@@ -3,6 +3,7 @@ members = [
     "crates/jury",
     "crates/jury-core",
     "crates/jury-filesystem",
+    "crates/jury-process",
     "crates/jury-protected",
     "crates/jury-protocol",
     "crates/jury-tui",

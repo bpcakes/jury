@@ -62,11 +62,11 @@ integration is intentionally separate in
 
 ## Workspace
 
-The first `0.x` release targets Linux and macOS through the `jury` CLI and a
-self-hosted `juryd`. Windows, the `jury-tui`, hardware-backed identity
-protectors, managed-service topology, semantic Git merge, and runtime lineage
-rollover or suite migration are deferred. Capacity exhaustion fails closed
-before mutation; divergent Git artifacts require explicit operator recovery.
+The first `0.x` release targets Linux through the `jury` CLI and a self-hosted
+`juryd`. macOS, Windows, the `jury-tui`, hardware-backed identity protectors,
+managed-service topology, semantic Git merge, and runtime lineage rollover or
+suite migration are deferred. Capacity exhaustion fails closed before mutation;
+divergent Git artifacts require explicit operator recovery.
 
 | Package | Responsibility |
 | --- | --- |

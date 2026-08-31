@@ -14,8 +14,8 @@ downstream concern documented separately in
 The active release owns the portable vault format, portable encrypted
 identities, grants, direct and witnessed item access, approval workflows,
 offline-verifiable decision receipts, the self-hostable witness service, and
-the CLI on Linux and macOS. Jury has no dependency on Jig; consumers such as Jig
-integrate through stable Jury interfaces. Windows, the TUI, hardware-backed
+the CLI on Linux. Jury has no dependency on Jig; consumers such as Jig integrate
+through stable Jury interfaces. macOS, Windows, the TUI, hardware-backed
 identity protectors, and managed-service topology are deferred.
 
 ```text
@@ -41,6 +41,56 @@ identity protectors, and managed-service topology are deferred.
 The dependency graph must remain acyclic. Storage and CLI transport details
 must not leak into `jury-core`. Protocol types cross boundaries through bounded,
 versioned contracts; HTTP and database adapters do not enter the witness engine.
+
+## Child-process containment boundary
+
+`jury-process` owns the neutral child-process boundary used by later guarded
+execution work. The active `0.x` contract supports Linux only. A provisional
+macOS backend remains in source for deferred post-`0.x` work; it is not a
+supported release surface, required CI evidence, or a shipped artifact. Targets
+without an implemented containment guarantee reject the operation before
+spawning a child instead of silently weakening cleanup. The crate has no Jig
+dependency; its design was checked against
+`jig-sh` revision `eed70cee337b0067ed92deb9fa05017b0b284605`, then implemented
+with pinned `rustix` and `wait-timeout` providers rather than retaining the
+`jig-owned-process` package identity, its unsafe libc boundary, or any Jig
+runtime dependency. The pinned external providers report MIT/Apache-family
+license options; Jury's own release license remains a separate J26 decision.
+Provisional macOS-only `libproc` remains deferred with that backend.
+
+Each child starts as leader of a new process group. Jury keeps the leader's
+wait status unconsumed while it may still signal that numeric group, forwards
+the supported portable signal set only after a fresh non-reaping identity
+check, terminates the group on success and failure paths, proves two consecutive
+quiescent group snapshots, and only then reaps the leader. The active Linux
+membership proof requires readable `/proc` process metadata. The provisional
+macOS path uses a native libproc process-group snapshot but contributes no
+active release evidence. Failure to establish those guarantees is an explicit
+cleanup error, not evidence that cleanup succeeded.
+
+Captured stdout and stderr have separate configured retention bounds and are
+drained with finite deadlines. A configured streaming redactor receives chunks
+before observers or retained captures and maintains independent stream state.
+Truncation can continue draining without retaining more bytes; a fatal overflow
+instead initiates tree cleanup. Spawn failure, pre-spawn cancellation, runtime
+cancellation, timeout, signal-forwarding failure, output failure, and cleanup
+failure remain distinguishable outcomes. Exit status exposes both an ordinary
+code and a terminating signal where the platform reports one.
+
+The containment guarantee covers descendants that remain in the created
+process group. A deliberately detached descendant that calls `setsid` or moves
+to another group is outside that guarantee. If such a process retains an output
+pipe, capture ends at its drain deadline and reports the stream incomplete;
+Jury does not wait without bound or claim that the detached process was killed.
+Callers must configure redaction before running commands that may emit sensitive
+values. These are pre-alpha execution mechanics, not a claim that Jury protects
+secrets.
+
+Containment does not erase copies owned by the caller's `Command`, Rust's spawn
+machinery, kernel pipe buffers, or the child address space. Later secret-delivery
+work must keep protected values out of argv and the ambient environment, bound
+stdin or descriptor delivery, close every local pipe owner, and configure
+streaming redaction before any output observer or capture sees bytes.
 
 ## Git-backed storage boundary
 

@@ -53,6 +53,10 @@ private callback.
 
 ## Platform status
 
+The first `0.x` release supports Linux only. The macOS and Windows rows preserve
+development/audit observations for deferred platform work; they are not active
+support, packaging, CI, or release claims.
+
 | Platform | Current J02 statement |
 | --- | --- |
 | Linux x86-64 | Runtime-tested locally: guarded mapping, page rounding, lock, `MADV_DONTDUMP`, fork exclusion, canary checks, in-place entropy, and `RLIMIT_CORE=0`. Capability traversal, links, identity replacement, modes, file/parent sync, and publication were also runtime-tested. |
