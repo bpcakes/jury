@@ -23,7 +23,9 @@ pub use catalog::{
     LookupResult, MAX_ACCESSIBLE_CATALOG_ITEMS,
 };
 pub use id::{
-    IDENTIFIER_BYTES, IDENTIFIER_HEX_LENGTH, IdentifierError, ItemId, PrincipalId, VaultId,
+    IDENTIFIER_BYTES, IDENTIFIER_COLLISION_RETRY_ATTEMPTS, IDENTIFIER_HEX_LENGTH,
+    IDENTIFIER_ZERO_RETRY_ATTEMPTS, IdentifierError, IdentifierGenerationError, ItemId,
+    NativeIdGenerator, PrincipalId, VaultId,
 };
 pub use name::{
     ConfirmedFieldName, ConfirmedItemName, FieldName, FieldNameInput, ItemName, ItemNameInput,

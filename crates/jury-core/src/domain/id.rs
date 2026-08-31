@@ -3,6 +3,13 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
+mod generator;
+
+pub use generator::{
+    IDENTIFIER_COLLISION_RETRY_ATTEMPTS, IDENTIFIER_ZERO_RETRY_ATTEMPTS, IdentifierGenerationError,
+    NativeIdGenerator,
+};
+
 /// Exact byte length of every native opaque identifier.
 pub const IDENTIFIER_BYTES: usize = 32;
 
@@ -99,6 +106,10 @@ fn encode_identifier(bytes: &[u8; IDENTIFIER_BYTES]) -> String {
     encoded
 }
 
+trait GeneratedIdentifier: Sized {
+    fn from_nonzero_bytes(bytes: [u8; IDENTIFIER_BYTES]) -> Self;
+}
+
 macro_rules! opaque_identifier {
     ($name:ident) => {
         #[doc = concat!("A typed, nonzero 256-bit ", stringify!($name), ".")]
@@ -106,7 +117,11 @@ macro_rules! opaque_identifier {
         pub struct $name([u8; IDENTIFIER_BYTES]);
 
         impl $name {
-            /// Constructs the identifier from its exact native bytes.
+            /// Parses an identifier from exact native bytes.
+            ///
+            /// This constructor exists for authenticated input, import, and
+            /// deterministic vectors. Ordinary creation uses
+            /// [`NativeIdGenerator`] so callers cannot choose new IDs.
             pub fn from_bytes(bytes: [u8; IDENTIFIER_BYTES]) -> Result<Self, IdentifierError> {
                 validate_identifier(bytes).map(Self)
             }
@@ -121,6 +136,13 @@ macro_rules! opaque_identifier {
             #[must_use]
             pub fn to_canonical_string(self) -> String {
                 encode_identifier(&self.0)
+            }
+        }
+
+        impl GeneratedIdentifier for $name {
+            fn from_nonzero_bytes(bytes: [u8; IDENTIFIER_BYTES]) -> Self {
+                debug_assert!(bytes.iter().any(|byte| *byte != 0));
+                Self(bytes)
             }
         }
 
