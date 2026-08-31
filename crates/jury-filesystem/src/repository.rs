@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
@@ -12,6 +12,7 @@ use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation};
 const MAX_GITDIR_MARKER_BYTES: u64 = 4096;
 const MAX_GIT_CONTROL_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_GIT_INDEX_BYTES: u64 = 256 * 1024 * 1024;
+const VAULT_ATTRIBUTES: &[u8] = b"vault.json -diff -merge\n";
 
 /// Retained capability to the nearest hardened Git worktree.
 pub struct RepositoryLocation {
@@ -93,7 +94,10 @@ impl RepositoryLocation {
     pub fn preview_encrypted_shared_artifact(
         &self,
     ) -> Result<crate::PrivateFilePrecondition, FilesystemError> {
-        crate::private_output::preview(&self.jury_dir_clone()?, Path::new("vault.json"))
+        crate::private_output::preview_encrypted_shared_artifact(
+            &self.jury_dir_clone()?,
+            Path::new("vault.json"),
+        )
     }
 
     /// Reads the bounded encrypted shared artifact without exposing any other
@@ -102,7 +106,7 @@ impl RepositoryLocation {
         &self,
         maximum_bytes: usize,
     ) -> Result<Vec<u8>, FilesystemError> {
-        crate::private_input::read_from_dir(
+        crate::private_input::read_public_from_dir(
             &self.jury_dir_clone()?,
             Path::new("vault.json"),
             maximum_bytes,
@@ -152,6 +156,78 @@ impl RepositoryLocation {
             hash_component(&mut digest, label, bytes.as_deref());
         }
         Ok(digest.finalize().into())
+    }
+
+    /// Creates or validates the one fixed Git attributes file used by V1.
+    /// Existing non-identical content is never overwritten.
+    pub fn ensure_vault_attributes(&self) -> Result<(), FilesystemError> {
+        let directory = self.jury_dir_clone()?;
+        match crate::private_input::read_public_from_dir(
+            &directory,
+            Path::new(".gitattributes"),
+            VAULT_ATTRIBUTES.len(),
+        ) {
+            Ok(bytes) if bytes == VAULT_ATTRIBUTES => return Ok(()),
+            Ok(_) => {
+                return Err(FilesystemError::new(
+                    FilesystemOperation::Prepare,
+                    FilesystemErrorKind::IdentityChanged,
+                ));
+            }
+            Err(error) if error.kind() == FilesystemErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        #[cfg(not(unix))]
+        return Err(FilesystemError::new(
+            FilesystemOperation::Prepare,
+            FilesystemErrorKind::Unsupported,
+        ));
+        #[cfg(unix)]
+        {
+            use cap_std::fs::OpenOptionsExt as _;
+            let mut options = OpenOptions::new();
+            options
+                .write(true)
+                .create_new(true)
+                .mode(0o644)
+                .follow(FollowSymlinks::No);
+            let mut file = match directory.open_with(".gitattributes", &options) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let bytes = crate::private_input::read_public_from_dir(
+                        &directory,
+                        Path::new(".gitattributes"),
+                        VAULT_ATTRIBUTES.len(),
+                    )?;
+                    return if bytes == VAULT_ATTRIBUTES {
+                        Ok(())
+                    } else {
+                        Err(FilesystemError::new(
+                            FilesystemOperation::Prepare,
+                            FilesystemErrorKind::IdentityChanged,
+                        ))
+                    };
+                }
+                Err(_) => {
+                    return Err(FilesystemError::new(
+                        FilesystemOperation::Prepare,
+                        FilesystemErrorKind::Io,
+                    ));
+                }
+            };
+            file.write_all(VAULT_ATTRIBUTES).map_err(|_| {
+                FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
+            })?;
+            file.sync_all().map_err(|_| {
+                FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
+            })?;
+            directory
+                .open(".")
+                .and_then(|parent| parent.sync_all())
+                .map_err(|_| {
+                    FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
+                })
+        }
     }
 
     pub(crate) fn jury_dir_clone(&self) -> Result<Dir, FilesystemError> {

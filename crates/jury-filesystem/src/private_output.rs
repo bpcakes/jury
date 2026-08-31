@@ -59,6 +59,7 @@ pub struct PrivateFilePrecondition {
     parent: Dir,
     destination: OsString,
     state: DestinationState,
+    visibility: FileVisibility,
 }
 
 impl PrivateFilePrecondition {
@@ -101,7 +102,7 @@ impl PreparedPrivateFile {
         let parent = state_root.root.dir.try_clone().map_err(|_| {
             FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
         })?;
-        prepare(parent, name, contents, policy)
+        prepare(parent, name, contents, policy, FileVisibility::OwnerOnly)
     }
 
     /// Prepares the encrypted shared artifact below a pre-existing hardened
@@ -112,7 +113,13 @@ impl PreparedPrivateFile {
         policy: PublicationPolicy,
     ) -> Result<Self, FilesystemError> {
         let parent = repository.jury_dir_clone()?;
-        prepare(parent, Path::new("vault.json"), contents, policy)
+        prepare(
+            parent,
+            Path::new("vault.json"),
+            contents,
+            policy,
+            FileVisibility::PublicEncryptedArtifact,
+        )
     }
 
     /// Prepares only if the destination still matches an earlier preview.
@@ -139,6 +146,7 @@ impl PreparedPrivateFile {
             contents,
             precondition.state,
             replace,
+            precondition.visibility,
         )
     }
 
@@ -210,6 +218,21 @@ pub(crate) fn preview(
     parent: &Dir,
     name: &Path,
 ) -> Result<PrivateFilePrecondition, FilesystemError> {
+    preview_with_visibility(parent, name, FileVisibility::OwnerOnly)
+}
+
+pub(crate) fn preview_encrypted_shared_artifact(
+    parent: &Dir,
+    name: &Path,
+) -> Result<PrivateFilePrecondition, FilesystemError> {
+    preview_with_visibility(parent, name, FileVisibility::PublicEncryptedArtifact)
+}
+
+fn preview_with_visibility(
+    parent: &Dir,
+    name: &Path,
+    visibility: FileVisibility,
+) -> Result<PrivateFilePrecondition, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Preview)?;
     let state = destination_state(parent, &destination, FilesystemOperation::Preview)?;
     Ok(PrivateFilePrecondition {
@@ -218,7 +241,14 @@ pub(crate) fn preview(
         })?,
         destination,
         state,
+        visibility,
     })
+}
+
+#[derive(Clone, Copy)]
+enum FileVisibility {
+    OwnerOnly,
+    PublicEncryptedArtifact,
 }
 
 fn prepare(
@@ -226,6 +256,7 @@ fn prepare(
     name: &Path,
     contents: &ProtectedMemory,
     policy: PublicationPolicy,
+    visibility: FileVisibility,
 ) -> Result<PreparedPrivateFile, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Prepare)?;
     let expected = destination_state(&parent, &destination, FilesystemOperation::Prepare)?;
@@ -245,7 +276,7 @@ fn prepare(
             ));
         }
     };
-    write_prepared(parent, destination, contents, expected, replace)
+    write_prepared(parent, destination, contents, expected, replace, visibility)
 }
 
 fn write_prepared(
@@ -254,10 +285,11 @@ fn write_prepared(
     contents: &ProtectedMemory,
     expected: DestinationState,
     replace: bool,
+    visibility: FileVisibility,
 ) -> Result<PreparedPrivateFile, FilesystemError> {
     #[cfg(not(unix))]
     {
-        let _ = (parent, destination, contents, expected, replace);
+        let _ = (parent, destination, contents, expected, replace, visibility);
         return Err(FilesystemError::new(
             FilesystemOperation::Prepare,
             FilesystemErrorKind::Unsupported,
@@ -271,7 +303,10 @@ fn write_prepared(
         options
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .mode(match visibility {
+                FileVisibility::OwnerOnly => 0o600,
+                FileVisibility::PublicEncryptedArtifact => 0o644,
+            })
             .follow(FollowSymlinks::No);
         let mut file = parent.open_with(&temporary, &options).map_err(|_| {
             FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
@@ -297,9 +332,14 @@ fn write_prepared(
                 ));
             }
         };
+        let mode = metadata.permissions().mode();
+        let permissions_invalid = match visibility {
+            FileVisibility::OwnerOnly => mode & 0o077 != 0,
+            FileVisibility::PublicEncryptedArtifact => mode & 0o022 != 0,
+        };
         if !metadata.is_file()
             || metadata.nlink() != 1
-            || metadata.permissions().mode() & 0o077 != 0
+            || permissions_invalid
             || cap_std::fs::MetadataExt::uid(&metadata) != rustix::process::geteuid().as_raw()
         {
             let _ = parent.remove_file(&temporary);

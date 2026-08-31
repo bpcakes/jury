@@ -504,6 +504,22 @@ fn worktree_api_can_publish_only_the_fixed_encrypted_artifact_leaf() -> Result<(
         fs::read(temp.path().join("worktree/.jury/vault.json"))?,
         b"opaque-shared-artifact"
     );
+    repository.ensure_vault_attributes()?;
+    repository.ensure_vault_attributes()?;
+    assert_eq!(
+        fs::read(temp.path().join("worktree/.jury/.gitattributes"))?,
+        b"vault.json -diff -merge\n"
+    );
+
+    fs::write(
+        temp.path().join("worktree/.jury/.gitattributes"),
+        b"vault.json merge=text\n",
+    )?;
+    let mismatch = repository
+        .ensure_vault_attributes()
+        .err()
+        .ok_or("noncanonical attributes should fail")?;
+    assert_eq!(mismatch.kind(), FilesystemErrorKind::IdentityChanged);
     Ok(())
 }
 

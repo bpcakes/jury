@@ -1,22 +1,18 @@
-use std::env;
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
-    let version = env!("CARGO_PKG_VERSION");
+use clap::Parser as _;
 
-    match env::args().nth(1).as_deref() {
-        None | Some("-h" | "--help") => {
-            print!("{}", jury::help_text(version));
+fn main() -> ExitCode {
+    let cli = jury::cli::Cli::parse();
+    let json = cli.json;
+    match jury::cli::execute(cli) {
+        Ok(output) => {
+            output.write(json);
             ExitCode::SUCCESS
         }
-        Some("-V" | "--version") => {
-            println!("jury {version}");
-            ExitCode::SUCCESS
-        }
-        Some(argument) => {
-            eprintln!("jury: command `{argument}` is not implemented");
-            eprintln!("run `jury --help` for scaffold status");
-            ExitCode::from(2)
+        Err(error) => {
+            error.write(json);
+            ExitCode::from(error.exit_code())
         }
     }
 }

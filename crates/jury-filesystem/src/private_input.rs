@@ -44,6 +44,34 @@ pub(crate) fn read_from_dir(
     name: &Path,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, FilesystemError> {
+    read_with_permissions(directory, name, maximum_bytes, PermissionProfile::OwnerOnly)
+}
+
+pub(crate) fn read_public_from_dir(
+    directory: &Dir,
+    name: &Path,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, FilesystemError> {
+    read_with_permissions(
+        directory,
+        name,
+        maximum_bytes,
+        PermissionProfile::PublicReadOnly,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PermissionProfile {
+    OwnerOnly,
+    PublicReadOnly,
+}
+
+fn read_with_permissions(
+    directory: &Dir,
+    name: &Path,
+    maximum_bytes: usize,
+    permissions: PermissionProfile,
+) -> Result<Vec<u8>, FilesystemError> {
     #[cfg(not(unix))]
     {
         let _ = (directory, name, maximum_bytes);
@@ -70,7 +98,7 @@ pub(crate) fn read_from_dir(
             };
             FilesystemError::new(FilesystemOperation::Read, kind)
         })?;
-        validate_metadata(&before, maximum_bytes)?;
+        validate_metadata(&before, maximum_bytes, permissions)?;
         let expected = ReadSnapshot::from_metadata(&before);
 
         let mut options = OpenOptions::new();
@@ -81,7 +109,7 @@ pub(crate) fn read_from_dir(
         let opened = file.metadata().map_err(|_| {
             FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
         })?;
-        validate_metadata(&opened, maximum_bytes)?;
+        validate_metadata(&opened, maximum_bytes, permissions)?;
         if ReadSnapshot::from_metadata(&opened) != expected {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,
@@ -128,7 +156,11 @@ pub(crate) fn read_from_dir(
 }
 
 #[cfg(unix)]
-fn validate_metadata(metadata: &Metadata, maximum_bytes: usize) -> Result<(), FilesystemError> {
+fn validate_metadata(
+    metadata: &Metadata,
+    maximum_bytes: usize,
+    permissions: PermissionProfile,
+) -> Result<(), FilesystemError> {
     if !metadata.is_file()
         || metadata.nlink() != 1
         || metadata.len() > u64::try_from(maximum_bytes).unwrap_or(u64::MAX)
@@ -138,7 +170,12 @@ fn validate_metadata(metadata: &Metadata, maximum_bytes: usize) -> Result<(), Fi
             FilesystemErrorKind::HardLinkOrSize,
         ));
     }
-    if metadata.permissions().mode() & 0o077 != 0
+    let mode = metadata.permissions().mode();
+    let permission_invalid = match permissions {
+        PermissionProfile::OwnerOnly => mode & 0o077 != 0,
+        PermissionProfile::PublicReadOnly => mode & 0o022 != 0,
+    };
+    if permission_invalid
         || cap_std::fs::MetadataExt::uid(metadata) != rustix::process::geteuid().as_raw()
     {
         return Err(FilesystemError::new(

@@ -94,7 +94,7 @@ streaming redaction before any output observer or capture sees bytes.
 
 ## Git-backed storage boundary
 
-Jury's intended native default inside a Git worktree is the committed portable
+Jury's native default inside a Git worktree is the committed portable
 artifact at `<worktree-root>/.jury/vault.json`. Git is an untrusted transport
 and history layer, not an authorization or integrity mechanism. Jury validates
 the artifact's own vault identity, genesis, policy ancestry, item ancestry,
@@ -138,6 +138,14 @@ mutation.
 Detached and global homes remain supported for users who do not want the
 documented public policy, principal/grant, size-bucket, and revision-activity
 metadata in a repository.
+
+The Linux CLI currently implements deterministic repository/global/explicit
+home selection, portable identity initialization and public-header status, and
+empty genesis-vault initialization/public status. Repository initialization
+creates only the encrypted artifact plus the fixed `.gitattributes` rule;
+identity and local checkpoint/audit/receipt files are created outside the
+worktree. Administrative item, policy, read, inject, and witnessed workflows
+remain incomplete and are not implied by this storage foundation.
 
 ## Intended access modes
 

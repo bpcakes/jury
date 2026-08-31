@@ -13,6 +13,22 @@ claim.
 > Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
 > must not be used with real credentials.
 
+## Available native CLI foundation
+
+The Linux CLI can now create and inspect portable identities and empty vaults:
+
+```console
+$ jury identity init
+$ jury identity status
+$ jury vault init
+$ jury vault status
+```
+
+Inside a Git worktree, vault initialization writes only encrypted
+`.jury/vault.json` and the fixed `.jury/.gitattributes` merge rule. Identities
+and authenticated local state stay in their separate Linux data/state roots.
+This is still pre-alpha plumbing, not a claim that Jury protects secrets.
+
 ## Intended experience
 
 ```console
@@ -24,8 +40,8 @@ $ jury approve REQUEST_ID
 $ jury request run REQUEST_ID
 ```
 
-These product commands are design targets, not implemented interfaces.
-Currently, `jury --help` and `jury --version` only identify the scaffold.
+The item, policy, request, approval, and execution commands in this example are
+design targets, not implemented interfaces.
 
 ## Design principles
 
