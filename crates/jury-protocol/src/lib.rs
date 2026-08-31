@@ -4,6 +4,7 @@
 
 pub mod identity_v1;
 pub mod vault_v1;
+pub mod witness_v1;
 
 /// Stable protocol family name reserved by the scaffold.
 pub const PROTOCOL_FAMILY: &str = "jury";

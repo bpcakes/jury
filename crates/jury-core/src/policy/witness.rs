@@ -344,6 +344,34 @@ impl WitnessPolicy {
         hash_body("jury-witness-v1/policy/hash", &self.canonical_body()?)
     }
 
+    pub(crate) fn active_descriptor_set_digests(
+        &self,
+    ) -> Result<(Digest32, Digest32), PolicyError> {
+        let approvers = self
+            .approver_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
+            .map(ApproverPolicyDescriptor::canonical_bytes)
+            .collect::<Result<Vec<_>, _>>()?;
+        let witnesses = self
+            .witness_descriptors
+            .iter()
+            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
+            .map(WitnessPolicyDescriptor::canonical_bytes)
+            .collect::<Vec<_>>();
+        let mut approver_list = Vec::new();
+        list_bytes(&mut approver_list, &approvers)?;
+        let mut witness_list = Vec::new();
+        list_bytes(&mut witness_list, &witnesses)?;
+        Ok((
+            hash_body(
+                "jury-witness-v1/approver-descriptor-set/hash",
+                &approver_list,
+            )?,
+            hash_body("jury-witness-v1/witness-descriptor-set/hash", &witness_list)?,
+        ))
+    }
+
     pub fn validate(&self) -> Result<(), PolicyError> {
         if self.schema != 1
             || self.revision == 0

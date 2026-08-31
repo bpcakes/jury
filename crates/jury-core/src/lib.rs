@@ -14,6 +14,7 @@ pub mod item;
 pub mod local_state;
 pub mod policy;
 pub mod session;
+pub mod witness_engine;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";

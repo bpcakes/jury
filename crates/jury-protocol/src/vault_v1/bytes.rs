@@ -289,6 +289,14 @@ identifier!(WitnessPolicyId);
 identifier!(MigrationId);
 identifier!(RolloverId);
 identifier!(ResponseId);
+identifier!(RequestId);
+identifier!(ApprovalId);
+identifier!(CancellationId);
+identifier!(RegistrationId);
+identifier!(ReceiptId);
+identifier!(RotationId);
+identifier!(RecoveryId);
+identifier!(LabelId);
 
 pub type Digest32 = FixedBytes<32>;
 pub type Signature64 = FixedBytes<64>;

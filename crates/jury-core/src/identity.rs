@@ -6,6 +6,7 @@
 use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, RandomSource};
+use jury_protocol::witness_v1::WitnessContributionEnvelopeV1;
 use jury_protocol::{
     identity_v1::{
         IdentityFileV1, IdentityFormatError, IdentityHeaderV1, KdfProfile, ProtectionMode,
@@ -122,7 +123,7 @@ impl Default for IdentityCreator<OsRandom> {
 
 impl<R: RandomSource> IdentityCreator<R> {
     #[cfg(test)]
-    fn from_source(source: R) -> Self {
+    pub(crate) fn from_source(source: R) -> Self {
         Self { source }
     }
 
@@ -281,10 +282,6 @@ pub(crate) struct ProtectedRevisionSecret {
 }
 
 /// One revision-scoped witness share which has no byte-export API.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 pub(crate) struct ProtectedWitnessShare {
     pub(crate) bytes: ProtectedMemory,
     witness_id: WirePrincipalId,
@@ -296,10 +293,6 @@ pub(crate) struct ProtectedWitnessShare {
 
 /// Request-bound context for releasing one encrypted witness share.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 pub(crate) struct WitnessContributionTarget {
     pub request_digest: Digest32,
     pub action_manifest_digest: Digest32,
@@ -313,10 +306,6 @@ pub(crate) struct WitnessContributionTarget {
 
 /// Exact J19 contribution envelope. Its plaintext share is not exportable.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 pub(crate) struct EncryptedWitnessContribution {
     pub response_id: ResponseId,
     pub share_index: u8,
@@ -334,12 +323,12 @@ impl ProtectedRevisionSecret {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 impl ProtectedWitnessShare {
     /// Consumes the share into one request-session encrypted J19 envelope.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the engine uses the injected-randomness variant")
+    )]
     pub(crate) fn seal_for_request(
         self,
         target: &WitnessContributionTarget,
@@ -347,7 +336,7 @@ impl ProtectedWitnessShare {
         self.seal_for_request_with_source(target, &mut OsRandom)
     }
 
-    fn seal_for_request_with_source(
+    pub(crate) fn seal_for_request_with_source(
         self,
         target: &WitnessContributionTarget,
         source: &mut impl RandomSource,
@@ -390,12 +379,12 @@ impl ProtectedWitnessShare {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 impl EncryptedWitnessContribution {
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "covered by the public envelope")
+    )]
     pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
         let mut output = Vec::with_capacity(1_332);
         output.extend_from_slice(&1_u16.to_be_bytes());
@@ -411,12 +400,30 @@ impl EncryptedWitnessContribution {
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "covered by the public envelope")
+    )]
     pub(crate) fn digest(&self) -> Digest32 {
         let envelope = self.canonical_bytes();
         let mut preimage = identity_jce("jury-witness-v1/contribution/hash");
         preimage.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
         preimage.extend_from_slice(&envelope);
         Digest32::new(Sha256::digest(preimage).into())
+    }
+
+    pub(crate) fn into_protocol(self) -> WitnessContributionEnvelopeV1 {
+        WitnessContributionEnvelopeV1 {
+            schema: 1,
+            response_id: self.response_id,
+            share_index: self.share_index,
+            share_commitment: self.share_commitment,
+            capsule_context_digest: self.context_digest,
+            capsule_set_digest: self.capsule_set_digest,
+            request_session_key_fingerprint: self.session_fingerprint,
+            encapsulation: self.encapsulation,
+            ciphertext: self.ciphertext,
+        }
     }
 }
 
@@ -531,10 +538,6 @@ impl VaultPrincipalIdentity {
 }
 
 impl WitnessIdentity {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "J20 consumes the role-bound signing seam")
-    )]
     pub(crate) fn sign_validated_decision(
         &self,
         preimage: &[u8],
@@ -543,10 +546,6 @@ impl WitnessIdentity {
     }
 
     /// Opens one exact J19 revision-scoped share without exporting its bytes.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-    )]
     pub(crate) fn open_contribution_share(
         &self,
         capsule: &WitnessShareCapsuleV1,
@@ -822,6 +821,55 @@ fn descriptor_from_payload(
     Ok(descriptor)
 }
 
+#[cfg(test)]
+pub(crate) fn unlocked_identity_for_test(
+    principal_id: WirePrincipalId,
+    principal_kind: PrincipalKind,
+    source: &mut impl RandomSource,
+) -> Result<UnlockedIdentity, IdentityError> {
+    let policy = jury_protected::ProtectionPolicy::Strict;
+    let (recipient_seed, recipient_public_key) =
+        crypto::generate_recipient_keypair(policy, source).map_err(map_crypto_error)?;
+    let signing_seed = crypto::random_secret(32, policy, source).map_err(map_crypto_error)?;
+    let local_seed = crypto::random_secret(32, policy, source).map_err(map_crypto_error)?;
+    ensure_distinct_secrets(&recipient_seed, &signing_seed, &local_seed)?;
+    let verification_public_key =
+        crypto::verification_public_key(&signing_seed).map_err(map_crypto_error)?;
+    let header = IdentityHeaderV1 {
+        identity_format: 1,
+        principal_id,
+        principal_kind,
+        recipient_public_key,
+        verification_public_key,
+        descriptor_fingerprint: Digest32::new([1; 32]),
+        created_at_ms: 1,
+        kdf_profile: KdfProfile::PortableV1,
+        argon2_version: 0x13,
+        memory_kib: KdfProfile::PortableV1.memory_kib(),
+        passes: 3,
+        lanes: 4,
+        salt: Salt16::new([1; 16]),
+        protection_mode: ProtectionMode::Portable,
+        provider_kind: ProviderKind::new(Vec::new())
+            .map_err(|_| IdentityError::new(IdentityErrorKind::Format))?,
+        provider_metadata: ProviderMetadata::new(Vec::new())
+            .map_err(|_| IdentityError::new(IdentityErrorKind::Format))?,
+        root_wrap_algorithm: 1,
+        root_wrap_nonce: Nonce12::new([1; 12]),
+        payload_algorithm: 1,
+        payload_nonce: Nonce12::new([2; 12]),
+    };
+    let payload = build_payload(&header, &recipient_seed, &signing_seed, &local_seed, policy)?;
+    let secrets = IdentitySecrets { header, payload };
+    Ok(match principal_kind {
+        PrincipalKind::Human | PrincipalKind::Machine => {
+            UnlockedIdentity::VaultPrincipal(VaultPrincipalIdentity(secrets))
+        }
+        PrincipalKind::Approver => UnlockedIdentity::Approver(ApproverIdentity(secrets)),
+        PrincipalKind::Witness => UnlockedIdentity::Witness(WitnessIdentity(secrets)),
+    })
+}
+
 fn sign_payload_statement(
     payload: &ProtectedMemory,
     preimage: &[u8],
@@ -899,10 +947,6 @@ const fn map_format_error(_: IdentityFormatError) -> IdentityError {
     IdentityError::new(IdentityErrorKind::Format)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
-)]
 fn identity_jce(domain: &str) -> Vec<u8> {
     let mut output = Vec::with_capacity(domain.len() + 3);
     output.extend_from_slice(domain.as_bytes());
