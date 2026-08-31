@@ -98,9 +98,6 @@ serves that outcome and never becomes the product.
   regeneration to force green, hard-coded success paths, placeholder macros
   in commits, editing the spec instead of implementing it, narrowing scope
   while claiming full success.
-- No self-certification: work is closed by an independent verifier citing
-  evidence at an exact revision. Solo sessions re-verify by re-execution and
-  state what was not independently verified.
 - A typed refusal beats a fabricated result and is less valuable than the
   real capability; refusal-only work stays open and says so.
 - Truthful null results ("checked X, found no material increment") are

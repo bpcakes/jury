@@ -5741,10 +5741,11 @@ Every task-local `Unblocks` list below names immediate blocking-edge consumers,
 not merely transitive downstream outcomes. Tracker metadata is the executable
 source for those edges and must remain identical to the task-local list.
 
-J01A is blocked pending an author-distinct verifier; J12 is the current ready
-active outcome. J01B is blocked by J01A, and J19A is blocked by J01B and J03.
-J19C feeds the exact-artifact J19 gate that blocks the format and witnessed
-path. Deferred branches have no edge back into the active release path.
+J01A and J12 have completed their task-local acceptance checks. J01A unblocks
+J01B, J03, and J05; J12 supplies the process boundary consumed later by J14.
+J19A remains blocked by J01B and J03. J19C feeds the exact-artifact J19 gate
+that blocks the format and witnessed path. Deferred branches have no edge back
+into the active release path.
 
 J26 is the active release join and is not allowed to hide incomplete active
 children. J19-J23 and J25 remain mandatory release dependencies. J15, J18, J24,
@@ -6148,11 +6149,6 @@ Acceptance:
   mutation is permitted;
 - no production provider dependency, adapter, or cryptographic implementation
   lands.
-- a verifier other than the artifact author cites the exact revision and reruns
-  both the specification/size/encoding calculations and every
-  claim-to-analysis/composition trace before closure; this is a reproducibility
-  check, not independent cryptographic review. A solo rerun is recorded honestly
-  and does not count as independent verification.
 
 Dependencies: none.
 

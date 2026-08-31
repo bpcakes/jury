@@ -1,7 +1,7 @@
 # Jury v1 provider-neutral cryptographic suite
 
-Status: **candidate J01A freeze awaiting author-distinct reproducibility
-verification; pre-alpha; not approved for real secrets**.
+Status: **frozen J01A suite; pre-alpha; not independently reviewed; not
+approved for real secrets**.
 
 This document defines the cryptographic properties and exact shared/direct
 construction that J01B must implement and prove. It is not a provider selection,
@@ -684,7 +684,7 @@ revocation, or proof that old copies were deleted.
 J01A corpus. It contains the source hashes, one official selected HPKE vector
 locator, fixture inputs, exact JCE1 preimages and SHA-256/HMAC/HKDF outputs, and
 an Ed25519 signature corpus. Its frozen SHA-256 is
-`204ff421daa6b56f4b8481291988a0eea9628e016833483720d72d81ccfb7486`.
+`15890c448a3d6efa160e5d5f196dd8b07c672a6662b33086a7ca19bfc4bab79b`.
 It contains 46 JCE1 preimages, two independently encapsulated positive direct
 slots, a positive registration challenge, both Argon2id profiles, descriptor
 and body AES-GCM-SIV examples, portable/device identity headers, absent/legacy/
@@ -734,8 +734,8 @@ J01B.
 | positive, negative, fault, migration, and cross-provider vectors | section 15 and the linked corpus |
 | no provider implementation or FIPS-validation claim | document status, sections 2, 4, and 12 |
 
-Closure still requires an author-distinct verifier to cite the exact artifact
-revision and independently rerun specification/size/encoding calculations plus
-every claim-to-analysis/composition trace. A solo rerun is useful engineering
-evidence but is not independent verification or independent cryptographic
-review.
+J01A acceptance is based on the recorded exact-artifact reproduction and
+task-local checks. Those checks are engineering evidence, not independent
+cryptographic review, security certification, or approval for real secrets.
+J01B, J19, J25, and J26 retain their implementation, construction, adversarial,
+and release gates.

@@ -849,7 +849,7 @@
     "quantum-sponge-analysis-2025-731.pdf": "dadb7c1066290412255ae2db5cd3e6c66452a838600e5e5497cd81dd88e08a1f",
     "xwing-analysis-2024-039.pdf": "773d00abefd9e88552c8d5f4f04ae95597ff4844b56964d99be76be45632280d"
   },
-  "status": "candidate freeze awaiting author-distinct reproducibility verification",
+  "status": "frozen J01A suite; pre-alpha; not independently reviewed",
   "suite": {
     "hpke": {
       "aead_id": 3,

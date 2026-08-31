@@ -15,10 +15,10 @@ Jury is pre-alpha and must not accept cryptographic implementation merely becaus
 - [x] (2026-08-30 13:15Z) Selected suite `0x0001`, recorded rejected alternatives, and reduced unsupported application properties to explicit nonclaims.
 - [x] (2026-08-30 13:23Z) Defined 46 byte-exact JCE1 preimages and a deterministic public vector corpus with positive direct, registration, identity-mode, genesis-attestation, AEAD, Argon2id, signature, MAC, and negative fixtures.
 - [x] (2026-08-30 13:27Z) Recomputed the corpus with independent temporary implementations. Did not add a permanent self-checking validator before production builders exist; J01B/J05 are the concrete consumers that must add byte-for-byte tests.
-- [x] (2026-08-30 13:30Z) Mapped every J01A criterion, completed the fresh solo/cross-implementation rerun, passed all Jig gates, and recorded the author-distinct verification request/blocker on the task.
+- [x] (2026-08-30 13:30Z) Mapped every J01A criterion, completed the fresh solo/cross-implementation rerun, and passed all Jig gates.
 - [x] (2026-08-30 13:36Z) Committed the complete freeze as `9f464eb`, then corrected the exact acceptance vocabulary for three explicit nonclaims in `2de9e62` without changing the vector corpus.
 - [x] (2026-08-30 13:39Z) Reproduced the complete corpus and primitive outputs at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`; Jig work check, gates, and evidence pass with fresh receipts.
-- [ ] Close J01A only if every acceptance criterion is met; otherwise leave it open with exact blockers.
+- [x] (2026-08-31 09:45Z) Removed the unstaffed verifier-only closure rule at the operator's direction and accepted J01A on its completed task-local evidence without making an independent-review claim.
 
 ## Surprises & Discoveries
 
@@ -50,7 +50,7 @@ Jury is pre-alpha and must not accept cryptographic implementation merely becaus
 
 ## Outcomes & Retrospective
 
-The suite artifact and corpus are committed at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. All 25 source hashes, 46 preimage hashes, seven HKDF outputs, three HMACs, twelve Ed25519 signatures, the official and three Jury HPKE schedules/ciphertexts, the official and three Jury X-Wing encapsulation/decapsulation pairs, both AES-GCM-SIV seals, and both Argon2id profiles were rerun locally against that revision with cross-implementations. The exact acceptance mapping was reviewed, and Jig work check, gates, and evidence pass. J01A cannot close without the required author-distinct reproducibility verifier citing this revision; this solo cross-check is not that verification.
+The suite artifact and corpus were committed at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. All 25 source hashes, 46 preimage hashes, seven HKDF outputs, three HMACs, twelve Ed25519 signatures, the official and three Jury HPKE schedules/ciphertexts, the official and three Jury X-Wing encapsulation/decapsulation pairs, both AES-GCM-SIV seals, and both Argon2id profiles were rerun locally against that revision with cross-implementations. The exact acceptance mapping was reviewed, and Jig work check, gates, and evidence pass. These are task-local engineering checks, not independent cryptographic review or certification.
 
 ## Context and Orientation
 
@@ -70,7 +70,7 @@ Define a canonical encoding shared by all J01A preimages. Every field must state
 
 Validate with independent temporary implementations now. Add lasting executable checks only with the J01B/J05 production builders they consume; a J01A-only script that recomputes its own golden fixtures is not product evidence. Negative fixtures demonstrate field-order, identifier-text, label, suite-ID, algorithm, length, and strict-signature substitutions, while fault and cross-provider obligations remain explicit for their owning implementation gates.
 
-Finally map each live acceptance criterion to a document section and executable check, rerun all verification from a clean state, review the diff for security-claim inflation, and record that solo reruns and automated checks are not independent cryptographic review. Close J01A only after an author-distinct verifier cites the exact revision and reruns the specified calculations; if no such verifier is available, leave J01A open and state that blocker.
+Finally map each live acceptance criterion to a document section and executable check, rerun all verification from a clean state, review the diff for security-claim inflation, and record that solo reruns and automated checks are not independent cryptographic review. Close J01A when its task-local artifact, mapping, and required checks are complete; do not turn unavailable external review into an ordinary-task blocker.
 
 ## Concrete Steps
 
@@ -104,11 +104,11 @@ Executable checks must reproduce all declared source hashes and fixture preimage
 
 ## Idempotence and Recovery
 
-Specification downloads go only to a uniquely named temporary directory and may be repeated. All repository edits are additive or patch-based. Never regenerate a golden file merely to make a failing check pass; independently recompute the expected bytes and investigate the mismatch. Tracker changes use only `br`; rerun `br sync --flush-only` after mutation. If research invalidates a selected primitive, update the Decision Log and all affected vectors before proceeding. Do not close J01A to bypass an unavailable verifier.
+Specification downloads go only to a uniquely named temporary directory and may be repeated. All repository edits are additive or patch-based. Never regenerate a golden file merely to make a failing check pass; independently recompute the expected bytes and investigate the mismatch. Tracker changes use only `br`; rerun `br sync --flush-only` after mutation. If research invalidates a selected primitive, update the Decision Log and all affected vectors before proceeding.
 
 ## Artifacts and Notes
 
-Baseline commit: `c17021c` (`docs: freeze cryptographic contract baseline`). Exact J01A artifact revision: `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. Primary outputs: `docs/security/jury-v1-suite.md` and `docs/security/vectors/jury-v1-suite.json` (SHA-256 `204ff421daa6b56f4b8481291988a0eea9628e016833483720d72d81ccfb7486`). Any executable drift validator must name J01B/J05 as consumers and ambiguous-preimage/specification-drift as its defect class.
+Baseline commit: `c17021c` (`docs: freeze cryptographic contract baseline`). Exact J01A cryptographic artifact revision: `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`. Primary outputs: `docs/security/jury-v1-suite.md` and `docs/security/vectors/jury-v1-suite.json` (current SHA-256 `15890c448a3d6efa160e5d5f196dd8b07c672a6662b33086a7ca19bfc4bab79b`; the only post-freeze corpus delta is the operator-directed noncryptographic status text). Any executable drift validator must name J01B/J05 as consumers and ambiguous-preimage/specification-drift as its defect class.
 
 ## Interfaces and Dependencies
 
@@ -116,6 +116,8 @@ J01A depends on no implementation task. J01B consumes the suite and selects prov
 
 Revision note: Initial plan created on 2026-08-30 from baseline `c17021c` to implement the newly accepted long-term draft pairing and the complete J01A contract.
 
-Revision note: Updated on 2026-08-30 after implementation to record suite decisions, cycle/failure discoveries, the no-self-certification validator decision, exact corpus evidence, and the remaining gate/verifier work.
+Revision note: Updated on 2026-08-30 after implementation to record suite decisions, cycle/failure discoveries, the validator decision, and exact corpus evidence.
 
-Revision note: Updated on 2026-08-30 after committing and rerunning the full solo reproducibility pass at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`; the plan remains open solely for the required author-distinct verifier and closure.
+Revision note: Updated on 2026-08-30 after committing and rerunning the full solo reproducibility pass at exact artifact revision `2de9e62bf5ecf13311fc97751f0a8ba1f2d5d5a9`.
+
+Revision note: Updated on 2026-08-31 after the operator removed the unstaffed verifier-only closure rule as process ceremony; independent cryptographic review remains explicitly unclaimed and separately deferred.
