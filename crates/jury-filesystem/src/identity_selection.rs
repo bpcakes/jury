@@ -4,10 +4,12 @@ use std::path::{Component, Path, PathBuf};
 use jury_protected::ProtectedMemory;
 
 use crate::{
-    FilesystemError, HardenedStateRoot, PreparedPrivateFile, PublicationPolicy, RepositoryLocation,
+    FilesystemError, FilesystemErrorKind, FilesystemOperation, HardenedStateRoot,
+    PreparedPrivateFile, PublicationPolicy, RepositoryLocation,
 };
 
 pub const MAX_IDENTITY_NAME_BYTES: usize = 64;
+pub const MAX_NAMED_IDENTITIES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdentitySelectionError {
@@ -129,6 +131,45 @@ impl IdentitySelector {
             }
         }
     }
+}
+
+/// Lists only canonical direct named-identity children without opening them.
+/// Callers remain responsible for bounded parsing of every returned file.
+pub fn list_named_identities(
+    named_root: &HardenedStateRoot,
+) -> Result<Vec<IdentityName>, FilesystemError> {
+    let entries =
+        named_root.root.dir.entries().map_err(|_| {
+            FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
+        })?;
+    let mut identities = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
+        })?;
+        let filename = entry.file_name();
+        let Some(filename) = filename.to_str() else {
+            continue;
+        };
+        let Some(name) = filename.strip_suffix(".identity.json") else {
+            continue;
+        };
+        let Ok(name) = IdentityName::parse(name) else {
+            continue;
+        };
+        if name.filename() != filename {
+            continue;
+        }
+        if identities.len() == MAX_NAMED_IDENTITIES {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Read,
+                FilesystemErrorKind::HardLinkOrSize,
+            ));
+        }
+        identities.push(name);
+    }
+    identities.sort_unstable();
+    Ok(identities)
 }
 
 impl fmt::Debug for IdentitySelector {

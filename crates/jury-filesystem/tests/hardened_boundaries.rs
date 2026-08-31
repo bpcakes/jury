@@ -8,7 +8,7 @@ use std::path::Path;
 use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
     IdentitySelector, PreparedPrivateFile, PublicationOutcome, PublicationPolicy,
-    RepositoryLocation,
+    RepositoryLocation, list_named_identities,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -274,6 +274,15 @@ fn named_and_explicit_identity_files_use_hardened_bounded_io() -> Result<(), Box
     assert_eq!(
         named.read(&named_root, &[], 64)?,
         b"ExampleEncryptedIdentity"
+    );
+    fs::write(temp.path().join("named/ignored.txt"), b"ignored")?;
+    fs::write(temp.path().join("named/.hidden.identity.json"), b"ignored")?;
+    assert_eq!(
+        list_named_identities(&named_root)?
+            .iter()
+            .map(|name| name.as_str())
+            .collect::<Vec<_>>(),
+        ["ExampleIdentity"]
     );
     let named_path = temp.path().join("named/ExampleIdentity.identity.json");
     assert_eq!(

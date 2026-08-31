@@ -19,7 +19,9 @@ The Linux CLI can now create and inspect portable identities and empty vaults:
 
 ```console
 $ jury identity init
+$ jury identity list
 $ jury identity status
+$ jury identity passphrase change
 $ jury vault init
 $ jury vault status
 ```

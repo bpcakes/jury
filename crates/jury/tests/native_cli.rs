@@ -90,6 +90,20 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_eq!(identity_status["operation"], "identity-status");
     assert_eq!(identity_status["public_fields_authenticated"], false);
     assert_eq!(identity_status["private_payload_verified"], false);
+    let identities = success_json(run(
+        &repository,
+        &data,
+        &state,
+        &["--json", "identity", "list"],
+        b"",
+    )?)?;
+    assert_eq!(identities["operation"], "identity-list");
+    assert_eq!(identities["count"], 1);
+    assert_eq!(identities["identities"][0]["name"], "default");
+    assert_eq!(
+        identities["identities"][0]["principal_id"],
+        identity["principal_id"]
+    );
 
     let vault = success_json(run(
         &repository,
@@ -151,6 +165,36 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_eq!(status["item_count"], 0);
     assert_eq!(status["vault_id"], vault["vault_id"]);
     assert_eq!(status["genesis_fingerprint"], vault["genesis_fingerprint"]);
+
+    let changed = success_json(run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "identity",
+            "passphrase",
+            "change",
+        ],
+        b"ExamplePass1234\nExamplePass5678\nExamplePass5678\n",
+    )?)?;
+    assert_eq!(changed["operation"], "identity-passphrase-change");
+    assert_eq!(changed["principal_keys_changed"], false);
+    assert_eq!(changed["principal_id"], identity["principal_id"]);
+    assert_eq!(changed["fingerprint"], identity["fingerprint"]);
+
+    let after_change = success_json(run(
+        &repository,
+        &data,
+        &state,
+        &["--json", "identity", "status"],
+        b"",
+    )?)?;
+    assert_eq!(after_change["principal_id"], identity["principal_id"]);
+    assert_eq!(after_change["fingerprint"], identity["fingerprint"]);
+    assert_eq!(after_change["kdf_profile"], "portable-v1");
     Ok(())
 }
 

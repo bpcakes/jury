@@ -13,7 +13,7 @@ use jury_core::policy::{PolicyCreator, replay_policy};
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, PreparedPrivateFile,
     PrincipalStateFile, PublicationOutcome, PublicationPolicy, RepositoryLocation,
-    VaultStateDirectory, resolve_linux_state_root,
+    VaultStateDirectory, list_named_identities, resolve_linux_state_root,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 use jury_protocol::identity_v1::{IdentityFileV1, KdfProfile, MAX_IDENTITY_FILE_BYTES};
@@ -97,8 +97,21 @@ pub enum Command {
 pub enum IdentityCommand {
     /// Create one portable passphrase-protected identity.
     Init(IdentityInitArgs),
+    /// List canonical named identities without unlocking them.
+    List,
     /// Inspect the bounded public identity header without unlocking it.
     Status(IdentityStatusArgs),
+    /// Change identity storage credentials.
+    Passphrase {
+        #[command(subcommand)]
+        command: IdentityPassphraseCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IdentityPassphraseCommand {
+    /// Re-encrypt the same private identity payload under a new passphrase.
+    Change(IdentityPassphraseChangeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -119,6 +132,17 @@ pub struct IdentityStatusArgs {
     /// Named identity below the identity root.
     #[arg(long, value_name = "NAME")]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct IdentityPassphraseChangeArgs {
+    /// Select the resulting KDF profile; omission retains the current profile.
+    #[arg(long = "kdf-profile", value_enum)]
+    pub kdf_profile: Option<KdfProfileArg>,
+
+    /// Explicitly permit hardened-to-portable KDF downgrade.
+    #[arg(long, requires = "kdf_profile")]
+    pub allow_kdf_downgrade: bool,
 }
 
 #[derive(Debug, Args, Default)]
@@ -190,6 +214,17 @@ pub enum CommandOutput {
         lanes: u32,
         stronger_profile_available: bool,
     },
+    IdentityList {
+        identities: Vec<IdentitySummary>,
+    },
+    IdentityPassphraseChanged {
+        identity: String,
+        principal_id: String,
+        fingerprint: String,
+        kdf_profile: &'static str,
+        protection_degraded: bool,
+        durability: &'static str,
+    },
     VaultCreated {
         home_source: &'static str,
         vault_id: String,
@@ -209,6 +244,15 @@ pub enum CommandOutput {
         item_count: usize,
         artifact_bytes: usize,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdentitySummary {
+    name: String,
+    principal_id: String,
+    fingerprint: String,
+    kind: &'static str,
+    kdf_profile: &'static str,
 }
 
 impl CommandOutput {
@@ -267,6 +311,43 @@ impl CommandOutput {
                 "public_fields_authenticated": false,
                 "private_payload_verified": false,
                 "protection_mode": "portable",
+                "maturity": "pre-alpha"
+            }),
+            Self::IdentityList { identities } => serde_json::json!({
+                "ok": true,
+                "operation": "identity-list",
+                "count": identities.len(),
+                "identities": identities
+                    .iter()
+                    .map(|identity| serde_json::json!({
+                        "name": identity.name,
+                        "principal_id": identity.principal_id,
+                        "fingerprint": identity.fingerprint,
+                        "kind": identity.kind,
+                        "kdf_profile": identity.kdf_profile,
+                        "public_fields_authenticated": false,
+                        "private_payload_verified": false
+                    }))
+                    .collect::<Vec<_>>(),
+                "maturity": "pre-alpha"
+            }),
+            Self::IdentityPassphraseChanged {
+                identity,
+                principal_id,
+                fingerprint,
+                kdf_profile,
+                protection_degraded,
+                durability,
+            } => serde_json::json!({
+                "ok": true,
+                "operation": "identity-passphrase-change",
+                "identity": identity,
+                "principal_id": principal_id,
+                "fingerprint": fingerprint,
+                "kdf_profile": kdf_profile,
+                "principal_keys_changed": false,
+                "protection_degraded": protection_degraded,
+                "durability": durability,
                 "maturity": "pre-alpha"
             }),
             Self::VaultCreated {
@@ -362,6 +443,36 @@ impl CommandOutput {
                 println!("KDF: {kdf_profile}; {memory_kib} KiB; {passes} passes; {lanes} lanes");
                 println!("Stronger profile available: {stronger_profile_available}");
                 println!("Public fields authenticated: false (unlock not performed)");
+            }
+            Self::IdentityList { identities } => {
+                println!("Named identities: {}", identities.len());
+                for identity in identities {
+                    println!(
+                        "{}: {} {} {} ({})",
+                        identity.name,
+                        identity.kind,
+                        identity.principal_id,
+                        grouped(&identity.fingerprint),
+                        identity.kdf_profile
+                    );
+                }
+                println!("Public fields authenticated: false (unlock not performed)");
+            }
+            Self::IdentityPassphraseChanged {
+                identity,
+                principal_id,
+                fingerprint,
+                kdf_profile,
+                protection_degraded,
+                durability,
+            } => {
+                println!("Identity passphrase changed: {identity}");
+                println!("Principal: {principal_id}");
+                println!("Fingerprint: {}", grouped(fingerprint));
+                println!("KDF profile: {kdf_profile}");
+                println!("Principal keys changed: false");
+                println!("Protection degraded: {protection_degraded}");
+                println!("Durability: {durability}");
             }
             Self::VaultCreated {
                 home_source,
@@ -504,8 +615,17 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
             command: IdentityCommand::Init(arguments),
         } => identity_init(&cli, arguments, &environment, &current, protection),
         Command::Identity {
+            command: IdentityCommand::List,
+        } => identity_list(&cli, &environment, &current),
+        Command::Identity {
             command: IdentityCommand::Status(arguments),
         } => identity_status(&cli, arguments, &environment, &current),
+        Command::Identity {
+            command:
+                IdentityCommand::Passphrase {
+                    command: IdentityPassphraseCommand::Change(arguments),
+                },
+        } => identity_passphrase_change(&cli, arguments, &environment, &current, protection),
         Command::Init(arguments) => vault_init(&cli, arguments, &environment, &current, protection),
         Command::Vault {
             command: VaultCommand::Init(arguments),
@@ -600,6 +720,116 @@ fn identity_status(
         passes: identity.header.passes,
         lanes: identity.header.lanes,
         stronger_profile_available: identity.header.kdf_profile == KdfProfile::PortableV1,
+    })
+}
+
+fn identity_list(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+) -> Result<CommandOutput, CliError> {
+    let home = selected_home(cli, environment, current)?;
+    let identity_root = identity_root(environment)?;
+    validate_detached_separation(&identity_root, &home)?;
+    let repositories = repository_refs(&home);
+    let root = match HardenedStateRoot::open_existing(&identity_root, &repositories) {
+        Ok(root) => root,
+        Err(error) if error.kind() == FilesystemErrorKind::NotFound => {
+            return Ok(CommandOutput::IdentityList {
+                identities: Vec::new(),
+            });
+        }
+        Err(error) => return Err(map_filesystem_error(error)),
+    };
+    let mut identities = Vec::new();
+    for name in list_named_identities(&root).map_err(map_filesystem_error)? {
+        let selector = IdentitySelector::select(Some(name.as_str()), None).map_err(|_| {
+            CliError::new(
+                CliErrorKind::InvalidIdentity,
+                "invalid-identity",
+                "a named identity is invalid",
+            )
+        })?;
+        let bytes = selector
+            .read(&root, &repositories, MAX_IDENTITY_FILE_BYTES)
+            .map_err(map_filesystem_error)?;
+        let identity = IdentityFileV1::parse(&bytes).map_err(|_| invalid_identity())?;
+        identities.push(IdentitySummary {
+            name: name.as_str().to_owned(),
+            principal_id: hex(identity.header.principal_id.as_bytes()),
+            fingerprint: hex(identity.header.descriptor_fingerprint.as_bytes()),
+            kind: principal_kind(identity.header.principal_kind),
+            kdf_profile: kdf_profile(identity.header.kdf_profile),
+        });
+    }
+    Ok(CommandOutput::IdentityList { identities })
+}
+
+fn identity_passphrase_change(
+    cli: &Cli,
+    arguments: &IdentityPassphraseChangeArgs,
+    environment: &Environment,
+    current: &Path,
+    protection: ProtectionPolicy,
+) -> Result<CommandOutput, CliError> {
+    if arguments.allow_kdf_downgrade && arguments.kdf_profile != Some(KdfProfileArg::Portable) {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "invalid-kdf-downgrade-selection",
+            "KDF downgrade approval requires an explicit portable profile",
+        ));
+    }
+    let home = selected_home(cli, environment, current)?;
+    let (selector, display_name) = selected_identity(cli, None, environment)?;
+    validate_explicit_identity_separation(&selector, &home)?;
+    let identity_root = identity_root(environment)?;
+    validate_detached_separation(&identity_root, &home)?;
+    let repositories = repository_refs(&home);
+    let root = HardenedStateRoot::open_existing(&identity_root, &repositories)
+        .map_err(map_filesystem_error)?;
+    let bytes = selector
+        .read(&root, &repositories, MAX_IDENTITY_FILE_BYTES)
+        .map_err(map_filesystem_error)?;
+    let identity = IdentityFileV1::parse(&bytes).map_err(|_| invalid_identity())?;
+    let resulting_profile = arguments
+        .kdf_profile
+        .map(KdfProfile::from)
+        .unwrap_or(identity.header.kdf_profile);
+
+    let old =
+        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
+    let new =
+        secret_input::capture(protection, cli.passphrase_stdin, true).map_err(map_secret_error)?;
+    let replacement = IdentityCreator::new()
+        .change_passphrase(
+            &identity,
+            old.memory(),
+            new.memory(),
+            resulting_profile,
+            arguments.allow_kdf_downgrade,
+        )
+        .map_err(|error| map_identity_error(error.kind()))?;
+    let replacement_bytes = replacement
+        .to_json_bytes()
+        .map_err(|_| invalid_identity())?;
+    let protected = protect(&replacement_bytes, protection)?;
+    let publication = selector
+        .prepare(
+            &root,
+            &repositories,
+            &protected,
+            PublicationPolicy::ReplaceExisting,
+        )
+        .map_err(map_filesystem_error)?
+        .publish()
+        .map_err(map_filesystem_error)?;
+    Ok(CommandOutput::IdentityPassphraseChanged {
+        identity: display_name,
+        principal_id: hex(replacement.header.principal_id.as_bytes()),
+        fingerprint: hex(replacement.header.descriptor_fingerprint.as_bytes()),
+        kdf_profile: kdf_profile(replacement.header.kdf_profile),
+        protection_degraded: old.protection_degraded() || new.protection_degraded(),
+        durability: durability(publication),
     })
 }
 
@@ -1036,6 +1266,11 @@ fn map_identity_error(kind: jury_core::identity::IdentityErrorKind) -> CliError 
                 "required protected memory is unavailable",
             )
         }
+        IdentityErrorKind::KdfDowngrade => CliError::new(
+            CliErrorKind::InvalidArguments,
+            "kdf-downgrade-acknowledgement-required",
+            "hardened-to-portable KDF downgrade requires explicit approval",
+        ),
         _ => invalid_identity(),
     }
 }
@@ -1208,6 +1443,28 @@ mod tests {
                 "status"
             ])
             .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "jury",
+                "identity",
+                "passphrase",
+                "change",
+                "--allow-kdf-downgrade"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "jury",
+                "identity",
+                "passphrase",
+                "change",
+                "--kdf-profile",
+                "portable",
+                "--allow-kdf-downgrade"
+            ])
+            .is_ok()
         );
     }
 

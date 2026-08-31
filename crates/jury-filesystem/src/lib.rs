@@ -15,7 +15,10 @@ mod state_root;
 
 use std::fmt;
 
-pub use identity_selection::{IdentityName, IdentitySelectionError, IdentitySelector};
+pub use identity_selection::{
+    IdentityName, IdentitySelectionError, IdentitySelector, MAX_NAMED_IDENTITIES,
+    list_named_identities,
+};
 pub use local_state::{
     LockedPrincipalState, LockedVaultState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES,
     MAX_RECEIPTS_BYTES, PrincipalStateDirectory, PrincipalStateFile, StatePathError,
