@@ -37,7 +37,7 @@ impl std::error::Error for LockError {}
 pub struct ExclusiveStateLock {
     parent: Dir,
     name: OsString,
-    identity: FileIdentity,
+    file: cap_std::fs::File,
 }
 
 impl ExclusiveStateLock {
@@ -82,11 +82,7 @@ impl ExclusiveStateLock {
                 return Err(LockError::Io);
             }
             file.sync_all().map_err(|_| LockError::Io)?;
-            Ok(Self {
-                parent,
-                name,
-                identity: FileIdentity::from_metadata(&metadata),
-            })
+            Ok(Self { parent, name, file })
         }
     }
 }
@@ -102,12 +98,17 @@ impl fmt::Debug for ExclusiveStateLock {
 
 impl Drop for ExclusiveStateLock {
     fn drop(&mut self) {
+        // Retaining the original descriptor until after this comparison also
+        // prevents its inode from being recycled for a replacement path.
+        let Ok(original) = self.file.metadata() else {
+            return;
+        };
         let Ok(metadata) = self.parent.symlink_metadata(&self.name) else {
             return;
         };
         if metadata.is_file()
             && metadata.nlink() == 1
-            && FileIdentity::from_metadata(&metadata) == self.identity
+            && FileIdentity::from_metadata(&metadata) == FileIdentity::from_metadata(&original)
         {
             let _ = self.parent.remove_file(&self.name);
         }
