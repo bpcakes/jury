@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access_provider;
 pub mod adapter;
 mod crypto;
 pub mod domain;

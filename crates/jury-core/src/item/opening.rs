@@ -11,7 +11,7 @@ use super::{ItemError, ItemErrorKind, map_crypto_error};
 
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
-pub fn open_descriptor(
+pub(crate) fn open_descriptor(
     envelope: &ItemEnvelopeV1,
     secret: &ProtectedRevisionSecret,
 ) -> Result<ItemDescriptorV1, ItemError> {
@@ -39,7 +39,7 @@ pub fn open_descriptor(
         .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))
 }
 
-pub fn open_body(
+pub(crate) fn open_body(
     envelope: &ItemEnvelopeV1,
     secret: &ProtectedRevisionSecret,
 ) -> Result<ItemStateV1, ItemError> {
@@ -76,7 +76,7 @@ pub fn open_body(
         .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))
 }
 
-pub fn verify_item_ancestry(
+pub(crate) fn verify_item_ancestry(
     envelope: &ItemEnvelopeV1,
     mut verification_key: impl FnMut(PrincipalId) -> Option<VerificationPublicKey32>,
 ) -> Result<(), ItemError> {

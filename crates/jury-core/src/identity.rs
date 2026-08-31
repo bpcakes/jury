@@ -269,12 +269,16 @@ pub struct ApproverIdentity(IdentitySecrets);
 pub struct WitnessIdentity(IdentitySecrets);
 
 /// One revision-scoped direct secret which has no byte-export API.
-pub struct ProtectedRevisionSecret {
+pub(crate) struct ProtectedRevisionSecret {
     pub(crate) bytes: ProtectedMemory,
 }
 
 /// One revision-scoped witness share which has no byte-export API.
-pub struct ProtectedWitnessShare {
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
+pub(crate) struct ProtectedWitnessShare {
     pub(crate) bytes: ProtectedMemory,
     witness_id: WirePrincipalId,
     witness_policy_digest: Digest32,
@@ -283,9 +287,13 @@ pub struct ProtectedWitnessShare {
     context_digest: Digest32,
 }
 
-/// Public request-bound context for releasing one encrypted witness share.
+/// Request-bound context for releasing one encrypted witness share.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WitnessContributionTarget {
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
+pub(crate) struct WitnessContributionTarget {
     pub request_digest: Digest32,
     pub action_manifest_digest: Digest32,
     pub response_id: ResponseId,
@@ -298,7 +306,11 @@ pub struct WitnessContributionTarget {
 
 /// Exact J19 contribution envelope. Its plaintext share is not exportable.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EncryptedWitnessContribution {
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
+pub(crate) struct EncryptedWitnessContribution {
     pub response_id: ResponseId,
     pub share_index: u8,
     pub share_commitment: Digest32,
@@ -310,24 +322,18 @@ pub struct EncryptedWitnessContribution {
 }
 
 impl ProtectedRevisionSecret {
-    #[must_use]
-    pub const fn protection_status(&self) -> &jury_protected::ProtectionStatus {
-        self.bytes.status()
-    }
-
     pub(crate) fn memory(&self) -> &ProtectedMemory {
         &self.bytes
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
 impl ProtectedWitnessShare {
-    #[must_use]
-    pub const fn protection_status(&self) -> &jury_protected::ProtectionStatus {
-        self.bytes.status()
-    }
-
     /// Consumes the share into one request-session encrypted J19 envelope.
-    pub fn seal_for_request(
+    pub(crate) fn seal_for_request(
         self,
         target: &WitnessContributionTarget,
     ) -> Result<EncryptedWitnessContribution, IdentityError> {
@@ -377,9 +383,13 @@ impl ProtectedWitnessShare {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
 impl EncryptedWitnessContribution {
     #[must_use]
-    pub fn canonical_bytes(&self) -> Vec<u8> {
+    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
         let mut output = Vec::with_capacity(1_332);
         output.extend_from_slice(&1_u16.to_be_bytes());
         output.extend_from_slice(self.response_id.as_bytes());
@@ -394,7 +404,7 @@ impl EncryptedWitnessContribution {
     }
 
     #[must_use]
-    pub fn digest(&self) -> Digest32 {
+    pub(crate) fn digest(&self) -> Digest32 {
         let envelope = self.canonical_bytes();
         let mut preimage = identity_jce("jury-witness-v1/contribution/hash");
         preimage.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
@@ -468,7 +478,7 @@ impl VaultPrincipalIdentity {
     }
 
     /// Opens one suite-1 direct slot bound to this exact identity.
-    pub fn open_direct_slot(
+    pub(crate) fn open_direct_slot(
         &self,
         slot: &DirectSlotV1,
     ) -> Result<ProtectedRevisionSecret, IdentityError> {
@@ -519,7 +529,11 @@ impl WitnessIdentity {
     }
 
     /// Opens one exact J19 revision-scoped share without exporting its bytes.
-    pub fn open_contribution_share(
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+    )]
+    pub(crate) fn open_contribution_share(
         &self,
         capsule: &WitnessShareCapsuleV1,
     ) -> Result<ProtectedWitnessShare, IdentityError> {
@@ -871,6 +885,10 @@ const fn map_format_error(_: IdentityFormatError) -> IdentityError {
     IdentityError::new(IdentityErrorKind::Format)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "J22 consumes the internal witnessed access seam")
+)]
 fn identity_jce(domain: &str) -> Vec<u8> {
     let mut output = Vec::with_capacity(domain.len() + 3);
     output.extend_from_slice(domain.as_bytes());

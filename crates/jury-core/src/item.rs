@@ -5,7 +5,7 @@ mod opening;
 mod random;
 
 pub use inventory::ItemArtifactInventory;
-pub use opening::{open_body, open_descriptor, verify_item_ancestry};
+pub(crate) use opening::{open_body, open_descriptor, verify_item_ancestry};
 use random::{draw_nonce, draw_seal_id, draw_slot_id};
 
 use std::collections::{BTreeMap, BTreeSet};
