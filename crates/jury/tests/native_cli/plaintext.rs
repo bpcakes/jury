@@ -1,14 +1,6 @@
 use super::*;
 
-pub(super) fn exercise_plaintext_sinks(
-    temporary: &Path,
-    repository: &Path,
-    data: &Path,
-    state: &Path,
-) -> TestResult {
-    let private = temporary.join("private-output");
-    fs::create_dir(&private)?;
-    fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+fn exercise_read_sinks(repository: &Path, data: &Path, state: &Path, private: &Path) -> TestResult {
     let output_path = private.join("value.txt");
     let read = success_json(run(
         repository,
@@ -52,7 +44,16 @@ pub(super) fn exercise_plaintext_sinks(
     assert!(revealed.status.success());
     assert_eq!(revealed.stdout, b"ExampleValue");
     assert!(revealed.stderr.is_empty());
+    Ok(())
+}
 
+fn exercise_template_sinks(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    private: &Path,
+) -> TestResult {
     let template_path = temporary.join("template.txt");
     fs::write(
         &template_path,
@@ -98,7 +99,16 @@ pub(super) fn exercise_plaintext_sinks(
     assert!(revealed_injection.status.success());
     assert_eq!(revealed_injection.stdout, b"prefix=ExampleValue;suffix");
     assert!(revealed_injection.stderr.is_empty());
+    Ok(())
+}
 
+fn exercise_atomic_template_denial(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    private: &Path,
+) -> TestResult {
     let denied_template = temporary.join("denied-template.txt");
     fs::write(
         &denied_template,
@@ -133,4 +143,18 @@ pub(super) fn exercise_plaintext_sinks(
     assert_eq!(denied_error["error"]["code"], "item-unavailable");
     assert!(!denied_error.to_string().contains("ExampleValue"));
     Ok(())
+}
+
+pub(super) fn exercise_plaintext_sinks(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
+    let private = temporary.join("private-output");
+    fs::create_dir(&private)?;
+    fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+    exercise_read_sinks(repository, data, state, &private)?;
+    exercise_template_sinks(temporary, repository, data, state, &private)?;
+    exercise_atomic_template_denial(temporary, repository, data, state, &private)
 }

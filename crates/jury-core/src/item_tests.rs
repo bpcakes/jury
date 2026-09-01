@@ -64,6 +64,63 @@ impl RandomSource for RepeatId {
     }
 }
 
+fn assert_item_error_kind<T>(result: Result<T, ItemError>, expected: ItemErrorKind) {
+    assert_eq!(
+        result.map(|_| ()).map_err(|error| error.kind()),
+        Err(expected)
+    );
+}
+
+enum SlotOperation {
+    Create,
+    Replace,
+}
+
+fn item_slots(
+    operations: &[PolicyOperationV1],
+    expected: SlotOperation,
+) -> Result<&[DirectSlotV1], Box<dyn std::error::Error>> {
+    operations
+        .iter()
+        .find_map(|operation| match (&expected, operation) {
+            (SlotOperation::Create, PolicyOperationV1::ItemCreate { direct_slots, .. })
+            | (
+                SlotOperation::Replace,
+                PolicyOperationV1::ItemSlotsReplace { direct_slots, .. },
+            ) => {
+                Some(direct_slots.as_slice())
+            }
+            _ => None,
+        })
+        .ok_or_else(|| match expected {
+            SlotOperation::Create => "item create operation differs".into(),
+            SlotOperation::Replace => "replacement slots absent".into(),
+        })
+}
+
+fn slot_for_role(
+    slots: &[DirectSlotV1],
+    role: ContentRole,
+) -> Result<&DirectSlotV1, Box<dyn std::error::Error>> {
+    slots
+        .iter()
+        .find(|slot| slot.content_role == role)
+        .ok_or_else(|| "content role slot absent".into())
+}
+
+fn record_item_artifacts(inventory: &mut ItemArtifactInventory, envelope: &ItemEnvelopeV1) {
+    inventory
+        .revision_seal_ids
+        .insert(envelope.descriptor.revision_seal_id);
+    inventory
+        .revision_seal_ids
+        .insert(envelope.current_revision.revision_seal_id);
+    inventory.nonces.insert(envelope.descriptor.nonce.clone());
+    inventory
+        .nonces
+        .insert(envelope.current_revision.nonce.clone());
+}
+
 #[test]
 fn item_error_is_value_free() {
     let error = ItemError::new(ItemErrorKind::AuthenticationFailed);
@@ -180,10 +237,7 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         },
         &ItemArtifactInventory::default(),
     );
-    assert!(matches!(
-        failed_result,
-        Err(error) if error.kind() == ItemErrorKind::EntropyUnavailable
-    ));
+    assert_item_error_kind(failed_result, ItemErrorKind::EntropyUnavailable);
     let mut zero = ItemCreator::from_source(ZeroEntropy, protection);
     let zero_result = zero.prepare_create(
         &created_policy.state,
@@ -198,10 +252,7 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         },
         &ItemArtifactInventory::default(),
     );
-    assert!(matches!(
-        zero_result,
-        Err(error) if error.kind() == ItemErrorKind::RetryExhausted
-    ));
+    assert_item_error_kind(zero_result, ItemErrorKind::RetryExhausted);
     assert_eq!(created_policy.state.item_count(), 0);
     let mut items = ItemCreator::new(protection);
     let created_item = items
@@ -238,52 +289,35 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         local.checkpoint().accepted_public_revision_hash(),
         created_item.policy.state.terminal_revision_hash()
     );
-    let created_slots = match &created_item.policy.revision.operations[0] {
-        PolicyOperationV1::ItemCreate { direct_slots, .. } => direct_slots,
-        _ => return Err("item create operation differs".into()),
-    };
-    let descriptor_slot = created_slots
-        .iter()
-        .find(|slot| slot.content_role == ContentRole::Descriptor)
-        .ok_or("descriptor slot absent")?;
-    let body_slot = created_slots
-        .iter()
-        .find(|slot| slot.content_role == ContentRole::Body)
-        .ok_or("body slot absent")?;
+    let created_slots = item_slots(
+        &created_item.policy.revision.operations,
+        SlotOperation::Create,
+    )?;
+    let descriptor_slot = slot_for_role(created_slots, ContentRole::Descriptor)?;
+    let body_slot = slot_for_role(created_slots, ContentRole::Body)?;
     let descriptor_secret = owner.open_direct_slot(descriptor_slot)?;
     let retained_body_secret = owner.open_direct_slot(body_slot)?;
     assert!(open_descriptor(&created_item.envelope, &descriptor_secret)? == descriptor);
     assert!(open_body(&created_item.envelope, &retained_body_secret)? == state);
     let mut wrong_item = created_item.envelope.clone();
     wrong_item.item_id = ItemId::from_bytes([0x5a; 32])?;
-    assert!(matches!(
+    assert_item_error_kind(
         open_body(&wrong_item, &retained_body_secret),
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
+        ItemErrorKind::AuthenticationFailed,
+    );
     let mut wrong_seal = created_item.envelope.clone();
     wrong_seal.current_revision.revision_seal_id = RevisionSealId::from_bytes([0x5b; 32])?;
-    assert!(matches!(
+    assert_item_error_kind(
         open_body(&wrong_seal, &retained_body_secret),
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
+        ItemErrorKind::AuthenticationFailed,
+    );
     verify_item_ancestry(&created_item.envelope, |principal_id| {
         (principal_id == owner.principal_id())
             .then(|| created.descriptor.verification_public_key.clone())
     })?;
 
     let mut collision_inventory = ItemArtifactInventory::default();
-    collision_inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.descriptor.revision_seal_id);
-    collision_inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.current_revision.revision_seal_id);
-    collision_inventory
-        .nonces
-        .insert(created_item.envelope.descriptor.nonce.clone());
-    collision_inventory
-        .nonces
-        .insert(created_item.envelope.current_revision.nonce.clone());
+    record_item_artifacts(&mut collision_inventory, &created_item.envelope);
     let mut collision_then_success = ItemCreator::from_source(
         CollisionThenOs {
             collision: *created_item.envelope.item_id.as_bytes(),
@@ -325,25 +359,11 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         },
         &collision_inventory,
     );
-    assert!(matches!(
-        exhausted,
-        Err(error) if error.kind() == ItemErrorKind::RetryExhausted
-    ));
+    assert_item_error_kind(exhausted, ItemErrorKind::RetryExhausted);
     assert_eq!(created_item.policy.state.item_count(), 1);
 
     let mut inventory = ItemArtifactInventory::default();
-    inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.descriptor.revision_seal_id);
-    inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.current_revision.revision_seal_id);
-    inventory
-        .nonces
-        .insert(created_item.envelope.descriptor.nonce.clone());
-    inventory
-        .nonces
-        .insert(created_item.envelope.current_revision.nonce.clone());
+    record_item_artifacts(&mut inventory, &created_item.envelope);
     let rekeyed = items
         .prepare_rekey(
             &created_item.policy.state,
@@ -363,24 +383,9 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         )
         .map_err(|error| format!("prepare rekey: {error:?}"))?;
     let stale_open = open_body(&rekeyed.envelope, &retained_body_secret);
-    assert!(matches!(
-        stale_open,
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
-    let rekeyed_slots = rekeyed
-        .policy
-        .revision
-        .operations
-        .iter()
-        .find_map(|operation| match operation {
-            PolicyOperationV1::ItemSlotsReplace { direct_slots, .. } => Some(direct_slots),
-            _ => None,
-        })
-        .ok_or("replacement slots absent")?;
-    let new_body_slot = rekeyed_slots
-        .iter()
-        .find(|slot| slot.content_role == ContentRole::Body)
-        .ok_or("replacement body slot absent")?;
+    assert_item_error_kind(stale_open, ItemErrorKind::AuthenticationFailed);
+    let rekeyed_slots = item_slots(&rekeyed.policy.revision.operations, SlotOperation::Replace)?;
+    let new_body_slot = slot_for_role(rekeyed_slots, ContentRole::Body)?;
     let new_body_secret = owner.open_direct_slot(new_body_slot)?;
     assert!(open_body(&rekeyed.envelope, &new_body_secret)? == state);
     assert_eq!(rekeyed.envelope.current_revision.item_revision, 2);
@@ -412,18 +417,7 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
     else {
         return Err("replacement identity role differs".into());
     };
-    inventory
-        .revision_seal_ids
-        .insert(rekeyed.envelope.descriptor.revision_seal_id);
-    inventory
-        .revision_seal_ids
-        .insert(rekeyed.envelope.current_revision.revision_seal_id);
-    inventory
-        .nonces
-        .insert(rekeyed.envelope.descriptor.nonce.clone());
-    inventory
-        .nonces
-        .insert(rekeyed.envelope.current_revision.nonce.clone());
+    record_item_artifacts(&mut inventory, &rekeyed.envelope);
     let replaced = items.prepare_rekey(
         &rekeyed.policy.state,
         &owner,
@@ -450,38 +444,15 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
     )?;
     assert!(replaced.policy.state.is_owner(&next_owner.principal_id()));
     assert!(!replaced.policy.state.is_owner(&owner.principal_id()));
-    assert!(matches!(
+    assert_item_error_kind(
         open_body(&replaced.envelope, &new_body_secret),
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
-    let replaced_slots = replaced
-        .policy
-        .revision
-        .operations
-        .iter()
-        .find_map(|operation| match operation {
-            PolicyOperationV1::ItemSlotsReplace { direct_slots, .. } => Some(direct_slots),
-            _ => None,
-        })
-        .ok_or("principal replacement slots absent")?;
-    let replaced_body_slot = replaced_slots
-        .iter()
-        .find(|slot| slot.content_role == ContentRole::Body)
-        .ok_or("principal replacement body slot absent")?;
+        ItemErrorKind::AuthenticationFailed,
+    );
+    let replaced_slots = item_slots(&replaced.policy.revision.operations, SlotOperation::Replace)?;
+    let replaced_body_slot = slot_for_role(replaced_slots, ContentRole::Body)?;
     let replaced_body_secret = next_owner.open_direct_slot(replaced_body_slot)?;
     assert!(open_body(&replaced.envelope, &replaced_body_secret)? == state);
-    inventory
-        .revision_seal_ids
-        .insert(replaced.envelope.descriptor.revision_seal_id);
-    inventory
-        .revision_seal_ids
-        .insert(replaced.envelope.current_revision.revision_seal_id);
-    inventory
-        .nonces
-        .insert(replaced.envelope.descriptor.nonce.clone());
-    inventory
-        .nonces
-        .insert(replaced.envelope.current_revision.nonce.clone());
+    record_item_artifacts(&mut inventory, &replaced.envelope);
     let post_replacement_rekey = items.prepare_rekey(
         &replaced.policy.state,
         &next_owner,

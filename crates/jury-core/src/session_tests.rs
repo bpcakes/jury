@@ -742,16 +742,36 @@ impl ItemAccessProvider for ApprovedProvider<'_> {
     }
 }
 
-#[test]
-fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(), Box<dyn Error>> {
-    let fixture = mixed_fixture()?;
-    let envelopes = [fixture.direct.envelope.clone()];
-    let validated = ParsedVault::new(&fixture.direct.policy, &fixture.direct.journal, &envelopes)
-        .validate_public()?;
-    let limits = SessionLimits::new(1_000, 10_000)?;
-    let selector = ItemSelector::parse("ExampleMixedItem")?;
-    let binding = binding_for(&fixture, ContentRole::Body, 11, 100)?;
+fn discovered_mixed_session<'a>(
+    fixture: &MixedFixture,
+    validated: &'a ValidatedPublicVault<'a>,
+    limits: SessionLimits,
+) -> Result<PrincipalVaultSession<'a>, Box<dyn Error>> {
+    let mut session = validated.start_session(
+        fixture.direct.owner.principal_id(),
+        fixture.direct.local.checkpoint(),
+        Some(fixture.checkpoint_digest.clone()),
+        limits,
+        10,
+    )?;
+    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
+    session.discover_descriptor(
+        &mut direct,
+        fixture.direct.envelope.item_id,
+        None,
+        11,
+        &NeverCancelled,
+    )?;
+    Ok(session)
+}
 
+fn assert_terminal_witness_statuses(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
     for (status, expected) in [
         (WitnessedAccessStatus::Denied, SessionPhase::Denied),
         (WitnessedAccessStatus::Expired, SessionPhase::Expired),
@@ -767,27 +787,13 @@ fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(),
             SessionPhase::InsufficientQuorum,
         ),
     ] {
-        let mut session = validated.start_session(
-            fixture.direct.owner.principal_id(),
-            fixture.direct.local.checkpoint(),
-            Some(fixture.checkpoint_digest.clone()),
-            limits,
-            10,
-        )?;
-        let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-        session.discover_descriptor(
-            &mut direct,
-            fixture.direct.envelope.item_id,
-            None,
-            11,
-            &NeverCancelled,
-        )?;
+        let mut session = discovered_mixed_session(fixture, validated, limits)?;
         let mut provider = StatusProvider { status, calls: 0 };
         let outcome = session.open_item(
             &mut provider,
-            &selector,
+            selector,
             Capability::Read,
-            Some(&binding),
+            Some(binding),
             12,
             &NeverCancelled,
         )?;
@@ -817,46 +823,41 @@ fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(),
         assert_eq!(session.catalog().entries().len(), 0);
         assert_eq!(provider.calls, 1);
     }
+    Ok(())
+}
 
-    let mut pending = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    pending.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
-    let mut pending_provider = StatusProvider {
+fn assert_pending_binding_is_pinned(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
+    let mut pending = discovered_mixed_session(fixture, validated, limits)?;
+    let mut provider = StatusProvider {
         status: WitnessedAccessStatus::Pending,
         calls: 0,
     };
     assert!(matches!(
         pending.open_item(
-            &mut pending_provider,
-            &selector,
+            &mut provider,
+            selector,
             Capability::Read,
-            Some(&binding),
+            Some(binding),
             12,
             &NeverCancelled,
         )?,
         SessionAccessOutcome::Pending
     ));
     assert_eq!(pending.phase(), SessionPhase::WitnessPending);
-    assert_eq!(pending_provider.calls, 1);
+    assert_eq!(provider.calls, 1);
 
     let mut substituted = binding.clone();
     substituted.action_manifest_digest = Digest32::new([0xa1; 32]);
     assert!(matches!(
         pending.open_item(
-            &mut pending_provider,
-            &selector,
+            &mut provider,
+            selector,
             Capability::Read,
             Some(&substituted),
             13,
@@ -865,109 +866,97 @@ fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(),
         SessionAccessOutcome::Replay
     ));
     assert_eq!(pending.phase(), SessionPhase::Replay);
-    assert_eq!(pending_provider.calls, 1);
+    assert_eq!(provider.calls, 1);
+    Ok(())
+}
 
-    let expiring_binding = binding_for(&fixture, ContentRole::Body, 11, 13)?;
-    let mut expiring = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    expiring.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
-    let mut pending_provider = StatusProvider {
+fn assert_pending_binding_expires(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+) -> Result<(), Box<dyn Error>> {
+    let binding = binding_for(fixture, ContentRole::Body, 11, 13)?;
+    let mut session = discovered_mixed_session(fixture, validated, limits)?;
+    let mut provider = StatusProvider {
         status: WitnessedAccessStatus::Pending,
         calls: 0,
     };
-    expiring.open_item(
-        &mut pending_provider,
-        &selector,
-        Capability::Read,
-        Some(&expiring_binding),
-        12,
-        &NeverCancelled,
-    )?;
-    let expired = expiring.open_item(
-        &mut pending_provider,
-        &selector,
-        Capability::Read,
-        Some(&expiring_binding),
-        13,
-        &NeverCancelled,
-    )?;
-    assert!(matches!(expired, SessionAccessOutcome::Expired));
-    drop(expired);
-    assert_eq!(expiring.phase(), SessionPhase::Expired);
-    assert_eq!(pending_provider.calls, 1);
-
-    let mut refreshing = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    refreshing.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
-    refreshing.open_item(
-        &mut pending_provider,
-        &selector,
+    session.open_item(
+        &mut provider,
+        selector,
         Capability::Read,
         Some(&binding),
         12,
         &NeverCancelled,
     )?;
+    let expired = session.open_item(
+        &mut provider,
+        selector,
+        Capability::Read,
+        Some(&binding),
+        13,
+        &NeverCancelled,
+    )?;
+    assert!(matches!(expired, SessionAccessOutcome::Expired));
+    drop(expired);
+    assert_eq!(session.phase(), SessionPhase::Expired);
+    assert_eq!(provider.calls, 1);
+    Ok(())
+}
+
+fn assert_refresh_invalidates_pending_request(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
+    let mut session = discovered_mixed_session(fixture, validated, limits)?;
+    let mut provider = StatusProvider {
+        status: WitnessedAccessStatus::Pending,
+        calls: 0,
+    };
+    session.open_item(
+        &mut provider,
+        selector,
+        Capability::Read,
+        Some(binding),
+        12,
+        &NeverCancelled,
+    )?;
     assert_eq!(
-        session_error_kind(refreshing.refresh_same(
-            &validated,
+        session_error_kind(session.refresh_same(
+            validated,
             fixture.direct.local.checkpoint(),
             Some(fixture.checkpoint_digest.clone()),
             13,
         )),
         SessionErrorKind::CheckpointConflict
     );
-    assert_eq!(refreshing.phase(), SessionPhase::Stale);
-    assert_eq!(refreshing.catalog().entries().len(), 0);
+    assert_eq!(session.phase(), SessionPhase::Stale);
+    assert_eq!(session.catalog().entries().len(), 0);
+    Ok(())
+}
 
+fn assert_broadened_binding_is_rejected(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
     let mut broadened = binding.clone();
     broadened.revision.capability = Capability::Write;
-    let mut broadening = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    broadening.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
-    let mut broadening_provider = StatusProvider {
+    let mut session = discovered_mixed_session(fixture, validated, limits)?;
+    let mut provider = StatusProvider {
         status: WitnessedAccessStatus::Pending,
         calls: 0,
     };
     assert_eq!(
-        session_error_kind(broadening.open_item(
-            &mut broadening_provider,
-            &selector,
+        session_error_kind(session.open_item(
+            &mut provider,
+            selector,
             Capability::Read,
             Some(&broadened),
             12,
@@ -975,69 +964,60 @@ fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(),
         )),
         SessionErrorKind::InvalidBinding
     );
-    assert_eq!(broadening_provider.calls, 0);
+    assert_eq!(provider.calls, 0);
+    Ok(())
+}
 
-    let mut no_fallback = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    no_fallback.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
-    let mut pending_provider = StatusProvider {
+fn assert_pending_request_never_falls_back(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
+    let mut session = discovered_mixed_session(fixture, validated, limits)?;
+    let mut provider = StatusProvider {
         status: WitnessedAccessStatus::Pending,
         calls: 0,
     };
-    no_fallback.open_item(
-        &mut pending_provider,
-        &selector,
+    session.open_item(
+        &mut provider,
+        selector,
         Capability::Read,
-        Some(&binding),
+        Some(binding),
         12,
         &NeverCancelled,
     )?;
-    let fallback = no_fallback.open_item(
+    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
+    let fallback = session.open_item(
         &mut direct,
-        &selector,
+        selector,
         Capability::Read,
-        Some(&binding),
+        Some(binding),
         13,
         &NeverCancelled,
     )?;
     assert!(matches!(fallback, SessionAccessOutcome::Replay));
     drop(fallback);
-    assert_eq!(no_fallback.phase(), SessionPhase::Replay);
+    assert_eq!(session.phase(), SessionPhase::Replay);
+    Ok(())
+}
 
-    let mut approved = validated.start_session(
-        fixture.direct.owner.principal_id(),
-        fixture.direct.local.checkpoint(),
-        Some(fixture.checkpoint_digest.clone()),
-        limits,
-        10,
-    )?;
-    let mut direct = DirectItemAccessProvider::new(&fixture.direct.owner);
-    approved.discover_descriptor(
-        &mut direct,
-        fixture.direct.envelope.item_id,
-        None,
-        11,
-        &NeverCancelled,
-    )?;
+fn assert_witness_approval_opens_body(
+    fixture: &MixedFixture,
+    validated: &ValidatedPublicVault<'_>,
+    limits: SessionLimits,
+    selector: &ItemSelector,
+    binding: &WitnessRequestBinding,
+) -> Result<(), Box<dyn Error>> {
+    let mut session = discovered_mixed_session(fixture, validated, limits)?;
     let mut provider = ApprovedProvider(DirectItemAccessProvider::new(&fixture.direct.owner));
     {
-        let outcome = approved.open_item(
+        let outcome = session.open_item(
             &mut provider,
-            &selector,
+            selector,
             Capability::Read,
-            Some(&binding),
+            Some(binding),
             12,
             &NeverCancelled,
         )?;
@@ -1047,6 +1027,25 @@ fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(),
         assert_eq!(guard.authority(), AccessCompletion::WitnessedApproved);
         assert_eq!(guard.revision(), &binding.revision);
     }
-    assert_eq!(approved.phase(), SessionPhase::Approved);
+    assert_eq!(session.phase(), SessionPhase::Approved);
+    Ok(())
+}
+
+#[test]
+fn witnessed_matrix_pins_requests_and_never_falls_back_to_direct() -> Result<(), Box<dyn Error>> {
+    let fixture = mixed_fixture()?;
+    let envelopes = [fixture.direct.envelope.clone()];
+    let validated = ParsedVault::new(&fixture.direct.policy, &fixture.direct.journal, &envelopes)
+        .validate_public()?;
+    let limits = SessionLimits::new(1_000, 10_000)?;
+    let selector = ItemSelector::parse("ExampleMixedItem")?;
+    let binding = binding_for(&fixture, ContentRole::Body, 11, 100)?;
+    assert_terminal_witness_statuses(&fixture, &validated, limits, &selector, &binding)?;
+    assert_pending_binding_is_pinned(&fixture, &validated, limits, &selector, &binding)?;
+    assert_pending_binding_expires(&fixture, &validated, limits, &selector)?;
+    assert_refresh_invalidates_pending_request(&fixture, &validated, limits, &selector, &binding)?;
+    assert_broadened_binding_is_rejected(&fixture, &validated, limits, &selector, &binding)?;
+    assert_pending_request_never_falls_back(&fixture, &validated, limits, &selector, &binding)?;
+    assert_witness_approval_opens_body(&fixture, &validated, limits, &selector, &binding)?;
     Ok(())
 }

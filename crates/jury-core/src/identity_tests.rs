@@ -8,7 +8,7 @@ use hpke::{
 };
 use jury_protected::{EntropyError, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::{
-    identity_v1::KdfProfile,
+    identity_v1::{IdentityFileV1, KdfProfile},
     vault_v1::{
         AccessRole, ContentRole, Digest32, DirectCiphertext48, DirectSlotV1, Encapsulation1120,
         IdentityPayloadCiphertext149, ItemAccessMode, ItemId, PrincipalDescriptorV1, PrincipalKind,
@@ -200,24 +200,14 @@ fn contribution_envelope_matches_bound_j19_bytes() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-#[test]
-fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(), Box<dyn Error>> {
-    let old_passphrase = protected(b"ExamplePassphrase-Old")?;
-    let new_passphrase = protected(b"ExamplePassphrase-New")?;
-    let wrong_passphrase = protected(b"ExamplePassphrase-Wrong")?;
-    let mut creator = IdentityCreator::new();
-
-    let vault = creator.create(
-        PrincipalKind::Human,
-        KdfProfile::PortableV1,
-        1_788_000_000_000,
-        &old_passphrase,
-        |_| false,
-    )?;
+fn assert_vault_role_lifecycle(
+    vault: &CreatedIdentity,
+    passphrase: &ProtectedMemory,
+    wrong_passphrase: &ProtectedMemory,
+) -> Result<(), Box<dyn Error>> {
     vault.file.validate()?;
     assert_self_signature(&vault.descriptor)?;
-
-    let unlocked = unlock(&vault.file, &old_passphrase)?;
+    let unlocked = unlock(&vault.file, passphrase)?;
     assert!(matches!(unlocked, UnlockedIdentity::VaultPrincipal(_)));
     assert_eq!(descriptor_from_unlocked(&unlocked)?, vault.descriptor);
     let UnlockedIdentity::VaultPrincipal(vault_identity) = &unlocked else {
@@ -231,18 +221,19 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
             .expose(|bytes| bytes == revision_secret.as_slice())?
     );
     assert!(format!("{opened:?}").contains("[REDACTED]"));
-    let vault_statement = b"jury-v1/test/vault-statement\0\0\x01";
+    let statement = b"jury-v1/test/vault-statement\0\0\x01";
     assert_statement_signature(
         &vault.descriptor,
-        vault_statement,
-        &vault_identity.sign_validated_statement(vault_statement)?,
+        statement,
+        &vault_identity.sign_validated_statement(statement)?,
     )?;
-    let vault_local = PrincipalLocalState::for_vault_principal(
+    let local = PrincipalLocalState::for_vault_principal(
         vault_identity,
         VaultId::from_bytes([0x71; 32])?,
         Digest32::new([0x72; 32]),
     )?;
-    assert!(format!("{vault_local:?}").contains("[REDACTED]"));
+    assert!(format!("{local:?}").contains("[REDACTED]"));
+
     let mut tampered_slot = slot;
     let mut tampered_ciphertext = *tampered_slot.ciphertext.as_bytes();
     tampered_ciphertext[0] ^= 1;
@@ -258,18 +249,25 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
     assert!(debug.contains("[REDACTED]"));
     assert!(!debug.contains("ExamplePassphrase"));
     drop(unlocked);
-
     assert_eq!(
-        unlock(&vault.file, &wrong_passphrase)
+        unlock(&vault.file, wrong_passphrase)
             .map(|_| ())
             .map_err(|error| error.kind()),
         Err(IdentityErrorKind::AuthenticationFailed)
     );
+    Ok(())
+}
 
+fn rotate_passphrase(
+    creator: &mut IdentityCreator,
+    vault: &CreatedIdentity,
+    old_passphrase: &ProtectedMemory,
+    new_passphrase: &ProtectedMemory,
+) -> Result<IdentityFileV1, Box<dyn Error>> {
     let resealed = creator.change_passphrase(
         &vault.file,
-        &old_passphrase,
-        &new_passphrase,
+        old_passphrase,
+        new_passphrase,
         KdfProfile::PortableV1,
         false,
     )?;
@@ -296,14 +294,22 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
         vault.file.root_wrap_ciphertext
     );
     assert_ne!(resealed.payload_ciphertext, vault.file.payload_ciphertext);
-    let resealed_descriptor = descriptor_from_unlocked(&unlock(&resealed, &new_passphrase)?)?;
-    assert_eq!(resealed_descriptor, vault.descriptor);
+    let descriptor = descriptor_from_unlocked(&unlock(&resealed, new_passphrase)?)?;
+    assert_eq!(descriptor, vault.descriptor);
+    Ok(resealed)
+}
 
+fn assert_identity_replacement(
+    creator: &mut IdentityCreator,
+    vault: &CreatedIdentity,
+    resealed: &IdentityFileV1,
+    passphrase: &ProtectedMemory,
+) -> Result<(), Box<dyn Error>> {
     let replacement = creator.replace(
-        &resealed,
+        resealed,
         KdfProfile::PortableV1,
         1_788_000_000_001,
-        &new_passphrase,
+        passphrase,
         |candidate| candidate == &vault.descriptor.principal_id,
     )?;
     assert_eq!(
@@ -326,85 +332,130 @@ fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(
         replacement.replacement.descriptor.verification_public_key,
         vault.descriptor.verification_public_key
     );
+    Ok(())
+}
 
-    for kind in [PrincipalKind::Approver, PrincipalKind::Witness] {
-        let created = creator.create(
-            kind,
-            KdfProfile::PortableV1,
-            1_788_000_000_002,
-            &new_passphrase,
-            |_| false,
-        )?;
-        assert_self_signature(&created.descriptor)?;
-        let unlocked = unlock(&created.file, &new_passphrase)?;
-        match (kind, unlocked) {
-            (PrincipalKind::Approver, UnlockedIdentity::Approver(identity)) => {
-                let preimage = b"jury-witness-v1/approval-decision/signature\0\0\x01";
-                assert_statement_signature(
-                    &created.descriptor,
-                    preimage,
-                    &identity.sign_validated_approval(preimage)?,
-                )?;
-                let local = PrincipalLocalState::for_approver(
-                    &identity,
-                    VaultId::from_bytes([0x71; 32])?,
-                    Digest32::new([0x72; 32]),
-                )?;
-                assert!(format!("{local:?}").contains("[REDACTED]"));
-            }
-            (PrincipalKind::Witness, UnlockedIdentity::Witness(identity)) => {
-                let preimage = b"jury-witness-v1/decision/signature\0\0\x01";
-                assert_statement_signature(
-                    &created.descriptor,
-                    preimage,
-                    &identity.sign_validated_decision(preimage)?,
-                )?;
-                let local = PrincipalLocalState::for_witness(
-                    &identity,
-                    VaultId::from_bytes([0x71; 32])?,
-                    Digest32::new([0x72; 32]),
-                )?;
-                assert!(format!("{local:?}").contains("[REDACTED]"));
-                let (capsule, expected_share) = witness_capsule(&created.descriptor)?;
-                let share = identity.open_contribution_share(&capsule)?;
-                assert!(
-                    share
-                        .bytes
-                        .expose(|bytes| bytes == expected_share.as_slice())?
-                );
-                assert!(format!("{share:?}").contains("[REDACTED]"));
-                let mut wrong_commitment = capsule;
-                wrong_commitment.share_commitment = Digest32::new([0x99; 32]);
-                assert_eq!(
-                    identity
-                        .open_contribution_share(&wrong_commitment)
-                        .map(|_| ())
-                        .map_err(|error| error.kind()),
-                    Err(IdentityErrorKind::AuthenticationFailed)
-                );
-                let session_public_key = recipient_public_key([0x61; 32]);
-                let session_fingerprint = recipient_public_key_fingerprint(&session_public_key);
-                let target = WitnessContributionTarget {
-                    request_digest: Digest32::new([0x62; 32]),
-                    action_manifest_digest: Digest32::new([0x63; 32]),
-                    response_id: ResponseId::from_bytes([0x64; 32])?,
-                    checkpoint_digest: Digest32::new([0x65; 32]),
-                    capsule_set_digest: Digest32::new([0x66; 32]),
-                    session_public_key,
-                    session_fingerprint: session_fingerprint.clone(),
-                    expires_at_ms: 1_788_000_030_000,
-                };
-                let contribution = share.seal_for_request(&target)?;
-                assert_eq!(contribution.response_id, target.response_id);
-                assert_eq!(contribution.share_index, 1);
-                assert_eq!(contribution.session_fingerprint, session_fingerprint);
-                assert_eq!(contribution.canonical_bytes().len(), 1_332);
-                assert_ne!(contribution.digest(), Digest32::new([0; 32]));
-            }
-            _ => return Err("identity unlocked as the wrong role".into()),
-        }
-    }
+fn assert_approver_role_lifecycle(
+    creator: &mut IdentityCreator,
+    passphrase: &ProtectedMemory,
+) -> Result<(), Box<dyn Error>> {
+    let created = creator.create(
+        PrincipalKind::Approver,
+        KdfProfile::PortableV1,
+        1_788_000_000_002,
+        passphrase,
+        |_| false,
+    )?;
+    assert_self_signature(&created.descriptor)?;
+    let UnlockedIdentity::Approver(identity) = unlock(&created.file, passphrase)? else {
+        return Err("identity unlocked as the wrong role".into());
+    };
+    let preimage = b"jury-witness-v1/approval-decision/signature\0\0\x01";
+    assert_statement_signature(
+        &created.descriptor,
+        preimage,
+        &identity.sign_validated_approval(preimage)?,
+    )?;
+    let local = PrincipalLocalState::for_approver(
+        &identity,
+        VaultId::from_bytes([0x71; 32])?,
+        Digest32::new([0x72; 32]),
+    )?;
+    assert!(format!("{local:?}").contains("[REDACTED]"));
+    Ok(())
+}
 
+fn assert_witness_role_lifecycle(
+    creator: &mut IdentityCreator,
+    passphrase: &ProtectedMemory,
+) -> Result<(), Box<dyn Error>> {
+    let created = creator.create(
+        PrincipalKind::Witness,
+        KdfProfile::PortableV1,
+        1_788_000_000_002,
+        passphrase,
+        |_| false,
+    )?;
+    assert_self_signature(&created.descriptor)?;
+    let UnlockedIdentity::Witness(identity) = unlock(&created.file, passphrase)? else {
+        return Err("identity unlocked as the wrong role".into());
+    };
+    let preimage = b"jury-witness-v1/decision/signature\0\0\x01";
+    assert_statement_signature(
+        &created.descriptor,
+        preimage,
+        &identity.sign_validated_decision(preimage)?,
+    )?;
+    let local = PrincipalLocalState::for_witness(
+        &identity,
+        VaultId::from_bytes([0x71; 32])?,
+        Digest32::new([0x72; 32]),
+    )?;
+    assert!(format!("{local:?}").contains("[REDACTED]"));
+    assert_witness_contribution(&created.descriptor, &identity)
+}
+
+fn assert_witness_contribution(
+    descriptor: &PrincipalDescriptorV1,
+    identity: &WitnessIdentity,
+) -> Result<(), Box<dyn Error>> {
+    let (capsule, expected_share) = witness_capsule(descriptor)?;
+    let share = identity.open_contribution_share(&capsule)?;
+    assert!(
+        share
+            .bytes
+            .expose(|bytes| bytes == expected_share.as_slice())?
+    );
+    assert!(format!("{share:?}").contains("[REDACTED]"));
+    let mut wrong_commitment = capsule;
+    wrong_commitment.share_commitment = Digest32::new([0x99; 32]);
+    assert_eq!(
+        identity
+            .open_contribution_share(&wrong_commitment)
+            .map(|_| ())
+            .map_err(|error| error.kind()),
+        Err(IdentityErrorKind::AuthenticationFailed)
+    );
+    let session_public_key = recipient_public_key([0x61; 32]);
+    let session_fingerprint = recipient_public_key_fingerprint(&session_public_key);
+    let target = WitnessContributionTarget {
+        request_digest: Digest32::new([0x62; 32]),
+        action_manifest_digest: Digest32::new([0x63; 32]),
+        response_id: ResponseId::from_bytes([0x64; 32])?,
+        checkpoint_digest: Digest32::new([0x65; 32]),
+        capsule_set_digest: Digest32::new([0x66; 32]),
+        session_public_key,
+        session_fingerprint: session_fingerprint.clone(),
+        expires_at_ms: 1_788_000_030_000,
+    };
+    let contribution = share.seal_for_request(&target)?;
+    assert_eq!(contribution.response_id, target.response_id);
+    assert_eq!(contribution.share_index, 1);
+    assert_eq!(contribution.session_fingerprint, session_fingerprint);
+    assert_eq!(contribution.canonical_bytes().len(), 1_332);
+    assert_ne!(contribution.digest(), Digest32::new([0; 32]));
+    Ok(())
+}
+
+#[test]
+fn portable_role_lifecycle_preserves_only_passphrase_rotation_keys() -> Result<(), Box<dyn Error>> {
+    let old_passphrase = protected(b"ExamplePassphrase-Old")?;
+    let new_passphrase = protected(b"ExamplePassphrase-New")?;
+    let wrong_passphrase = protected(b"ExamplePassphrase-Wrong")?;
+    let mut creator = IdentityCreator::new();
+
+    let vault = creator.create(
+        PrincipalKind::Human,
+        KdfProfile::PortableV1,
+        1_788_000_000_000,
+        &old_passphrase,
+        |_| false,
+    )?;
+    assert_vault_role_lifecycle(&vault, &old_passphrase, &wrong_passphrase)?;
+    let resealed = rotate_passphrase(&mut creator, &vault, &old_passphrase, &new_passphrase)?;
+    assert_identity_replacement(&mut creator, &vault, &resealed, &new_passphrase)?;
+    assert_approver_role_lifecycle(&mut creator, &new_passphrase)?;
+    assert_witness_role_lifecycle(&mut creator, &new_passphrase)?;
     Ok(())
 }
 

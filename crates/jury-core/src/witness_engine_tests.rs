@@ -325,7 +325,16 @@ fn witness_capsule(
     Ok(capsule)
 }
 
-fn fixture() -> TestResult<Fixture> {
+struct FixturePrincipals {
+    actors: Actors,
+    owner_descriptor: PrincipalDescriptorV1,
+    approver_descriptors: [PrincipalDescriptorV1; 2],
+    witness_descriptors: [PrincipalDescriptorV1; 2],
+    approver_policy_descriptors: [ApproverPolicyDescriptor; 2],
+    witness_policy_descriptors: [WitnessPolicyDescriptor; 2],
+}
+
+fn fixture_principals() -> TestResult<FixturePrincipals> {
     let mut identity_random = TestRandom::new(0x1234_5678_9abc_def0);
     let owner = make_identity(0x11, PrincipalKind::Human, &mut identity_random)?;
     let approver_1 = make_identity(0x21, PrincipalKind::Approver, &mut identity_random)?;
@@ -355,7 +364,6 @@ fn fixture() -> TestResult<Fixture> {
         approvers: [approver_1, approver_2],
         witnesses: [witness_1, witness_2],
     };
-
     let approver_policy_descriptors = [
         approver_policy_descriptor(&actors.approvers[0])?,
         approver_policy_descriptor(&actors.approvers[1])?,
@@ -364,7 +372,18 @@ fn fixture() -> TestResult<Fixture> {
         witness_policy_descriptor(&actors.witnesses[0], 1)?,
         witness_policy_descriptor(&actors.witnesses[1], 2)?,
     ];
-    let witness_policy = WitnessPolicy {
+    Ok(FixturePrincipals {
+        actors,
+        owner_descriptor,
+        approver_descriptors,
+        witness_descriptors,
+        approver_policy_descriptors,
+        witness_policy_descriptors,
+    })
+}
+
+fn fixture_witness_policy(principals: &FixturePrincipals) -> TestResult<WitnessPolicy> {
+    let policy = WitnessPolicy {
         schema: 1,
         witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
         revision: 1,
@@ -375,12 +394,13 @@ fn fixture() -> TestResult<Fixture> {
         vault_policy_hash: Digest32::new([0x72; 32]),
         construction: 1,
         suite: 1,
-        approver_descriptors: approver_policy_descriptors.to_vec(),
-        witness_descriptors: witness_policy_descriptors.to_vec(),
+        approver_descriptors: principals.approver_policy_descriptors.to_vec(),
+        witness_descriptors: principals.witness_policy_descriptors.to_vec(),
         witness_threshold: 2,
         operation_rules: vec![OperationRule {
             operation: WitnessOperation::ReadStdout,
-            eligible_approver_ids: approver_policy_descriptors
+            eligible_approver_ids: principals
+                .approver_policy_descriptors
                 .iter()
                 .map(|descriptor| descriptor.approver_id)
                 .collect(),
@@ -395,16 +415,22 @@ fn fixture() -> TestResult<Fixture> {
         review_label_set_digest: Digest32::new([0x73; 32]),
         direct_fallback: false,
     };
-    witness_policy.validate()?;
-    let witness_policy_digest = witness_policy.digest()?;
+    policy.validate()?;
+    Ok(policy)
+}
+
+fn fixture_witnessed_state(
+    descriptors: &[WitnessPolicyDescriptor; 2],
+    witness_policy_digest: &Digest32,
+) -> TestResult<WitnessedStateV1> {
     let mut capsule_random = TestRandom::new(0x2233_4455_6677_8899);
-    let capsules = witness_policy_descriptors
+    let capsules = descriptors
         .iter()
         .map(|descriptor| {
             witness_capsule(
                 descriptor,
                 CapsuleScope {
-                    policy_digest: &witness_policy_digest,
+                    policy_digest: witness_policy_digest,
                     vault_policy_sequence: 1,
                     witness_policy_revision: 1,
                     key_epoch: 1,
@@ -440,24 +466,34 @@ fn fixture() -> TestResult<Fixture> {
         capsule_set_digest: Digest32::new([0; 32]),
     };
     slot.capsule_set_digest = slot.recomputed_capsule_set_digest()?;
-    let witnessed_state = WitnessedStateV1 {
+    Ok(WitnessedStateV1 {
         slots: vec![slot.clone()],
         digest: witnessed_slot_set_digest(std::slice::from_ref(&slot))?,
-    };
+    })
+}
 
-    let mut principals = BTreeMap::new();
-    for descriptor in std::iter::once(owner_descriptor.clone())
-        .chain(approver_descriptors)
-        .chain(witness_descriptors)
-    {
-        principals.insert(
-            descriptor.principal_id,
-            PrincipalPolicyState {
-                descriptor,
-                display_label: "ExamplePrincipal".to_owned(),
-            },
-        );
-    }
+fn fixture_policy(
+    fixture_principals: &FixturePrincipals,
+    witness_policy: &WitnessPolicy,
+    witness_policy_digest: &Digest32,
+) -> TestResult<PolicyState> {
+    let witnessed_state = fixture_witnessed_state(
+        &fixture_principals.witness_policy_descriptors,
+        witness_policy_digest,
+    )?;
+    let principals = std::iter::once(fixture_principals.owner_descriptor.clone())
+        .chain(fixture_principals.approver_descriptors.iter().cloned())
+        .chain(fixture_principals.witness_descriptors.iter().cloned())
+        .map(|descriptor| {
+            (
+                descriptor.principal_id,
+                PrincipalPolicyState {
+                    descriptor,
+                    display_label: "ExamplePrincipal".to_owned(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let principal_ids = principals.keys().copied().collect::<BTreeSet<_>>();
     let recipient_keys = principals
         .values()
@@ -467,9 +503,9 @@ fn fixture() -> TestResult<Fixture> {
         .values()
         .map(|principal| principal.descriptor.verification_public_key.clone())
         .collect();
-    let mut items = BTreeMap::new();
-    items.insert(
-        ItemId::from_bytes([0x03; 32])?,
+    let item_id = ItemId::from_bytes([0x03; 32])?;
+    let items = [(
+        item_id,
         ItemPolicyState {
             item_kind: ItemKind::Canonical,
             key_epoch: 1,
@@ -487,8 +523,10 @@ fn fixture() -> TestResult<Fixture> {
             direct_slots: Vec::new(),
             witnessed_state: Some(witnessed_state),
         },
-    );
-    let policy = PolicyState {
+    )]
+    .into_iter()
+    .collect();
+    Ok(PolicyState {
         suite: 1,
         vault_id: VaultId::from_bytes([0x01; 32])?,
         genesis_fingerprint: Digest32::new([0x02; 32]),
@@ -502,15 +540,23 @@ fn fixture() -> TestResult<Fixture> {
         historical_principal_ids: principal_ids,
         historical_recipient_keys: recipient_keys,
         historical_verification_keys: verification_keys,
-        owners: [owner_descriptor.principal_id].into_iter().collect(),
+        owners: [fixture_principals.owner_descriptor.principal_id]
+            .into_iter()
+            .collect(),
         items,
-        historical_item_ids: [ItemId::from_bytes([0x03; 32])?].into_iter().collect(),
+        historical_item_ids: [item_id].into_iter().collect(),
         tombstones: BTreeMap::new(),
         witness_policies: [(witness_policy_digest.clone(), witness_policy.clone())]
             .into_iter()
             .collect(),
-    };
+    })
+}
 
+fn fixture_checkpoint(
+    principals: &FixturePrincipals,
+    witness_policy: &WitnessPolicy,
+    witness_policy_digest: &Digest32,
+) -> TestResult<VaultPolicyCheckpointV1> {
     let (approver_set_digest, witness_set_digest) =
         witness_policy.active_descriptor_set_digests()?;
     let mut checkpoint = VaultPolicyCheckpointV1 {
@@ -527,20 +573,27 @@ fn fixture() -> TestResult<Fixture> {
         review_label_set_digest: witness_policy.review_label_set_digest.clone(),
         predecessor_checkpoint_digest: Digest32::new([0; 32]),
         issued_at_ms: NOW_MS - 5_000,
-        issuer_owner_id: owner_descriptor.principal_id,
+        issuer_owner_id: principals.owner_descriptor.principal_id,
         issuer_key_fingerprint: signing_key_fingerprint(
             1,
-            &owner_descriptor.principal_id,
+            &principals.owner_descriptor.principal_id,
             1,
-            &owner_descriptor.verification_public_key,
+            &principals.owner_descriptor.verification_public_key,
         ),
         issuer_key_epoch: 1,
         signature: Signature64::new([0; 64]),
     };
-    checkpoint.signature = actors
+    checkpoint.signature = principals
+        .actors
         .owner
         .sign_validated_statement(&checkpoint.signature_preimage()?)?;
+    Ok(checkpoint)
+}
 
+fn fixture_manifest(
+    owner_descriptor: &PrincipalDescriptorV1,
+    witness_policy_digest: &Digest32,
+) -> TestResult<(ActionManifestV1, Digest32)> {
     let presentation_digest = Digest32::new([0x81; 32]);
     let approval_target = ApprovalTargetV1 {
         entries: vec![ApprovalTargetEntryV1 {
@@ -590,7 +643,17 @@ fn fixture() -> TestResult<Fixture> {
         expires_at_ms: NOW_MS + 299_000,
         presentation_digest: presentation_digest.clone(),
     };
-    let intended_witness_set = witness_policy_descriptors
+    Ok((manifest, presentation_digest))
+}
+
+fn fixture_request(
+    principals: &FixturePrincipals,
+    checkpoint: &VaultPolicyCheckpointV1,
+    manifest: &ActionManifestV1,
+    witness_policy_digest: Digest32,
+) -> TestResult<jury_protocol::witness_v1::WitnessRequestV1> {
+    let intended_witness_set = principals
+        .witness_policy_descriptors
         .iter()
         .map(|descriptor| IntendedWitnessV1 {
             witness_id: descriptor.witness_id,
@@ -599,6 +662,7 @@ fn fixture() -> TestResult<Fixture> {
             contribution_key_fingerprint: descriptor.contribution_key_fingerprint.clone(),
         })
         .collect();
+    let approval_target_digest = manifest.approval_target_digest.clone();
     let mut request = jury_protocol::witness_v1::WitnessRequestV1 {
         schema: 1,
         protocol_version: 1,
@@ -620,12 +684,12 @@ fn fixture() -> TestResult<Fixture> {
         witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
         witness_policy_revision: 1,
         witness_policy_digest,
-        requester_principal_id: owner_descriptor.principal_id,
+        requester_principal_id: principals.owner_descriptor.principal_id,
         requester_signing_key_fingerprint: signing_key_fingerprint(
             1,
-            &owner_descriptor.principal_id,
+            &principals.owner_descriptor.principal_id,
             1,
-            &owner_descriptor.verification_public_key,
+            &principals.owner_descriptor.verification_public_key,
         ),
         requester_signing_key_epoch: 1,
         requested_access_role: AccessRole::Owner,
@@ -636,20 +700,30 @@ fn fixture() -> TestResult<Fixture> {
         issued_at_ms: manifest.issued_at_ms,
         not_before_ms: None,
         expires_at_ms: manifest.expires_at_ms,
-        request_session_public_key: owner_descriptor.recipient_public_key.clone(),
+        request_session_public_key: principals.owner_descriptor.recipient_public_key.clone(),
         request_session_key_fingerprint: recipient_public_key_fingerprint(
-            &owner_descriptor.recipient_public_key,
+            &principals.owner_descriptor.recipient_public_key,
         ),
         intended_witness_set,
         client_signature: Signature64::new([0; 64]),
     };
-    request.client_signature = actors
+    request.client_signature = principals
+        .actors
         .owner
         .sign_validated_statement(&request.signature_preimage()?)?;
+    Ok(request)
+}
+
+fn fixture_approvals(
+    principals: &FixturePrincipals,
+    request: &jury_protocol::witness_v1::WitnessRequestV1,
+    manifest: &ActionManifestV1,
+    presentation_digest: &Digest32,
+) -> TestResult<[ApprovalDecisionV1; 2]> {
     let request_digest = request.digest()?;
     let intended_witness_set_digest = request.intended_witness_set_digest()?;
     let mut approvals = Vec::new();
-    for (index, descriptor) in approver_policy_descriptors.iter().enumerate() {
+    for (index, descriptor) in principals.approver_policy_descriptors.iter().enumerate() {
         let mut approval = ApprovalDecisionV1 {
             schema: 1,
             approval_id: ApprovalId::from_bytes([0x90 + index as u8; 32])?,
@@ -673,15 +747,27 @@ fn fixture() -> TestResult<Fixture> {
             intended_witness_set_digest: intended_witness_set_digest.clone(),
             signature: Signature64::new([0; 64]),
         };
-        approval.signature =
-            actors.approvers[index].sign_validated_approval(&approval.signature_preimage()?)?;
+        approval.signature = principals.actors.approvers[index]
+            .sign_validated_approval(&approval.signature_preimage()?)?;
         approvals.push(approval);
     }
-    let approvals: [ApprovalDecisionV1; 2] = approvals
+    approvals
         .try_into()
-        .map_err(|_| "approval fixture count changed")?;
+        .map_err(|_| "approval fixture count changed".into())
+}
+
+fn fixture() -> TestResult<Fixture> {
+    let principals = fixture_principals()?;
+    let witness_policy = fixture_witness_policy(&principals)?;
+    let witness_policy_digest = witness_policy.digest()?;
+    let policy = fixture_policy(&principals, &witness_policy, &witness_policy_digest)?;
+    let checkpoint = fixture_checkpoint(&principals, &witness_policy, &witness_policy_digest)?;
+    let (manifest, presentation_digest) =
+        fixture_manifest(&principals.owner_descriptor, &witness_policy_digest)?;
+    let request = fixture_request(&principals, &checkpoint, &manifest, witness_policy_digest)?;
+    let approvals = fixture_approvals(&principals, &request, &manifest, &presentation_digest)?;
     Ok(Fixture {
-        actors,
+        actors: principals.actors,
         policy,
         checkpoint,
         request,
@@ -1572,103 +1658,137 @@ fn conflicting_request_id_terminalizes_only_the_original_reservation() -> TestRe
 #[test]
 fn common_scope_check_rejects_each_changed_duplicate() -> TestResult {
     let fixture = fixture()?;
-    macro_rules! mismatch {
-        ($name:literal, |$manifest:ident| $body:block) => {{
-            let mut changed = fixture.manifest.clone();
-            let $manifest = &mut changed;
-            $body
-            assert!(changed.validate_shape().is_ok(), "{} fixture", $name);
-            assert_eq!(
-                validate_request_manifest(&fixture.request, &changed)
-                    .map_err(WitnessEngineError::reason),
-                Err(WitnessReasonV1::WrongScope),
-                "{}",
-                $name
-            );
-        }};
-    }
-    mismatch!("request ID", |manifest| {
-        manifest.request_id = RequestId::from_bytes([0xd0; 32])?;
-    });
-    mismatch!("vault", |manifest| {
-        manifest.vault_id = VaultId::from_bytes([0xd1; 32])?;
-    });
-    mismatch!("genesis", |manifest| {
-        manifest.genesis_fingerprint = Digest32::new([0xd2; 32]);
-    });
-    mismatch!("item", |manifest| {
-        let item_id = ItemId::from_bytes([0xd3; 32])?;
-        manifest.item_id = item_id;
-        manifest.approval_target.entries[0].item_id = item_id;
-        manifest.approval_target_digest = manifest.approval_target.digest()?;
-    });
-    mismatch!("key epoch", |manifest| {
-        manifest.key_epoch = 2;
-    });
-    mismatch!("access mode", |manifest| {
-        manifest.item_access_mode = ItemAccessMode::Mixed;
-    });
-    mismatch!("slot", |manifest| {
-        manifest.slot_id = SlotId::from_bytes([0xd4; 32])?;
-    });
-    mismatch!("content role", |manifest| {
-        manifest.content_role = ContentRole::Descriptor;
-    });
-    mismatch!("revision", |manifest| {
-        manifest.revision = 2;
-    });
-    mismatch!("revision seal", |manifest| {
-        manifest.revision_seal_id = RevisionSealId::from_bytes([0xd5; 32])?;
-    });
-    mismatch!("policy sequence", |manifest| {
-        manifest.vault_policy_sequence = 2;
-    });
-    mismatch!("policy hash", |manifest| {
-        manifest.vault_policy_hash = Digest32::new([0xd6; 32]);
-    });
-    mismatch!("witness policy ID", |manifest| {
-        manifest.witness_policy_id = WitnessPolicyId::from_bytes([0xd7; 32])?;
-    });
-    mismatch!("witness policy revision", |manifest| {
-        manifest.witness_policy_revision = 2;
-    });
-    mismatch!("witness policy digest", |manifest| {
-        manifest.witness_policy_digest = Digest32::new([0xd8; 32]);
-    });
-    mismatch!("requester", |manifest| {
-        manifest.requester_principal_id = PrincipalId::from_bytes([0xd9; 32])?;
-    });
-    mismatch!("requested role", |manifest| {
-        manifest.requested_access_role = AccessRole::Reader;
-    });
-    mismatch!("operation", |manifest| {
-        manifest.operation = WitnessOperationV1::WritePrivateFile;
-        manifest.operation_context = OperationContextV1::WritePrivateFile;
-        manifest.output_sink = OutputSinkV1::PrivateFile;
-        manifest.output_sink_commitment = Some(Digest32::new([0xda; 32]));
-    });
-    mismatch!("approval target", |manifest| {
-        manifest.approval_target.entries[0].presentation_commitment = Digest32::new([0xdb; 32]);
-        manifest.approval_target_digest = manifest.approval_target.digest()?;
-    });
-    mismatch!("issued time", |manifest| {
-        manifest.issued_at_ms -= 1;
-    });
-    mismatch!("not before", |manifest| {
-        manifest.not_before_ms = Some(NOW_MS);
-    });
-    mismatch!("expiry", |manifest| {
-        manifest.expires_at_ms -= 1;
-    });
-    mismatch!("workload", |manifest| {
-        manifest.output_limit_bytes -= 1;
-    });
-    let mut request = fixture.request;
+    assert_request_scope_mismatches(&fixture)?;
+    assert_manifest_scope_mismatches(&fixture)?;
+    let mut request = fixture.request.clone();
     request.protocol_version = 2;
     assert_eq!(
         validate_request_manifest(&request, &fixture.manifest).map_err(WitnessEngineError::reason),
         Err(WitnessReasonV1::UnsupportedVersion)
     );
+    Ok(())
+}
+
+fn assert_wrong_scope(
+    fixture: &Fixture,
+    name: &str,
+    change: impl FnOnce(&mut ActionManifestV1) -> TestResult,
+) -> TestResult {
+    let mut changed = fixture.manifest.clone();
+    change(&mut changed)?;
+    assert!(changed.validate_shape().is_ok(), "{name} fixture");
+    assert_eq!(
+        validate_request_manifest(&fixture.request, &changed).map_err(WitnessEngineError::reason),
+        Err(WitnessReasonV1::WrongScope),
+        "{name}"
+    );
+    Ok(())
+}
+
+fn assert_request_scope_mismatches(fixture: &Fixture) -> TestResult {
+    assert_wrong_scope(fixture, "request ID", |manifest| {
+        manifest.request_id = RequestId::from_bytes([0xd0; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "vault", |manifest| {
+        manifest.vault_id = VaultId::from_bytes([0xd1; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "genesis", |manifest| {
+        manifest.genesis_fingerprint = Digest32::new([0xd2; 32]);
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "item", |manifest| {
+        let item_id = ItemId::from_bytes([0xd3; 32])?;
+        manifest.item_id = item_id;
+        manifest.approval_target.entries[0].item_id = item_id;
+        manifest.approval_target_digest = manifest.approval_target.digest()?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "key epoch", |manifest| {
+        manifest.key_epoch = 2;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "access mode", |manifest| {
+        manifest.item_access_mode = ItemAccessMode::Mixed;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "slot", |manifest| {
+        manifest.slot_id = SlotId::from_bytes([0xd4; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "content role", |manifest| {
+        manifest.content_role = ContentRole::Descriptor;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "revision", |manifest| {
+        manifest.revision = 2;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "revision seal", |manifest| {
+        manifest.revision_seal_id = RevisionSealId::from_bytes([0xd5; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "policy sequence", |manifest| {
+        manifest.vault_policy_sequence = 2;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "policy hash", |manifest| {
+        manifest.vault_policy_hash = Digest32::new([0xd6; 32]);
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "witness policy ID", |manifest| {
+        manifest.witness_policy_id = WitnessPolicyId::from_bytes([0xd7; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "witness policy revision", |manifest| {
+        manifest.witness_policy_revision = 2;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "witness policy digest", |manifest| {
+        manifest.witness_policy_digest = Digest32::new([0xd8; 32]);
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "requester", |manifest| {
+        manifest.requester_principal_id = PrincipalId::from_bytes([0xd9; 32])?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "requested role", |manifest| {
+        manifest.requested_access_role = AccessRole::Reader;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn assert_manifest_scope_mismatches(fixture: &Fixture) -> TestResult {
+    assert_wrong_scope(fixture, "operation", |manifest| {
+        manifest.operation = WitnessOperationV1::WritePrivateFile;
+        manifest.operation_context = OperationContextV1::WritePrivateFile;
+        manifest.output_sink = OutputSinkV1::PrivateFile;
+        manifest.output_sink_commitment = Some(Digest32::new([0xda; 32]));
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "approval target", |manifest| {
+        manifest.approval_target.entries[0].presentation_commitment = Digest32::new([0xdb; 32]);
+        manifest.approval_target_digest = manifest.approval_target.digest()?;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "issued time", |manifest| {
+        manifest.issued_at_ms -= 1;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "not before", |manifest| {
+        manifest.not_before_ms = Some(NOW_MS);
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "expiry", |manifest| {
+        manifest.expires_at_ms -= 1;
+        Ok(())
+    })?;
+    assert_wrong_scope(fixture, "workload", |manifest| {
+        manifest.output_limit_bytes -= 1;
+        Ok(())
+    })?;
     Ok(())
 }
 

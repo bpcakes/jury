@@ -1,25 +1,21 @@
 use super::*;
 
-#[test]
-fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() -> TestResult {
-    let temporary = tempfile::tempdir()?;
-    let repository = temporary.path().join("repository");
-    let data = temporary.path().join("data");
-    let state = temporary.path().join("state");
-    let artifacts = temporary.path().join("registration");
-    fs::create_dir(&repository)?;
-    fs::create_dir(repository.join(".git"))?;
-    fs::write(
-        repository.join(".git").join("HEAD"),
-        [b"ref: refs".as_slice(), b"/heads/main\n"].concat(),
-    )?;
-    fs::create_dir(&artifacts)?;
-    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700))?;
+struct PolicyActors {
+    approver_id: String,
+    witness_one_id: String,
+    witness_two_id: String,
+}
 
+fn initialize_policy_actors(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    artifacts: &Path,
+) -> TestResult<PolicyActors> {
     success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -30,9 +26,9 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         b"OwnerPassphrase1234\nOwnerPassphrase1234\n",
     )?)?;
     success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -43,9 +39,9 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         b"OwnerPassphrase1234\n",
     )?)?;
     success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -59,10 +55,10 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
     )?)?;
 
     let approver = register_role_principal(
-        &repository,
-        &data,
-        &state,
-        &artifacts,
+        repository,
+        data,
+        state,
+        artifacts,
         "approver",
         "approver",
         None,
@@ -70,10 +66,10 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         "OwnerPassphrase1234",
     )?;
     let witness_one = register_role_principal(
-        &repository,
-        &data,
-        &state,
-        &artifacts,
+        repository,
+        data,
+        state,
+        artifacts,
         "witness-one",
         "witness",
         Some(2),
@@ -81,35 +77,44 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         "OwnerPassphrase1234",
     )?;
     let witness_two = register_role_principal(
-        &repository,
-        &data,
-        &state,
-        &artifacts,
+        repository,
+        data,
+        state,
+        artifacts,
         "witness-two",
         "witness",
         Some(31),
         "WitnessTwoPass1234",
         "OwnerPassphrase1234",
     )?;
-    let approver_id = approver["principal_id"]
-        .as_str()
-        .ok_or("missing approver principal ID")?
-        .to_owned();
-    let witness_one_id = witness_one["principal_id"]
-        .as_str()
-        .ok_or("missing first witness principal ID")?
-        .to_owned();
-    let witness_two_id = witness_two["principal_id"]
-        .as_str()
-        .ok_or("missing second witness principal ID")?
-        .to_owned();
-    let vault_path = repository.join(".jury/vault.json");
-    let before_rejections = fs::read(&vault_path)?;
+    Ok(PolicyActors {
+        approver_id: approver["principal_id"]
+            .as_str()
+            .ok_or("missing approver principal ID")?
+            .to_owned(),
+        witness_one_id: witness_one["principal_id"]
+            .as_str()
+            .ok_or("missing first witness principal ID")?
+            .to_owned(),
+        witness_two_id: witness_two["principal_id"]
+            .as_str()
+            .ok_or("missing second witness principal ID")?
+            .to_owned(),
+    })
+}
 
+fn assert_unsafe_policy_preflight(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    vault_path: &Path,
+    actors: &PolicyActors,
+) -> TestResult {
+    let before_rejections = fs::read(vault_path)?;
     let impossible = run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -120,11 +125,11 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             "--item",
             "ExampleWitnessedItem",
             "--approver",
-            &approver_id,
+            &actors.approver_id,
             "--witness",
-            &witness_one_id,
+            &actors.witness_one_id,
             "--witness",
-            &witness_two_id,
+            &actors.witness_two_id,
             "--approvals",
             "2",
             "--witness-quorum",
@@ -140,12 +145,12 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
     assert!(impossible.stdout.is_empty());
     let impossible_error: serde_json::Value = serde_json::from_slice(&impossible.stderr)?;
     assert_eq!(impossible_error["error"]["code"], "impossible-quorum");
-    assert_eq!(fs::read(&vault_path)?, before_rejections);
+    assert_eq!(fs::read(vault_path)?, before_rejections);
 
     let implicit_direct = run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -156,7 +161,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             "--item",
             "ExampleWitnessedItem",
             "--principal",
-            &approver_id,
+            &actors.approver_id,
         ],
         b"",
     )?;
@@ -167,12 +172,22 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         direct_error["error"]["code"],
         "direct-access-acknowledgement-required"
     );
-    assert_eq!(fs::read(&vault_path)?, before_rejections);
+    assert_eq!(fs::read(vault_path)?, before_rejections);
+    Ok(())
+}
 
+fn commit_witnessed_policy(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    vault_path: &Path,
+    actors: &PolicyActors,
+) -> TestResult {
+    let before_preview = fs::read(vault_path)?;
     let preview = success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -183,11 +198,11 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             "--item",
             "ExampleWitnessedItem",
             "--approver",
-            &approver_id,
+            &actors.approver_id,
             "--witness",
-            &witness_one_id,
+            &actors.witness_one_id,
             "--witness",
-            &witness_two_id,
+            &actors.witness_two_id,
             "--approvals",
             "1",
             "--witness-quorum",
@@ -203,12 +218,12 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
     assert_eq!(preview["operation"], "policy-require-witnessed");
     assert_eq!(preview["dry_run"], true);
     assert_eq!(preview["vault_changed"], false);
-    assert_eq!(fs::read(&vault_path)?, before_rejections);
+    assert_eq!(fs::read(vault_path)?, before_preview);
 
     let committed = success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
@@ -219,11 +234,11 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             "--item",
             "ExampleWitnessedItem",
             "--approver",
-            &approver_id,
+            &actors.approver_id,
             "--witness",
-            &witness_one_id,
+            &actors.witness_one_id,
             "--witness",
-            &witness_two_id,
+            &actors.witness_two_id,
             "--approvals",
             "1",
             "--witness-quorum",
@@ -246,7 +261,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             .is_some_and(|warning| warning.contains("local policy catalog"))
     );
 
-    let vault = VaultFileV1::parse(&fs::read(&vault_path)?)?;
+    let vault = VaultFileV1::parse(&fs::read(vault_path)?)?;
     let (direct_slots, witnessed_state) = vault
         .policy
         .revisions
@@ -271,19 +286,28 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             .iter()
             .all(|slot| slot.threshold == 2 && slot.member_count == 2)
     );
+    Ok(())
+}
 
-    let before_role_removal = fs::read(&vault_path)?;
+fn assert_witness_removal_requires_rotation(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    vault_path: &Path,
+    witness_id: &str,
+) -> TestResult {
+    let before_role_removal = fs::read(vault_path)?;
     let removal = run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &[
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "principal",
             "remove",
-            &witness_one_id,
+            witness_id,
             "--revoke-all",
         ],
         b"OwnerPassphrase1234\n",
@@ -295,18 +319,47 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         removal_error["error"]["code"],
         "witnessed-role-rotation-required"
     );
-    assert_eq!(fs::read(&vault_path)?, before_role_removal);
+    assert_eq!(fs::read(vault_path)?, before_role_removal);
 
     let public_status = success_json(run(
-        &repository,
-        &data,
-        &state,
+        repository,
+        data,
+        state,
         &["--json", "vault", "status"],
         b"",
     )?)?;
     assert_eq!(public_status["public_validation"], "valid");
     assert_eq!(public_status["item_count"], 1);
     Ok(())
+}
+
+#[test]
+fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let repository = temporary.path().join("repository");
+    let data = temporary.path().join("data");
+    let state = temporary.path().join("state");
+    let artifacts = temporary.path().join("registration");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(
+        repository.join(".git").join("HEAD"),
+        [b"ref: refs".as_slice(), b"/heads/main\n"].concat(),
+    )?;
+    fs::create_dir(&artifacts)?;
+    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700))?;
+
+    let actors = initialize_policy_actors(&repository, &data, &state, &artifacts)?;
+    let vault_path = repository.join(".jury/vault.json");
+    assert_unsafe_policy_preflight(&repository, &data, &state, &vault_path, &actors)?;
+    commit_witnessed_policy(&repository, &data, &state, &vault_path, &actors)?;
+    assert_witness_removal_requires_rotation(
+        &repository,
+        &data,
+        &state,
+        &vault_path,
+        &actors.witness_one_id,
+    )
 }
 
 #[test]

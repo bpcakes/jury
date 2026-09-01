@@ -201,7 +201,7 @@ pub(super) fn exercise_successful_execution(
     Ok(())
 }
 
-pub(super) fn exercise_adversarial_execution(
+fn assert_atomic_preflight(
     temporary: &Path,
     repository: &Path,
     data: &Path,
@@ -281,7 +281,15 @@ pub(super) fn exercise_adversarial_execution(
         invalid_environment_error["error"]["code"],
         "environment-value-invalid"
     );
+    Ok(())
+}
 
+fn assert_execution_sandbox(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
     let stripped_environment = run_with_environment(
         repository,
         data,
@@ -330,7 +338,15 @@ pub(super) fn exercise_adversarial_execution(
     assert_eq!(descriptor_scrubbed.status.code(), Some(0));
     assert!(descriptor_scrubbed.stdout.is_empty());
     assert!(descriptor_scrubbed.stderr.is_empty());
+    Ok(())
+}
 
+fn assert_output_limit_and_timeout(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
     let capped = success_json(run(
         repository,
         data,
@@ -384,7 +400,15 @@ pub(super) fn exercise_adversarial_execution(
     let timeout_error: serde_json::Value = serde_json::from_slice(&timed_out.stderr)?;
     assert_eq!(timeout_error["error"]["code"], "process-timeout");
     assert_recorded_processes_absent(&timeout_processes)?;
+    Ok(())
+}
 
+fn assert_signal_cleanup(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
     let signal_processes = temporary.join("signal-processes");
     let signal_processes_text = signal_processes
         .to_str()
@@ -438,7 +462,15 @@ pub(super) fn exercise_adversarial_execution(
     );
     assert_eq!(signal_output.status.code(), Some(143));
     assert_recorded_processes_absent(&signal_processes)?;
+    Ok(())
+}
 
+fn assert_no_plaintext_residue(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
     assert_tree_does_not_contain(temporary, b"ConcealedValue")?;
     assert_tree_does_not_contain(temporary, b"ExampleValue")?;
 
@@ -464,4 +496,17 @@ pub(super) fn exercise_adversarial_execution(
     assert_eq!(fields["fields"][2]["field"], "ExampleSecret");
     assert!(!fields.to_string().contains("ExampleValue"));
     Ok(())
+}
+
+pub(super) fn exercise_adversarial_execution(
+    temporary: &Path,
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+) -> TestResult {
+    assert_atomic_preflight(temporary, repository, data, state)?;
+    assert_execution_sandbox(temporary, repository, data, state)?;
+    assert_output_limit_and_timeout(temporary, repository, data, state)?;
+    assert_signal_cleanup(temporary, repository, data, state)?;
+    assert_no_plaintext_residue(temporary, repository, data, state)
 }
