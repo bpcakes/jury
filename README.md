@@ -1,25 +1,30 @@
 # Jury
 
-**A portable encrypted vault where opening can require a jury.**
-
-Jury is an experimental witnessed-access vault intended to be open source.
-Product releases remain `0.x`; the portable artifact and witness protocol both
-begin at version 1. The defining release path requires fresh signed approval
-and witness contributions before an endpoint can open a governed item revision.
-Direct slots remain an explicit unilateral mode, not the product's authority
-claim.
-
 > [!WARNING]
 > Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
 > must not be used with real credentials.
 
-## Available native Linux CLI
+Jury is an experimental implementation of a portable encrypted vault where
+opening a governed item can require fresh approval from a jury. The project
+remains on `0.x` releases; the portable artifact and witness protocol both
+start at version 1. The defining release path requires signed approval and
+witness contributions for the exact item revision and action before an
+endpoint can open it. Direct slots remain an explicit unilateral mode and
+carry no quorum claim.
 
-The Linux CLI now covers portable identity and vault setup, direct item and
-field operations, principal/access administration, witnessed-policy
-configuration, controlled read/injection sinks, privacy cover, audit
-verification, direct transparent execution, bounded brokered execution, and
-public history/capacity status. Representative commands are:
+## What the Linux CLI implements
+
+The native Linux CLI currently handles:
+
+- portable identity and vault setup;
+- direct item, field, principal, and access operations;
+- witnessed-policy configuration;
+- controlled read and template-injection sinks;
+- privacy cover and local audit verification;
+- direct transparent execution and bounded brokered execution;
+- public history and capacity status.
+
+Representative commands:
 
 ```console
 $ jury identity init
@@ -43,42 +48,48 @@ $ jury vault audit verify
 $ jury history status
 ```
 
-Inside a Git worktree, vault initialization writes only encrypted
-`.jury/vault.json` and the fixed `.jury/.gitattributes` merge rule. Identities
-and authenticated local state stay in their separate Linux data/state roots.
-This is still pre-alpha plumbing, not a claim that Jury protects secrets.
-Witnessed-only policy can be configured, but witnessed request, approval, and
-open execution remain J22 work. The signed public role descriptors and policy
-bodies used by the current CLI are local state; J16/J23 own their portable
-distribution. A vault copied to another machine without that local catalog
-cannot validate its witnessed policy and fails closed. Successful
-`policy require witnessed` output repeats this limitation. Do not treat a
-witnessed-only configuration as an operational secret-access path yet.
+Inside a Git worktree, `jury vault init` writes only the encrypted
+`.jury/vault.json` artifact and a fixed `.jury/.gitattributes` merge rule.
+Identity files and authenticated local state stay in separate Linux data
+and state roots. This storage layout is pre-alpha plumbing, not evidence that
+Jury protects secrets.
 
-Registration descriptors, challenges, and proofs are machine-generated
-canonical JSON artifacts, not editable configuration files. Preserve their
-exact bytes: reformatting, key reordering, or adding fields is rejected. Public
-registration inputs must be absolute, direct paths to regular files owned by
-the current effective user and must not be group/world writable or linked. For
-a cross-user registration, transfer each generated artifact over an
-authenticated channel and have the receiving operator write a fresh
-recipient-owned file before invoking Jury. `principal add` and `principal
-replace` intentionally require both `--from DESCRIPTOR` and `--proof PROOF`;
-Jury cross-checks the separately selected descriptor against the candidate
-descriptor authenticated inside the proof before changing policy.
+The CLI can configure a witnessed-only policy, but witnessed requests,
+approvals, and open execution remain J22 work. The current CLI stores signed
+public role descriptors and policy bodies in local state; J16 and J23 own
+their portable distribution. A copied vault cannot validate its witnessed
+policy without that local catalog and therefore fails closed. Successful
+`policy require witnessed` output repeats this limitation. A witnessed-only
+configuration is not yet an operational secret-access path.
+
+Jury generates registration descriptors, challenges, and proofs as canonical
+JSON artifacts. They are not editable configuration. Jury rejects reformatted
+documents, reordered keys, and added fields because registration binds their
+exact bytes. Each public registration input must be an absolute, direct path
+to a regular file owned by the current effective user. Linked files and files
+with group or world write permission fail validation.
+
+For cross-user registration, transfer each generated artifact over an
+authenticated channel, then have the receiving operator write a fresh file
+owned by the recipient. Both `principal add` and `principal replace` require
+`--from DESCRIPTOR` and `--proof PROOF`. Before changing policy, Jury checks
+the selected descriptor against the candidate descriptor authenticated by the
+proof.
 
 `jury exec` inherits the ordinary environment and stdin, removes every
-`JURY_*` variable, and streams independently redacted child output. `jury run`
-starts from a small environment allowlist and uses an
-explicit timeout plus bounded captured output. Both commands authorize and
-resolve every `Item.Field` reference before starting a child, support protected
-stdin and sealed anonymous-file delivery, and own the resulting Linux process
-group through cleanup. These are direct-access pre-alpha mechanics, not the
-witnessed execution path: J22 must bind a verified action manifest and witnessed
-authorization before the same delivery layer may spawn. An authorized child
-can copy or retain every plaintext value it receives.
+`JURY_*` variable, and redacts the child's stdout and stderr independently.
+`jury run` starts with a small environment allowlist, an explicit timeout, and
+bounded output capture. Both commands resolve and authorize every
+`Item.Field` reference before starting a child. They support protected stdin
+and sealed anonymous-file delivery, and they own the Linux process group
+through cleanup.
 
-## Intended experience
+These commands implement direct access only. J22 must bind a verified action
+manifest and witnessed authorization before this delivery layer may serve the
+witnessed path. An authorized child can copy or retain every plaintext value
+it receives.
+
+## Target interface
 
 ```console
 $ jury init
@@ -92,51 +103,51 @@ $ jury approve REQUEST_ID
 $ jury request run REQUEST_ID
 ```
 
-The request and approval commands in this example, including their request-
-bound execution spellings, are design targets rather than implemented
-interfaces. Direct `jury exec` and `jury run`, plus the item and policy
-configuration commands above, are implemented native Linux commands.
+The request and approval commands above, including the request-bound execution
+spellings, are design targets rather than implemented interfaces. The native
+Linux CLI implements direct `jury exec` and `jury run`, along with the item and
+policy configuration commands shown earlier.
 
-## Design principles
+## Design constraints
 
-- The encrypted vault artifact remains portable and is the source of truth.
+- The portable encrypted vault artifact is the source of truth.
 - Inside a Git worktree, the intended native default is a committed
-  `.jury/vault.json`; Git transports and versions the encrypted artifact but is
-  never trusted for Jury authorization, integrity, or freshness.
-- Private identities, rollback checkpoints, local audit, recovery material, and
-  plaintext remain outside Git.
+  `.jury/vault.json`. Git transports and versions the encrypted artifact; Jury
+  does not trust Git for authorization, integrity, or freshness.
+- Private identities, rollback checkpoints, local audit, recovery material,
+  and plaintext stay outside Git.
 - Secrets and access policy are scoped per item, not only per vault.
-- Human users and machine workloads use the same principal model.
-- Governed access is revision-scoped: the endpoint must obtain fresh approver
-  decisions and witness contributions for the exact action manifest before it
-  can open that item revision.
-- Direct slots are optional and unilateral. If an item has one, Jury makes no
-  quorum claim for that item.
-- Witnessed cryptography may not be implemented until J19A-J19C freeze the
-  construction, protocol, vectors, and bounded endpoint-retention model and J19
-  binds that exact corpus after a fresh solo verification pass. This
-  drift-prevention gate is not independent security review. J19R/J19D/J19E
-  external-review work is deferred and does not gate the active `0.x` scope.
-- Jury does not claim to prevent an authorized endpoint from retaining
-  plaintext it is allowed to receive.
-- Jury has no external review budget. Every `0.x` release must remain explicitly
+- Human users and machine workloads share one principal model.
+- Governed access is revision-scoped. Before opening an item revision, the
+  endpoint must obtain fresh approver decisions and witness contributions for
+  the exact action manifest.
+- Any direct slot is optional and unilateral. An item with one carries
+  no quorum claim.
+- Implementing witnessed cryptography requires J19A-J19C to freeze the
+  construction, protocol, vectors, and bounded endpoint-retention model, then
+  J19 to bind that exact corpus after a fresh solo verification pass. This gate
+  prevents drift; it is not independent security review. J19R, J19D, and J19E
+  are deferred external-review work and do not gate the active `0.x` scope.
+- Jury does not claim to stop an authorized endpoint from retaining plaintext
+  it receives.
+- Jury has no external review budget. Every `0.x` release remains explicitly
   externally unreviewed, pre-alpha, and unsuitable for real secrets.
 
 See [docs/architecture.md](docs/architecture.md) for the initial boundaries and
 [docs/naming.md](docs/naming.md) for the deliberately limited product metaphor.
-
-The implementation sequence and security decisions are in
+The implementation sequence and security decisions live in
 [docs/jury-v1-master-plan.md](docs/jury-v1-master-plan.md). The downstream Jig
-integration is intentionally separate in
+integration remains separate in
 [docs/jig-cutover-plan.md](docs/jig-cutover-plan.md).
 
 ## Workspace
 
 The first `0.x` release targets Linux through the `jury` CLI and a self-hosted
-`juryd`. macOS, Windows, the `jury-tui`, hardware-backed identity protectors,
-managed-service topology, semantic Git merge, and runtime lineage rollover or
-suite migration are deferred. Capacity exhaustion fails closed before mutation;
-divergent Git artifacts require explicit operator recovery.
+`juryd`. The active scope defers macOS, Windows, the `jury-tui`,
+hardware-backed identity protectors, managed-service topology, semantic Git
+merge, and runtime lineage rollover or suite migration. Capacity exhaustion
+fails closed before mutation. Divergent Git artifacts require explicit
+operator recovery.
 
 | Package | Responsibility |
 | --- | --- |
@@ -146,7 +157,7 @@ divergent Git artifacts require explicit operator recovery.
 | `jury-tui` | Deferred terminal-interface scaffold; not shipped in the first `0.x` |
 | `jury-witness` | Transport-independent witness engine and `juryd` adapters |
 
-Jury is standalone: it must not depend on Jig. Jig may eventually consume Jury
+Jury is standalone and must not depend on Jig. Jig may eventually consume Jury
 through its public CLI, library, or protocol interfaces.
 
 ## Development
@@ -158,11 +169,11 @@ scripts/jig check clippy
 scripts/jig check test
 ```
 
-The repository uses the Jig development harness for repeatable checks; that is
-tooling, not a runtime product dependency.
+The repository uses Jig for repeatable development checks. Jig is not a
+runtime dependency.
 
 ## Licensing
 
-The intended licensing model is documented in
-[docs/open-source.md](docs/open-source.md). Exact license texts have not yet
-been selected, so this repository is not ready for public redistribution.
+[docs/open-source.md](docs/open-source.md) describes the intended licensing
+model. The project is intended to become open source, but exact license texts
+remain undecided, so this repository is not ready for public redistribution.
