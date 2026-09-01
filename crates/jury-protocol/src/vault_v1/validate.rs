@@ -4,6 +4,8 @@ use std::fmt;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
+use crate::artifact::{self, JsonError};
+
 use super::bytes::{Digest32, FixedBytes, ItemId, Nonce12, RevisionSealId, SlotId};
 use super::preimage::CanonicalError;
 use super::types::{
@@ -60,6 +62,14 @@ impl From<CanonicalError> for FormatError {
     }
 }
 
+const fn map_json_error(error: JsonError) -> FormatError {
+    match error {
+        JsonError::ArtifactTooLarge => FormatError::ArtifactTooLarge,
+        JsonError::ConflictMarker => FormatError::ConflictMarker,
+        JsonError::InvalidJson => FormatError::InvalidJson,
+    }
+}
+
 #[derive(Deserialize)]
 struct HeaderProbe {
     header: HeaderProbeFields,
@@ -77,16 +87,10 @@ struct HeaderProbeFields {
 
 impl VaultFileV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
-        if bytes.len() > MAX_VAULT_BYTES {
-            return Err(FormatError::ArtifactTooLarge);
-        }
-        if contains_conflict_marker(bytes) {
-            return Err(FormatError::ConflictMarker);
-        }
-        let probe: HeaderProbe =
-            serde_json::from_slice(bytes).map_err(|_| FormatError::InvalidJson)?;
+        artifact::validate_json_input(bytes, MAX_VAULT_BYTES).map_err(map_json_error)?;
+        let probe: HeaderProbe = artifact::deserialize_json(bytes).map_err(map_json_error)?;
         validate_header_discriminants(&probe.header)?;
-        let vault: Self = serde_json::from_slice(bytes).map_err(|_| FormatError::InvalidJson)?;
+        let vault: Self = artifact::deserialize_json(bytes).map_err(map_json_error)?;
         vault.validate()?;
         let canonical = vault.to_json_bytes()?;
         if canonical != bytes {
@@ -97,12 +101,7 @@ impl VaultFileV1 {
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, FormatError> {
         self.validate()?;
-        let mut bytes = serde_json::to_vec_pretty(self).map_err(|_| FormatError::InvalidJson)?;
-        bytes.push(b'\n');
-        if bytes.len() > MAX_VAULT_BYTES {
-            return Err(FormatError::ArtifactTooLarge);
-        }
-        Ok(bytes)
+        artifact::pretty_json_bytes(self, MAX_VAULT_BYTES).map_err(map_json_error)
     }
 
     pub fn validate(&self) -> Result<(), FormatError> {
@@ -113,12 +112,6 @@ impl VaultFileV1 {
         validate_slot_inventory(self)?;
         Ok(())
     }
-}
-
-fn contains_conflict_marker(bytes: &[u8]) -> bool {
-    bytes.split(|byte| *byte == b'\n').any(|line| {
-        line.starts_with(b"<<<<<<<") || line.starts_with(b"=======") || line.starts_with(b">>>>>>>")
-    })
 }
 
 fn validate_header_discriminants(header: &HeaderProbeFields) -> Result<(), FormatError> {

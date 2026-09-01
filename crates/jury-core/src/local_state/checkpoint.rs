@@ -5,9 +5,11 @@ use jury_protocol::vault_v1::{Digest32, ItemEnvelopeV1, PolicyJournalV1, Princip
 use serde::{Deserialize, Serialize};
 
 use super::{
-    LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_CHECKPOINT_BYTES, digest_is_zero,
-    jce, map_crypto_error,
+    LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_CHECKPOINT_BYTES,
+    authenticate_local_document, digest_is_zero, parse_local_document, serialize_local_document,
+    verify_local_document,
 };
+use crate::canonical::jce_v1 as jce;
 use crate::crypto;
 use crate::item::verify_item_ancestry;
 use crate::policy::PolicyState;
@@ -222,12 +224,8 @@ impl LocalCheckpoint {
         scope: &LocalStateScope,
         key: &ProtectedMemory,
     ) -> Result<Self, LocalStateError> {
-        if bytes.is_empty() || bytes.len() > MAX_CHECKPOINT_BYTES {
-            return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
-        }
-        let checkpoint: Self = serde_json::from_slice(bytes)
-            .map_err(|_| LocalStateError::new(LocalStateErrorKind::InvalidFormat))?;
-        if checkpoint.to_bytes()? != bytes || checkpoint.validate_shape().is_err() {
+        let checkpoint: Self = parse_local_document(bytes, MAX_CHECKPOINT_BYTES)?;
+        if checkpoint.validate_shape().is_err() {
             return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
         }
         if checkpoint.scope != *scope {
@@ -265,15 +263,12 @@ impl LocalCheckpoint {
 
     pub(super) fn authenticate(&mut self, key: &ProtectedMemory) -> Result<(), LocalStateError> {
         self.validate_shape()?;
-        self.mac = Digest32::new(
-            crypto::hmac_sha256(key, &self.mac_preimage()).map_err(map_crypto_error)?,
-        );
-        Ok(())
+        let preimage = self.mac_preimage();
+        authenticate_local_document(&mut self.mac, key, &preimage)
     }
 
     fn verify(&self, key: &ProtectedMemory) -> Result<(), LocalStateError> {
-        crypto::verify_hmac_sha256(key, &self.mac_preimage(), self.mac.as_bytes())
-            .map_err(map_crypto_error)
+        verify_local_document(&self.mac, key, &self.mac_preimage())
     }
 
     fn genesis_digest(&self) -> Digest32 {
@@ -311,13 +306,7 @@ impl LocalCheckpoint {
     }
 
     pub(super) fn to_bytes(&self) -> Result<Vec<u8>, LocalStateError> {
-        let mut bytes = serde_json::to_vec_pretty(self)
-            .map_err(|_| LocalStateError::new(LocalStateErrorKind::ProviderFailure))?;
-        bytes.push(b'\n');
-        if bytes.len() > MAX_CHECKPOINT_BYTES {
-            return Err(LocalStateError::new(LocalStateErrorKind::CapacityExhausted));
-        }
-        Ok(bytes)
+        serialize_local_document(self, MAX_CHECKPOINT_BYTES)
     }
 
     #[must_use]

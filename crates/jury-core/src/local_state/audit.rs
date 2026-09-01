@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_AUDIT_BYTES, MAX_AUDIT_EVENT_BYTES,
-    MAX_AUDIT_EVENTS, append_optional_digest, digest_is_zero, jce, map_crypto_error,
+    MAX_AUDIT_EVENTS, append_optional_digest, digest_is_zero, map_crypto_error,
 };
+use crate::canonical::jce_v1 as jce;
 use crate::crypto;
 
 const ZERO_DIGEST: [u8; 32] = [0; 32];

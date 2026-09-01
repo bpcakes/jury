@@ -94,6 +94,35 @@ fn signed_transfer_round_trip_carries_only_public_portable_state() -> TestResult
 }
 
 #[test]
+fn local_catalog_compatibility_normalizes_order_without_broadening_transfer_parse() -> TestResult {
+    let (policy, _, _) = crate::policy::witness_tests::frozen_policy()?;
+    let first = RegistrationRoleDescriptorV1::Approver {
+        descriptor: policy.approver_descriptors[0].clone(),
+    };
+    let second = RegistrationRoleDescriptorV1::Approver {
+        descriptor: policy.approver_descriptors[1].clone(),
+    };
+    let noncanonical = TransferPublicCatalogV1 {
+        version: 1,
+        role_descriptors: vec![second.clone(), first.clone()],
+        witness_policies: Vec::new(),
+    };
+    let bytes = serde_json::to_vec(&noncanonical)?;
+
+    assert!(matches!(
+        TransferPublicCatalogV1::parse(&bytes),
+        Err(error) if error.kind() == TransferErrorKind::InvalidCatalog
+    ));
+    let normalized = TransferPublicCatalogV1::parse_local_compatible(&bytes)?;
+    assert_eq!(normalized.role_descriptors, vec![first, second]);
+    assert_eq!(
+        TransferPublicCatalogV1::parse(&normalized.to_json_bytes()?)?,
+        normalized
+    );
+    Ok(())
+}
+
+#[test]
 fn envelope_metadata_or_signature_tampering_is_rejected() -> TestResult {
     let (owner, vault) = fixture()?;
     let catalog = TransferPublicCatalogV1::new(Vec::new(), Vec::new())?;

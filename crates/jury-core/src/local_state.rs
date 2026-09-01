@@ -10,6 +10,7 @@ use jury_protected::ProtectedMemory;
 #[cfg(test)]
 use jury_protected::ProtectionPolicy;
 use jury_protocol::vault_v1::{Digest32, PrincipalId, VaultId};
+use serde::{Serialize, de::DeserializeOwned};
 
 pub use audit::{
     AuditAction, AuditEvent, AuditEventDraft, AuditEvidenceKind, AuditFailureStage, AuditItemScope,
@@ -21,7 +22,7 @@ pub use receipts::{
     TransferReceipt,
 };
 
-#[cfg(test)]
+use crate::canonical::jce_v1 as jce;
 use crate::crypto;
 use crate::identity::{ApproverIdentity, VaultPrincipalIdentity, WitnessIdentity};
 
@@ -92,6 +93,51 @@ impl fmt::Display for LocalStateError {
 }
 
 impl std::error::Error for LocalStateError {}
+
+fn parse_local_document<T>(bytes: &[u8], maximum_bytes: usize) -> Result<T, LocalStateError>
+where
+    T: DeserializeOwned + Serialize,
+{
+    if bytes.is_empty() || bytes.len() > maximum_bytes {
+        return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
+    }
+    let document = serde_json::from_slice(bytes)
+        .map_err(|_| LocalStateError::new(LocalStateErrorKind::InvalidFormat))?;
+    if serialize_local_document(&document, maximum_bytes)? != bytes {
+        return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
+    }
+    Ok(document)
+}
+
+fn serialize_local_document(
+    document: &impl Serialize,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, LocalStateError> {
+    let mut bytes = serde_json::to_vec_pretty(document)
+        .map_err(|_| LocalStateError::new(LocalStateErrorKind::ProviderFailure))?;
+    bytes.push(b'\n');
+    if bytes.len() > maximum_bytes {
+        return Err(LocalStateError::new(LocalStateErrorKind::CapacityExhausted));
+    }
+    Ok(bytes)
+}
+
+fn authenticate_local_document(
+    mac: &mut Digest32,
+    key: &ProtectedMemory,
+    preimage: &[u8],
+) -> Result<(), LocalStateError> {
+    *mac = Digest32::new(crypto::hmac_sha256(key, preimage).map_err(map_crypto_error)?);
+    Ok(())
+}
+
+fn verify_local_document(
+    mac: &Digest32,
+    key: &ProtectedMemory,
+    preimage: &[u8],
+) -> Result<(), LocalStateError> {
+    crypto::verify_hmac_sha256(key, preimage, mac.as_bytes()).map_err(map_crypto_error)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -527,13 +573,6 @@ fn key_info(domain: &str, scope: &LocalStateScope) -> Vec<u8> {
     info.extend_from_slice(scope.genesis_fingerprint.as_bytes());
     info.extend_from_slice(scope.principal_id.as_bytes());
     info
-}
-
-pub(crate) fn jce(domain: &str) -> Vec<u8> {
-    let mut output = Vec::with_capacity(domain.len() + 3);
-    output.extend_from_slice(domain.as_bytes());
-    output.extend_from_slice(&[0, 0, 1]);
-    output
 }
 
 pub(crate) fn append_digest(output: &mut Vec<u8>, digest: &Digest32) {

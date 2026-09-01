@@ -12,6 +12,7 @@ use jury_protocol::vault_v1::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::canonical;
 use crate::identity::VaultPrincipalIdentity;
 use crate::local_state::CheckpointCandidate;
 use crate::policy::{PolicyState, WitnessPolicy, replay_policy_with_witness_policies};
@@ -88,6 +89,15 @@ pub struct TransferPublicCatalogV1 {
 }
 
 impl TransferPublicCatalogV1 {
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            version: 1,
+            role_descriptors: Vec::new(),
+            witness_policies: Vec::new(),
+        }
+    }
+
     pub fn new(
         role_descriptors: Vec<RegistrationRoleDescriptorV1>,
         witness_policies: Vec<WitnessPolicy>,
@@ -102,7 +112,7 @@ impl TransferPublicCatalogV1 {
     }
 
     pub fn parse(bytes: &[u8]) -> Result<Self, TransferError> {
-        let catalog: Self = serde_json::from_slice(bytes)
+        let catalog: Self = canonical::deserialize_json(bytes)
             .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
         catalog.validate()?;
         if catalog.to_json_bytes()? != bytes {
@@ -111,16 +121,69 @@ impl TransferPublicCatalogV1 {
         Ok(catalog)
     }
 
+    /// Parses the exact compact JSON accepted for locally persisted catalogs,
+    /// then normalizes entry ordering to the canonical transfer representation.
+    /// Signed transfer parsing remains strict through [`Self::parse`].
+    pub fn parse_local_compatible(bytes: &[u8]) -> Result<Self, TransferError> {
+        let mut catalog: Self = canonical::deserialize_json(bytes)
+            .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+        if canonical::compact_json_bytes(&catalog, None)
+            .ok()
+            .as_deref()
+            != Some(bytes)
+        {
+            return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+        }
+        catalog.validate_entries()?;
+        catalog
+            .role_descriptors
+            .sort_by_key(RegistrationRoleDescriptorV1::principal_id);
+        catalog.witness_policies.sort_by_key(|policy| {
+            policy
+                .digest()
+                .map(|digest| *digest.as_bytes())
+                .unwrap_or([0; 32])
+        });
+        catalog.validate()?;
+        Ok(catalog)
+    }
+
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, TransferError> {
         self.validate()?;
-        serde_json::to_vec(self).map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))
+        canonical::compact_json_bytes(self, None)
+            .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))
     }
 
     fn validate(&self) -> Result<(), TransferError> {
+        self.validate_entries()?;
+        let mut prior_role = None;
+        for role in &self.role_descriptors {
+            let id = role
+                .principal_id()
+                .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+            if prior_role.is_some_and(|prior| prior >= id) {
+                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+            }
+            prior_role = Some(id);
+        }
+        let mut prior_digest: Option<Digest32> = None;
+        for policy in &self.witness_policies {
+            let digest = policy
+                .digest()
+                .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+            if prior_digest.as_ref().is_some_and(|prior| prior >= &digest) {
+                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+            }
+            prior_digest = Some(digest);
+        }
+        Ok(())
+    }
+
+    fn validate_entries(&self) -> Result<(), TransferError> {
         if self.version != 1 {
             return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
         }
-        let mut prior_role = None;
+        let mut role_ids = BTreeSet::new();
         for role in &self.role_descriptors {
             match role {
                 RegistrationRoleDescriptorV1::VaultPrincipal => {
@@ -133,14 +196,14 @@ impl TransferPublicCatalogV1 {
                     .validate()
                     .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?,
             }
-            let id = role_id(role)
+            let id = role
+                .principal_id()
                 .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-            if prior_role.is_some_and(|prior| prior >= id) {
+            if !role_ids.insert(id) {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
-            prior_role = Some(id);
         }
-        let mut prior_digest: Option<Digest32> = None;
+        let mut policy_digests = BTreeSet::new();
         for policy in &self.witness_policies {
             policy
                 .validate()
@@ -148,10 +211,9 @@ impl TransferPublicCatalogV1 {
             let digest = policy
                 .digest()
                 .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-            if prior_digest.as_ref().is_some_and(|prior| prior >= &digest) {
+            if !policy_digests.insert(digest) {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
-            prior_digest = Some(digest);
         }
         Ok(())
     }
@@ -440,14 +502,6 @@ fn require_exporter(policy: &PolicyState, principal_id: PrincipalId) -> Result<(
         Ok(())
     } else {
         Err(TransferError::new(TransferErrorKind::UnauthorizedExporter))
-    }
-}
-
-fn role_id(role: &RegistrationRoleDescriptorV1) -> Option<PrincipalId> {
-    match role {
-        RegistrationRoleDescriptorV1::VaultPrincipal => None,
-        RegistrationRoleDescriptorV1::Approver { descriptor } => Some(descriptor.approver_id),
-        RegistrationRoleDescriptorV1::Witness { descriptor } => Some(descriptor.witness_id),
     }
 }
 

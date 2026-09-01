@@ -25,6 +25,26 @@ impl FileIdentity {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RegularFileSnapshot {
+    identity: FileIdentity,
+    byte_len: u64,
+    changed_seconds: i64,
+    changed_nanoseconds: i64,
+}
+
+impl RegularFileSnapshot {
+    #[cfg(unix)]
+    pub(crate) fn from_metadata(metadata: &cap_std::fs::Metadata) -> Self {
+        Self {
+            identity: FileIdentity::from_metadata(metadata),
+            byte_len: metadata.len(),
+            changed_seconds: cap_std::fs::MetadataExt::ctime(metadata),
+            changed_nanoseconds: cap_std::fs::MetadataExt::ctime_nsec(metadata),
+        }
+    }
+}
+
 pub(crate) struct HardenedDir {
     pub(crate) dir: Dir,
     pub(crate) absolute: PathBuf,

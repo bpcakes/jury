@@ -3,10 +3,11 @@ use jury_protocol::vault_v1::Digest32;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_RECEIPTS_BYTES, digest_is_zero, jce,
-    map_crypto_error,
+    LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_RECEIPTS_BYTES,
+    authenticate_local_document, digest_is_zero, parse_local_document, serialize_local_document,
+    verify_local_document,
 };
-use crate::crypto;
+use crate::canonical::jce_v1 as jce;
 
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
@@ -83,12 +84,8 @@ impl LocalReceipts {
         scope: &LocalStateScope,
         key: &ProtectedMemory,
     ) -> Result<Self, LocalStateError> {
-        if bytes.is_empty() || bytes.len() > MAX_RECEIPTS_BYTES {
-            return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
-        }
-        let receipts: Self = serde_json::from_slice(bytes)
-            .map_err(|_| LocalStateError::new(LocalStateErrorKind::InvalidFormat))?;
-        if receipts.to_bytes()? != bytes || receipts.validate_shape().is_err() {
+        let receipts: Self = parse_local_document(bytes, MAX_RECEIPTS_BYTES)?;
+        if receipts.validate_shape().is_err() {
             return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
         }
         if receipts.scope != *scope {
@@ -144,15 +141,12 @@ impl LocalReceipts {
 
     pub(super) fn authenticate(&mut self, key: &ProtectedMemory) -> Result<(), LocalStateError> {
         self.validate_shape()?;
-        self.mac = Digest32::new(
-            crypto::hmac_sha256(key, &self.mac_preimage()).map_err(map_crypto_error)?,
-        );
-        Ok(())
+        let preimage = self.mac_preimage();
+        authenticate_local_document(&mut self.mac, key, &preimage)
     }
 
     fn verify(&self, key: &ProtectedMemory) -> Result<(), LocalStateError> {
-        crypto::verify_hmac_sha256(key, &self.mac_preimage(), self.mac.as_bytes())
-            .map_err(map_crypto_error)
+        verify_local_document(&self.mac, key, &self.mac_preimage())
     }
 
     fn validate_shape(&self) -> Result<(), LocalStateError> {
@@ -197,13 +191,7 @@ impl LocalReceipts {
     }
 
     pub(super) fn to_bytes(&self) -> Result<Vec<u8>, LocalStateError> {
-        let mut bytes = serde_json::to_vec_pretty(self)
-            .map_err(|_| LocalStateError::new(LocalStateErrorKind::ProviderFailure))?;
-        bytes.push(b'\n');
-        if bytes.len() > MAX_RECEIPTS_BYTES {
-            return Err(LocalStateError::new(LocalStateErrorKind::CapacityExhausted));
-        }
-        Ok(bytes)
+        serialize_local_document(self, MAX_RECEIPTS_BYTES)
     }
 
     pub(super) const fn scope(&self) -> &LocalStateScope {

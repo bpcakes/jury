@@ -9,7 +9,7 @@ use cap_std::fs::{Dir, OpenOptions};
 use cap_std::fs::{OpenOptionsExt, PermissionsExt};
 use jury_protected::ProtectedMemory;
 
-use crate::capability::{FileIdentity, single_component};
+use crate::capability::{RegularFileSnapshot, single_component};
 use crate::{
     FilesystemError, FilesystemErrorKind, FilesystemOperation, HardenedStateRoot,
     RepositoryLocation,
@@ -31,27 +31,7 @@ pub enum PublicationOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DestinationState {
     Absent,
-    Existing(DestinationIdentity),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DestinationIdentity {
-    file: FileIdentity,
-    byte_len: u64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
-impl DestinationIdentity {
-    #[cfg(unix)]
-    fn from_metadata(metadata: &cap_std::fs::Metadata) -> Self {
-        Self {
-            file: FileIdentity::from_metadata(metadata),
-            byte_len: metadata.len(),
-            changed_seconds: cap_std::fs::MetadataExt::ctime(metadata),
-            changed_nanoseconds: cap_std::fs::MetadataExt::ctime_nsec(metadata),
-        }
-    }
+    Existing(RegularFileSnapshot),
 }
 
 /// Opaque, single-use observation of one destination identity.
@@ -84,7 +64,7 @@ pub struct PreparedPrivateFile {
     parent: Dir,
     destination: OsString,
     temporary: OsString,
-    temporary_identity: DestinationIdentity,
+    temporary_identity: RegularFileSnapshot,
     expected: DestinationState,
     replace: bool,
     byte_len: usize,
@@ -389,7 +369,7 @@ fn write_prepared(
             parent,
             destination,
             temporary,
-            temporary_identity: DestinationIdentity::from_metadata(&metadata),
+            temporary_identity: RegularFileSnapshot::from_metadata(&metadata),
             expected,
             replace,
             byte_len: contents.len(),
@@ -408,7 +388,7 @@ fn destination_state(
             #[cfg(unix)]
             {
                 Ok(DestinationState::Existing(
-                    DestinationIdentity::from_metadata(&metadata),
+                    RegularFileSnapshot::from_metadata(&metadata),
                 ))
             }
             #[cfg(not(unix))]
@@ -448,7 +428,7 @@ fn validate_expected(
 fn validate_temporary(
     parent: &Dir,
     temporary: &OsStr,
-    expected: DestinationIdentity,
+    expected: RegularFileSnapshot,
 ) -> Result<(), FilesystemError> {
     let metadata = parent.symlink_metadata(temporary).map_err(|_| {
         FilesystemError::new(
@@ -458,7 +438,7 @@ fn validate_temporary(
     })?;
     if metadata.is_file()
         && metadata.nlink() == 1
-        && DestinationIdentity::from_metadata(&metadata) == expected
+        && RegularFileSnapshot::from_metadata(&metadata) == expected
     {
         Ok(())
     } else {

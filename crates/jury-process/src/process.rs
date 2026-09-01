@@ -765,13 +765,6 @@ enum OwnedProcessWait {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OwnedProcessObservation {
-    Running,
-    Exited,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
     deadline: Option<ProcessDeadline>,
@@ -804,7 +797,7 @@ fn wait_for_owned_process(
         {
             return Ok(OwnedProcessWait::SignalForward(signal));
         }
-        if observe_owned_process(process)? == OwnedProcessObservation::Exited {
+        if observe_owned_process(process)? == UnreapedChildObservation::Exited {
             return Ok(OwnedProcessWait::ExitedUnreaped);
         }
 
@@ -852,7 +845,7 @@ fn terminate_owned_process_fallback(process: &mut OwnedProcess) -> std::io::Resu
     match process.child.kill() {
         Ok(()) => Ok(()),
         Err(error) if error_has_errno(&error, rustix::io::Errno::SRCH) => {
-            if observe_owned_process(process)? == OwnedProcessObservation::Exited {
+            if observe_owned_process(process)? == UnreapedChildObservation::Exited {
                 Ok(())
             } else {
                 Err(error)
@@ -966,24 +959,21 @@ fn spawn_owned_process(_command: &mut Command) -> std::io::Result<OwnedProcess> 
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn observe_owned_process(process: &mut OwnedProcess) -> std::io::Result<OwnedProcessObservation> {
+fn observe_owned_process(process: &mut OwnedProcess) -> std::io::Result<UnreapedChildObservation> {
     let process_group = process
         .process_group
         .ok_or_else(|| std::io::Error::other("owned process-group identity is no longer pinned"))?;
     let status = match observe_unreaped_child(process_group.id) {
         Ok(status) => status,
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-            return Ok(OwnedProcessObservation::Running);
+            return Ok(UnreapedChildObservation::Running);
         }
         Err(error) => {
             update_owned_process_identity_after_wait_error(process, &error);
             return Err(error);
         }
     };
-    match status {
-        UnreapedChildObservation::Running => Ok(OwnedProcessObservation::Running),
-        UnreapedChildObservation::Exited => Ok(OwnedProcessObservation::Exited),
-    }
+    Ok(status)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1002,7 +992,7 @@ fn forward_owned_process_signal(
         Ok(()) => Ok(()),
         Err(error)
             if error_has_errno(&error, rustix::io::Errno::SRCH)
-                && observation == OwnedProcessObservation::Exited =>
+                && observation == UnreapedChildObservation::Exited =>
         {
             Ok(())
         }
@@ -1058,8 +1048,8 @@ fn pinned_process_group_for_retry(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn observe_owned_process_before_group_signal_with<T>(
     state: &mut T,
-    mut observe: impl FnMut(&mut T) -> std::io::Result<OwnedProcessObservation>,
-    signal: impl FnOnce(&mut T, OwnedProcessObservation) -> std::io::Result<ProcessGroupSignalResult>,
+    mut observe: impl FnMut(&mut T) -> std::io::Result<UnreapedChildObservation>,
+    signal: impl FnOnce(&mut T, UnreapedChildObservation) -> std::io::Result<ProcessGroupSignalResult>,
 ) -> std::io::Result<ProcessGroupSignalResult> {
     let observation = observe(state)?;
     signal(state, observation)
@@ -1108,16 +1098,16 @@ fn signal_pinned_process_group(
 #[cfg(target_os = "macos")]
 fn resolve_macos_process_group_signal_eperm(
     signal_error: std::io::Error,
-    leader_observation: std::io::Result<OwnedProcessObservation>,
+    leader_observation: std::io::Result<UnreapedChildObservation>,
 ) -> std::io::Result<ProcessGroupSignalResult> {
     match leader_observation {
-        Ok(OwnedProcessObservation::Exited) => {
+        Ok(UnreapedChildObservation::Exited) => {
             // Darwin can report EPERM for a group containing only its zombie
             // leader, but EPERM is not absence. The confirmation loop must
             // still take a fresh atomic sole-leader snapshot before success.
             Ok(ProcessGroupSignalResult::Inconclusive)
         }
-        Ok(OwnedProcessObservation::Running) => Err(signal_error),
+        Ok(UnreapedChildObservation::Running) => Err(signal_error),
         Err(observation_error) => Err(std::io::Error::new(
             observation_error.kind(),
             format!(
@@ -1224,7 +1214,7 @@ fn confirm_process_group_quiescent(
         signal_pinned_process_group,
         |process, process_group, deadline| {
             pinned_process_group_for_retry(process, process_group)?;
-            let leader_exited = observe_owned_process(process)? == OwnedProcessObservation::Exited;
+            let leader_exited = observe_owned_process(process)? == UnreapedChildObservation::Exited;
             ensure_owned_process_cleanup_budget(deadline, "after macOS leader observation")?;
             if !leader_exited {
                 return Ok(false);

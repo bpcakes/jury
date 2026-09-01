@@ -6,30 +6,10 @@ use cap_fs_ext::{FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
 use cap_std::fs::PermissionsExt as _;
 use cap_std::fs::{Metadata, OpenOptions};
 
-use crate::capability::{FileIdentity, single_component};
+use crate::capability::{RegularFileSnapshot, single_component};
 use cap_std::fs::Dir;
 
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation, HardenedStateRoot};
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct ReadSnapshot {
-    identity: FileIdentity,
-    byte_len: u64,
-    changed_seconds: i64,
-    changed_nanoseconds: i64,
-}
-
-impl ReadSnapshot {
-    #[cfg(unix)]
-    fn from_metadata(metadata: &Metadata) -> Self {
-        Self {
-            identity: FileIdentity::from_metadata(metadata),
-            byte_len: metadata.len(),
-            changed_seconds: cap_std::fs::MetadataExt::ctime(metadata),
-            changed_nanoseconds: cap_std::fs::MetadataExt::ctime_nsec(metadata),
-        }
-    }
-}
 
 pub(crate) fn read(
     root: &HardenedStateRoot,
@@ -126,7 +106,7 @@ fn read_with_permissions(
             FilesystemError::new(FilesystemOperation::Read, kind)
         })?;
         validate_metadata(&before, maximum_bytes, permissions)?;
-        let expected = ReadSnapshot::from_metadata(&before);
+        let expected = RegularFileSnapshot::from_metadata(&before);
 
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
@@ -137,7 +117,7 @@ fn read_with_permissions(
             FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
         })?;
         validate_metadata(&opened, maximum_bytes, permissions)?;
-        if ReadSnapshot::from_metadata(&opened) != expected {
+        if RegularFileSnapshot::from_metadata(&opened) != expected {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,
                 FilesystemErrorKind::IdentityChanged,
@@ -172,7 +152,7 @@ fn read_with_permissions(
         let after = file.metadata().map_err(|_| {
             FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
         })?;
-        if ReadSnapshot::from_metadata(&after) != expected {
+        if RegularFileSnapshot::from_metadata(&after) != expected {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,
                 FilesystemErrorKind::IdentityChanged,

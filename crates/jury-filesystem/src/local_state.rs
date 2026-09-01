@@ -162,10 +162,13 @@ impl VaultStateDirectory {
         repositories: &[&RepositoryLocation],
         vault_homes: &[&Path],
     ) -> Result<Self, FilesystemError> {
-        let root =
-            HardenedStateRoot::open_or_create_excluding(state_root, repositories, vault_homes)?;
-        let root = descend_hex(&root, vault_id)?;
-        let root = descend_hex(&root, genesis_fingerprint)?;
+        let root = open_vault_scope(
+            state_root,
+            vault_id,
+            genesis_fingerprint,
+            repositories,
+            vault_homes,
+        )?;
         Ok(Self { root })
     }
 
@@ -185,13 +188,15 @@ impl VaultStateDirectory {
         principal_id: &[u8; 32],
         file: PrincipalStateFile,
     ) -> Result<Vec<u8>, FilesystemError> {
-        principal_root_existing(&self.root, principal_id)?
-            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+        read_state_file(
+            &principal_root_existing(&self.root, principal_id)?,
+            file.name(),
+            file.maximum_bytes(),
+        )
     }
 
     pub fn read_vault_state(&self, file: VaultStateFile) -> Result<Vec<u8>, FilesystemError> {
-        self.root
-            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+        read_state_file(&self.root, file.name(), file.maximum_bytes())
     }
 }
 
@@ -215,8 +220,11 @@ impl LockedVaultState<'_> {
         principal_id: &[u8; 32],
         file: PrincipalStateFile,
     ) -> Result<Vec<u8>, FilesystemError> {
-        principal_root(&self.directory.root, principal_id)?
-            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+        read_state_file(
+            &principal_root(&self.directory.root, principal_id)?,
+            file.name(),
+            file.maximum_bytes(),
+        )
     }
 
     pub fn preview(
@@ -234,14 +242,11 @@ impl LockedVaultState<'_> {
         file: PrincipalStateFile,
         contents: &ProtectedMemory,
     ) -> Result<PreparedPrivateFile, FilesystemError> {
-        if contents.len() > file.maximum_bytes() {
-            return Err(FilesystemError::new(
-                crate::FilesystemOperation::Prepare,
-                crate::FilesystemErrorKind::HardLinkOrSize,
-            ));
-        }
-        let precondition = self.preview(principal_id, file)?;
-        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
+        prepare_state_file(
+            || self.preview(principal_id, file),
+            file.maximum_bytes(),
+            contents,
+        )
     }
 
     pub fn publish(
@@ -254,9 +259,7 @@ impl LockedVaultState<'_> {
     }
 
     pub fn read_vault_state(&self, file: VaultStateFile) -> Result<Vec<u8>, FilesystemError> {
-        self.directory
-            .root
-            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+        read_state_file(&self.directory.root, file.name(), file.maximum_bytes())
     }
 
     pub fn prepare_vault_state(
@@ -264,17 +267,15 @@ impl LockedVaultState<'_> {
         file: VaultStateFile,
         contents: &ProtectedMemory,
     ) -> Result<PreparedPrivateFile, FilesystemError> {
-        if contents.len() > file.maximum_bytes() {
-            return Err(FilesystemError::new(
-                crate::FilesystemOperation::Prepare,
-                crate::FilesystemErrorKind::HardLinkOrSize,
-            ));
-        }
-        let precondition = self
-            .directory
-            .root
-            .preview_private_file(Path::new(file.name()))?;
-        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
+        prepare_state_file(
+            || {
+                self.directory
+                    .root
+                    .preview_private_file(Path::new(file.name()))
+            },
+            file.maximum_bytes(),
+            contents,
+        )
     }
 }
 
@@ -296,10 +297,13 @@ impl PrincipalStateDirectory {
         repositories: &[&RepositoryLocation],
         vault_homes: &[&Path],
     ) -> Result<Self, FilesystemError> {
-        let root =
-            HardenedStateRoot::open_or_create_excluding(state_root, repositories, vault_homes)?;
-        let root = descend_hex(&root, vault_id)?;
-        let root = descend_hex(&root, genesis_fingerprint)?;
+        let root = open_vault_scope(
+            state_root,
+            vault_id,
+            genesis_fingerprint,
+            repositories,
+            vault_homes,
+        )?;
         let root = descend_hex(&root, principal_id)?;
         Ok(Self { root })
     }
@@ -329,9 +333,7 @@ pub struct LockedPrincipalState<'a> {
 
 impl LockedPrincipalState<'_> {
     pub fn read(&self, file: PrincipalStateFile) -> Result<Vec<u8>, FilesystemError> {
-        self.directory
-            .root
-            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+        read_state_file(&self.directory.root, file.name(), file.maximum_bytes())
     }
 
     pub fn preview(
@@ -348,14 +350,7 @@ impl LockedPrincipalState<'_> {
         file: PrincipalStateFile,
         contents: &ProtectedMemory,
     ) -> Result<PreparedPrivateFile, FilesystemError> {
-        if contents.len() > file.maximum_bytes() {
-            return Err(FilesystemError::new(
-                crate::FilesystemOperation::Prepare,
-                crate::FilesystemErrorKind::HardLinkOrSize,
-            ));
-        }
-        let precondition = self.preview(file)?;
-        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
+        prepare_state_file(|| self.preview(file), file.maximum_bytes(), contents)
     }
 
     pub fn publish(
@@ -374,6 +369,40 @@ impl fmt::Debug for LockedPrincipalState<'_> {
             .field("path", &"[REDACTED]")
             .finish()
     }
+}
+
+fn open_vault_scope(
+    state_root: &Path,
+    vault_id: &[u8; 32],
+    genesis_fingerprint: &[u8; 32],
+    repositories: &[&RepositoryLocation],
+    vault_homes: &[&Path],
+) -> Result<HardenedStateRoot, FilesystemError> {
+    let root = HardenedStateRoot::open_or_create_excluding(state_root, repositories, vault_homes)?;
+    let root = descend_hex(&root, vault_id)?;
+    descend_hex(&root, genesis_fingerprint)
+}
+
+fn read_state_file(
+    root: &HardenedStateRoot,
+    name: &str,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, FilesystemError> {
+    root.read_private_file(Path::new(name), maximum_bytes)
+}
+
+fn prepare_state_file(
+    preview: impl FnOnce() -> Result<PrivateFilePrecondition, FilesystemError>,
+    maximum_bytes: usize,
+    contents: &ProtectedMemory,
+) -> Result<PreparedPrivateFile, FilesystemError> {
+    if contents.len() > maximum_bytes {
+        return Err(FilesystemError::new(
+            crate::FilesystemOperation::Prepare,
+            crate::FilesystemErrorKind::HardLinkOrSize,
+        ));
+    }
+    PreparedPrivateFile::prepare_if_unchanged(preview()?, contents, true)
 }
 
 fn descend_hex(

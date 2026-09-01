@@ -219,6 +219,22 @@ impl ProtectedMemory {
         Self::initialize_bounded(capacity, MAX_LARGE_PROTECTED_BYTES, policy, initializer)
     }
 
+    /// Allocates any supported compact or large protected value.
+    ///
+    /// The compact ceiling remains available through [`Self::initialize`] for
+    /// callers whose own contract must reject larger values.
+    pub fn initialize_supported<E>(
+        capacity: usize,
+        policy: ProtectionPolicy,
+        initializer: impl FnOnce(&mut [u8]) -> Result<usize, E>,
+    ) -> Result<Self, MemoryError> {
+        if capacity > MAX_PROTECTED_BYTES {
+            Self::initialize_large(capacity, policy, initializer)
+        } else {
+            Self::initialize(capacity, policy, initializer)
+        }
+    }
+
     fn initialize_bounded<E>(
         capacity: usize,
         maximum: usize,
@@ -379,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn large_allocations_require_the_explicit_bounded_constructor() -> Result<(), MemoryError> {
+    fn supported_dispatch_preserves_compact_and_large_bounds() -> Result<(), MemoryError> {
         let length = MAX_PROTECTED_BYTES + 1;
         let compact = ProtectedMemory::initialize(
             length,
@@ -388,7 +404,7 @@ mod tests {
         );
         assert!(matches!(compact, Err(error) if error.kind() == MemoryErrorKind::Capacity));
 
-        let large = ProtectedMemory::initialize_large(
+        let large = ProtectedMemory::initialize_supported(
             length,
             ProtectionPolicy::EmergencyAllowDegraded,
             |bytes| {
@@ -398,6 +414,22 @@ mod tests {
         )?;
         assert_eq!(large.len(), length);
         assert_eq!(large.capacity(), length);
+        assert!(matches!(
+            ProtectedMemory::initialize_supported(
+                0,
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |_| Ok::<usize, ()>(0),
+            ),
+            Err(error) if error.kind() == MemoryErrorKind::Capacity
+        ));
+        assert!(matches!(
+            ProtectedMemory::initialize_supported(
+                MAX_LARGE_PROTECTED_BYTES + 1,
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |bytes| Ok::<usize, ()>(bytes.len()),
+            ),
+            Err(error) if error.kind() == MemoryErrorKind::Capacity
+        ));
         Ok(())
     }
 

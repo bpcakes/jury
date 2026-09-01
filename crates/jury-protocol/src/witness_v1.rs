@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::canonical::{self, jce_v1 as jce, optional_u8, optional_u64};
 use crate::vault_v1::{
     AccessRole, ApprovalId, BoundedBytes, CancellationId, ContentRole, Digest32, Encapsulation1120,
     FieldId, FixedBytes, ItemAccessMode, ItemId, PrincipalId, ReceiptId, RecipientPublicKey1216,
@@ -132,7 +133,8 @@ pub enum ApprovalModeV1 {
 }
 
 impl ApprovalModeV1 {
-    const fn tag(self) -> u8 {
+    #[must_use]
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Human => 1,
             Self::Automatic => 2,
@@ -251,7 +253,8 @@ pub enum PlatformAssuranceV1 {
 }
 
 impl PlatformAssuranceV1 {
-    const fn tag(self) -> u8 {
+    #[must_use]
+    pub const fn tag(self) -> u8 {
         match self {
             Self::NormalizedPathOnly => 1,
             Self::StableExecutableIdentity => 2,
@@ -472,7 +475,7 @@ impl OperationContextV1 {
                 }
                 output.push(*mode);
                 output.extend_from_slice(destination_commitment.as_bytes());
-                output.push(access_mode_tag(*next_item_access_mode));
+                output.push(next_item_access_mode.tag());
             }
             Self::AdministrativeRekey {
                 next_vault_policy_sequence,
@@ -623,9 +626,9 @@ impl ActionManifestV1 {
         output.extend_from_slice(self.genesis_fingerprint.as_bytes());
         output.extend_from_slice(self.item_id.as_bytes());
         output.extend_from_slice(&self.key_epoch.to_be_bytes());
-        output.push(access_mode_tag(self.item_access_mode));
+        output.push(self.item_access_mode.tag());
         output.extend_from_slice(self.slot_id.as_bytes());
-        output.push(content_role_tag(self.content_role));
+        output.push(self.content_role.tag());
         output.extend_from_slice(&self.revision.to_be_bytes());
         output.extend_from_slice(self.revision_seal_id.as_bytes());
         output.extend_from_slice(&self.vault_policy_sequence.to_be_bytes());
@@ -634,7 +637,7 @@ impl ActionManifestV1 {
         output.extend_from_slice(&self.witness_policy_revision.to_be_bytes());
         output.extend_from_slice(self.witness_policy_digest.as_bytes());
         output.extend_from_slice(self.requester_principal_id.as_bytes());
-        output.push(access_role_tag(self.requested_access_role));
+        output.push(self.requested_access_role.tag());
         output.push(self.operation.tag());
         bytes_field(&mut output, &context)?;
         bytes_field(&mut output, &target)?;
@@ -1001,9 +1004,9 @@ impl WitnessRequestV1 {
         output.extend_from_slice(self.genesis_fingerprint.as_bytes());
         output.extend_from_slice(self.item_id.as_bytes());
         output.extend_from_slice(&self.key_epoch.to_be_bytes());
-        output.push(access_mode_tag(self.item_access_mode));
+        output.push(self.item_access_mode.tag());
         output.extend_from_slice(self.slot_id.as_bytes());
-        output.push(content_role_tag(self.content_role));
+        output.push(self.content_role.tag());
         output.extend_from_slice(&self.revision.to_be_bytes());
         output.extend_from_slice(self.revision_seal_id.as_bytes());
         output.extend_from_slice(&self.vault_policy_sequence.to_be_bytes());
@@ -1015,7 +1018,7 @@ impl WitnessRequestV1 {
         output.extend_from_slice(self.requester_principal_id.as_bytes());
         output.extend_from_slice(self.requester_signing_key_fingerprint.as_bytes());
         output.extend_from_slice(&self.requester_signing_key_epoch.to_be_bytes());
-        output.push(access_role_tag(self.requested_access_role));
+        output.push(self.requested_access_role.tag());
         output.push(self.operation.tag());
         output.extend_from_slice(self.approval_target_digest.as_bytes());
         output.extend_from_slice(self.action_manifest_digest.as_bytes());
@@ -2017,36 +2020,6 @@ fn valid_interval(issued_at_ms: u64, not_before_ms: Option<u64>, expires_at_ms: 
             .is_none_or(|not_before| issued_at_ms <= not_before && not_before <= expires_at_ms)
 }
 
-fn access_mode_tag(mode: ItemAccessMode) -> u8 {
-    match mode {
-        ItemAccessMode::DirectOnly => 1,
-        ItemAccessMode::WitnessedOnly => 2,
-        ItemAccessMode::Mixed => 3,
-    }
-}
-
-fn content_role_tag(role: ContentRole) -> u8 {
-    match role {
-        ContentRole::Descriptor => 1,
-        ContentRole::Body => 2,
-    }
-}
-
-fn access_role_tag(role: AccessRole) -> u8 {
-    match role {
-        AccessRole::Reader => 1,
-        AccessRole::Writer => 2,
-        AccessRole::Owner => 3,
-    }
-}
-
-fn jce(domain: &str) -> Vec<u8> {
-    let mut output = domain.as_bytes().to_vec();
-    output.push(0);
-    output.extend_from_slice(&SUITE.to_be_bytes());
-    output
-}
-
 fn digest(bytes: &[u8]) -> Digest32 {
     FixedBytes::new(Sha256::digest(bytes).into())
 }
@@ -2069,76 +2042,31 @@ fn hash_signed(
 }
 
 fn bytes_field(output: &mut Vec<u8>, value: &[u8]) -> Result<(), WitnessProtocolError> {
-    let length = u32::try_from(value.len())
-        .map_err(|_| WitnessProtocolError::new(WitnessProtocolErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(value);
-    Ok(())
+    canonical::bytes_field(output, value).map_err(|_| capacity_exhausted())
 }
 
 fn list_bytes(output: &mut Vec<u8>, values: &[Vec<u8>]) -> Result<(), WitnessProtocolError> {
-    let count = u32::try_from(values.len())
-        .map_err(|_| WitnessProtocolError::new(WitnessProtocolErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
-        bytes_field(output, value)?;
-    }
-    Ok(())
+    canonical::list_bytes(output, values).map_err(|_| capacity_exhausted())
 }
 
 fn list_fixed<T>(
     output: &mut Vec<u8>,
     values: &[T],
-    mut append: impl FnMut(&mut Vec<u8>, &T),
+    append: impl FnMut(&mut Vec<u8>, &T),
 ) -> Result<(), WitnessProtocolError> {
-    let count = u32::try_from(values.len())
-        .map_err(|_| WitnessProtocolError::new(WitnessProtocolErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
-        append(output, value);
-    }
-    Ok(())
+    canonical::list_fixed(output, values, append).map_err(|_| capacity_exhausted())
 }
 
 fn optional_fixed<const N: usize>(output: &mut Vec<u8>, value: Option<&[u8; N]>) {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            output.extend_from_slice(value);
-        }
-    }
+    canonical::optional_fixed(output, value.map(<[u8; N]>::as_slice));
 }
 
 fn optional_bytes(output: &mut Vec<u8>, value: Option<&[u8]>) -> Result<(), WitnessProtocolError> {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            bytes_field(output, value)?;
-        }
-    }
-    Ok(())
+    canonical::optional_bytes(output, value).map_err(|_| capacity_exhausted())
 }
 
-fn optional_u8(output: &mut Vec<u8>, value: Option<u8>) {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            output.push(value);
-        }
-    }
-}
-
-fn optional_u64(output: &mut Vec<u8>, value: Option<u64>) {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            output.extend_from_slice(&value.to_be_bytes());
-        }
-    }
+const fn capacity_exhausted() -> WitnessProtocolError {
+    WitnessProtocolError::new(WitnessProtocolErrorKind::CapacityExhausted)
 }
 
 fn strictly_sorted_unique<T>(values: &[T], less_than: impl Fn(&T, &T) -> bool) -> bool {

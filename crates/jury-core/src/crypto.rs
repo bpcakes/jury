@@ -282,11 +282,8 @@ pub(crate) fn open(
         opened?;
         Ok::<usize, ()>(destination.len())
     };
-    let result = if plaintext_length > jury_protected::MAX_PROTECTED_BYTES {
-        ProtectedMemory::initialize_large(plaintext_length, key.status().policy(), initialize)
-    } else {
-        ProtectedMemory::initialize(plaintext_length, key.status().policy(), initialize)
-    };
+    let result =
+        ProtectedMemory::initialize_supported(plaintext_length, key.status().policy(), initialize);
     result.map_err(|error| match error.kind() {
         MemoryErrorKind::Initializer => initializer_error,
         _ => CryptoError::MemoryProtection,

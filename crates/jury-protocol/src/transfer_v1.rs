@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::artifact::{self, JsonError};
 use crate::vault_v1::{
     BoundedBytes, Digest32, FixedBytes, MAX_VAULT_BYTES, PrincipalId, Signature64, VaultFileV1,
     VaultId,
@@ -65,16 +66,18 @@ impl fmt::Display for TransferFormatError {
 
 impl std::error::Error for TransferFormatError {}
 
+const fn map_json_error(error: JsonError) -> TransferFormatError {
+    match error {
+        JsonError::ArtifactTooLarge => TransferFormatError::ArtifactTooLarge,
+        JsonError::ConflictMarker => TransferFormatError::ConflictMarker,
+        JsonError::InvalidJson => TransferFormatError::InvalidJson,
+    }
+}
+
 impl TransferEnvelopeV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, TransferFormatError> {
-        if bytes.len() > MAX_TRANSFER_BYTES {
-            return Err(TransferFormatError::ArtifactTooLarge);
-        }
-        if contains_conflict_marker(bytes) {
-            return Err(TransferFormatError::ConflictMarker);
-        }
-        let envelope: Self =
-            serde_json::from_slice(bytes).map_err(|_| TransferFormatError::InvalidJson)?;
+        artifact::validate_json_input(bytes, MAX_TRANSFER_BYTES).map_err(map_json_error)?;
+        let envelope: Self = artifact::deserialize_json(bytes).map_err(map_json_error)?;
         envelope.validate_shape()?;
         if envelope.to_json_bytes()? != bytes {
             return Err(TransferFormatError::NonCanonicalJson);
@@ -84,13 +87,7 @@ impl TransferEnvelopeV1 {
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, TransferFormatError> {
         self.validate_shape()?;
-        let mut bytes =
-            serde_json::to_vec_pretty(self).map_err(|_| TransferFormatError::InvalidJson)?;
-        bytes.push(b'\n');
-        if bytes.len() > MAX_TRANSFER_BYTES {
-            return Err(TransferFormatError::ArtifactTooLarge);
-        }
-        Ok(bytes)
+        artifact::pretty_json_bytes(self, MAX_TRANSFER_BYTES).map_err(map_json_error)
     }
 
     /// Typed signature input. JSON serialization is deliberately excluded.
@@ -147,12 +144,6 @@ impl TransferEnvelopeV1 {
         }
         Ok(())
     }
-}
-
-fn contains_conflict_marker(bytes: &[u8]) -> bool {
-    bytes.split(|byte| *byte == b'\n').any(|line| {
-        line.starts_with(b"<<<<<<<") || line.starts_with(b"=======") || line.starts_with(b">>>>>>>")
-    })
 }
 
 fn sha256(bytes: &[u8]) -> Digest32 {

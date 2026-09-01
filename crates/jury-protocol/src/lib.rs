@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+mod artifact;
+mod canonical;
 pub mod identity_v1;
 pub mod transfer_v1;
 pub mod vault_v1;

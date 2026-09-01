@@ -92,12 +92,7 @@ impl<'de, const N: usize> Deserialize<'de> for FixedBytes<N> {
                         actual: encoded.len(),
                     }));
                 }
-                let decoded = STANDARD
-                    .decode(encoded)
-                    .map_err(|_| E::custom(ByteStringError::NonCanonical))?;
-                if STANDARD.encode(&decoded) != encoded {
-                    return Err(E::custom(ByteStringError::NonCanonical));
-                }
+                let decoded = decode_canonical_base64(encoded).map_err(E::custom)?;
                 FixedBytes::from_slice(&decoded).map_err(E::custom)
             }
         }
@@ -181,18 +176,23 @@ impl<'de, const MAX: usize> Deserialize<'de> for BoundedBytes<MAX> {
                         actual: encoded.len(),
                     }));
                 }
-                let decoded = STANDARD
-                    .decode(encoded)
-                    .map_err(|_| E::custom(ByteStringError::NonCanonical))?;
-                if STANDARD.encode(&decoded) != encoded {
-                    return Err(E::custom(ByteStringError::NonCanonical));
-                }
+                let decoded = decode_canonical_base64(encoded).map_err(E::custom)?;
                 BoundedBytes::new(decoded).map_err(E::custom)
             }
         }
 
         deserializer.deserialize_str(BoundedBytesVisitor::<MAX>)
     }
+}
+
+fn decode_canonical_base64(encoded: &str) -> Result<Vec<u8>, ByteStringError> {
+    let decoded = STANDARD
+        .decode(encoded)
+        .map_err(|_| ByteStringError::NonCanonical)?;
+    if STANDARD.encode(&decoded) != encoded {
+        return Err(ByteStringError::NonCanonical);
+    }
+    Ok(decoded)
 }
 
 fn decode_hex(encoded: &str) -> Result<[u8; 32], ByteStringError> {

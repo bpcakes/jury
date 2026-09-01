@@ -121,7 +121,7 @@ pub(super) fn finish_item_mutation_with_ack(
     options: MutationFinishOptions,
 ) -> Result<CommandOutput, CliError> {
     let timestamp = prepared.policy.revision.timestamp_ms;
-    let mut plan = VaultMutationPlan::prepare_item_batch(
+    let plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
         &context.catalog.witness_policies,
         &context.identity,
@@ -132,32 +132,14 @@ pub(super) fn finish_item_mutation_with_ack(
         options.kind,
     )
     .map_err(|error| map_mutation_error(error.kind()))?;
-    if let Some(repository) = context.home.repository() {
-        plan = plan.bind_repository_ancestry(
-            repository
-                .git_ancestry_digest()
-                .map_err(map_filesystem_error)?,
-        );
-    }
-    if options.dry_run {
-        return Ok(mutation_output(
-            options.operation,
-            Some(item),
-            &context,
-            &plan,
-            true,
-            None,
-        ));
-    }
-    let outcome = commit_mutation(&context, &plan, options.protection)?;
-    Ok(mutation_output(
+    finish_mutation_plan(
+        context,
+        plan,
         options.operation,
         Some(item),
-        &context,
-        &plan,
-        false,
-        Some(&outcome),
-    ))
+        options.dry_run,
+        options.protection,
+    )
 }
 
 pub(super) fn finish_item_batch_mutation(
@@ -172,7 +154,7 @@ pub(super) fn finish_item_batch_mutation(
         .policy
         .revision
         .timestamp_ms;
-    let mut plan = VaultMutationPlan::prepare_item_batch(
+    let plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
         &context.catalog.witness_policies,
         &context.identity,
@@ -183,32 +165,14 @@ pub(super) fn finish_item_batch_mutation(
         options.kind,
     )
     .map_err(|error| map_mutation_error(error.kind()))?;
-    if let Some(repository) = context.home.repository() {
-        plan = plan.bind_repository_ancestry(
-            repository
-                .git_ancestry_digest()
-                .map_err(map_filesystem_error)?,
-        );
-    }
-    if options.dry_run {
-        return Ok(mutation_output(
-            options.operation,
-            None,
-            &context,
-            &plan,
-            true,
-            None,
-        ));
-    }
-    let outcome = commit_mutation(&context, &plan, options.protection)?;
-    Ok(mutation_output(
+    finish_mutation_plan(
+        context,
+        plan,
         options.operation,
         None,
-        &context,
-        &plan,
-        false,
-        Some(&outcome),
-    ))
+        options.dry_run,
+        options.protection,
+    )
 }
 
 pub(super) fn finish_item_component_batch_mutation(
@@ -218,7 +182,7 @@ pub(super) fn finish_item_component_batch_mutation(
     timestamp: u64,
     options: MutationFinishOptions,
 ) -> Result<CommandOutput, CliError> {
-    let mut plan = VaultMutationPlan::prepare_item_component_batch(
+    let plan = VaultMutationPlan::prepare_item_component_batch(
         &context.vault,
         &context.catalog.witness_policies,
         &context.identity,
@@ -229,32 +193,14 @@ pub(super) fn finish_item_component_batch_mutation(
         options.kind,
     )
     .map_err(|error| map_mutation_error(error.kind()))?;
-    if let Some(repository) = context.home.repository() {
-        plan = plan.bind_repository_ancestry(
-            repository
-                .git_ancestry_digest()
-                .map_err(map_filesystem_error)?,
-        );
-    }
-    if options.dry_run {
-        return Ok(mutation_output(
-            options.operation,
-            None,
-            &context,
-            &plan,
-            true,
-            None,
-        ));
-    }
-    let outcome = commit_mutation(&context, &plan, options.protection)?;
-    Ok(mutation_output(
+    finish_mutation_plan(
+        context,
+        plan,
         options.operation,
         None,
-        &context,
-        &plan,
-        false,
-        Some(&outcome),
-    ))
+        options.dry_run,
+        options.protection,
+    )
 }
 
 pub(super) fn finish_policy_mutation(
@@ -265,7 +211,7 @@ pub(super) fn finish_policy_mutation(
     dry_run: bool,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    let mut plan = VaultMutationPlan::prepare_policy(
+    let plan = VaultMutationPlan::prepare_policy(
         &context.vault,
         &context.catalog.witness_policies,
         &context.identity,
@@ -275,6 +221,17 @@ pub(super) fn finish_policy_mutation(
         MutationKind::Policy,
     )
     .map_err(|error| map_mutation_error(error.kind()))?;
+    finish_mutation_plan(context, plan, operation, None, dry_run, protection)
+}
+
+pub(super) fn finish_mutation_plan(
+    context: VaultPrincipalContext,
+    mut plan: VaultMutationPlan,
+    operation: &'static str,
+    item: Option<String>,
+    dry_run: bool,
+    protection: ProtectionPolicy,
+) -> Result<CommandOutput, CliError> {
     if let Some(repository) = context.home.repository() {
         plan = plan.bind_repository_ancestry(
             repository
@@ -284,13 +241,13 @@ pub(super) fn finish_policy_mutation(
     }
     if dry_run {
         return Ok(mutation_output(
-            operation, None, &context, &plan, true, None,
+            operation, item, &context, &plan, true, None,
         ));
     }
     let outcome = commit_mutation(&context, &plan, protection)?;
     Ok(mutation_output(
         operation,
-        None,
+        item,
         &context,
         &plan,
         false,
@@ -303,8 +260,8 @@ pub(super) fn commit_mutation(
     plan: &VaultMutationPlan,
     protection: ProtectionPolicy,
 ) -> Result<MutationCommitOutcome, CliError> {
-    let catalog_before = context.catalog_before.to_json_bytes()?;
-    let catalog_target = context.catalog.to_json_bytes()?;
+    let catalog_before = policy_catalog_json_bytes(&context.catalog_before)?;
+    let catalog_target = policy_catalog_json_bytes(&context.catalog)?;
     let catalog_update = (catalog_before != catalog_target).then(|| {
         MutationCatalogUpdate::new(
             context.catalog_before_bytes.as_deref(),

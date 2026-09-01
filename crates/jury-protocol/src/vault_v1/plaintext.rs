@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+
+use crate::artifact;
 use zeroize::Zeroize;
 
 use super::bytes::{BoundedBytes, FieldId};
@@ -177,11 +179,12 @@ impl ItemStateV1 {
 
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, PlaintextError> {
         self.validate()?;
-        serde_json::to_vec(self).map_err(|_| PlaintextError::InvalidJson)
+        artifact::compact_json_bytes(self).map_err(|_| PlaintextError::InvalidJson)
     }
 
     pub fn parse_canonical(bytes: &[u8]) -> Result<Self, PlaintextError> {
-        let state: Self = serde_json::from_slice(bytes).map_err(|_| PlaintextError::InvalidJson)?;
+        let state: Self =
+            artifact::deserialize_json(bytes).map_err(|_| PlaintextError::InvalidJson)?;
         state.validate()?;
         if state.to_canonical_bytes()? != bytes {
             return Err(PlaintextError::NonCanonicalJson);

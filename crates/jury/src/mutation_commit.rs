@@ -667,11 +667,7 @@ fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<ProtectedMemory, Mu
         destination.copy_from_slice(bytes);
         Ok::<usize, ()>(destination.len())
     };
-    let protected = if bytes.len() > jury_protected::MAX_PROTECTED_BYTES {
-        ProtectedMemory::initialize_large(bytes.len(), policy, initialize)
-    } else {
-        ProtectedMemory::initialize(bytes.len(), policy, initialize)
-    };
+    let protected = ProtectedMemory::initialize_supported(bytes.len(), policy, initialize);
     protected.map_err(|_| MutationCommitError::new(MutationCommitErrorKind::ProtectionUnavailable))
 }
 
@@ -872,11 +868,7 @@ mod tests {
             destination.copy_from_slice(bytes);
             Ok::<usize, ()>(destination.len())
         };
-        if bytes.len() > jury_protected::MAX_PROTECTED_BYTES {
-            ProtectedMemory::initialize_large(bytes.len(), policy, initialize)
-        } else {
-            ProtectedMemory::initialize(bytes.len(), policy, initialize)
-        }
+        ProtectedMemory::initialize_supported(bytes.len(), policy, initialize)
     }
 
     #[test]

@@ -15,7 +15,7 @@ use jury_protocol::{
     },
     witness_v1::{
         ACCEPTED_CLOCK_SKEW_MS, ActionManifestV1, ApprovalBytes, ApprovalDecisionKindV1,
-        ApprovalDecisionV1, ApprovalModeV1, CancellationBytes, CancellerRoleV1, IntendedWitnessV1,
+        ApprovalDecisionV1, CancellationBytes, CancellerRoleV1, IntendedWitnessV1,
         MAX_RECORDED_APPROVALS, MAX_REPLAY_RECORDS_PER_SERVICE, MAX_REPLAY_RECORDS_PER_VAULT,
         PolicyMaterialBytes, REPLAY_RETENTION_MS, RegistrationBytes, ReplayStateV1,
         RequestCancellationV1, VaultHighWatermarkV1, VaultPolicyCheckpointV1,
@@ -32,8 +32,8 @@ use crate::{
     entropy::RandomSource,
     identity::{WitnessContributionTarget, WitnessIdentity},
     policy::{
-        ApprovalMode, DescriptorStatus, PlatformAssurance, PolicyError, PolicyErrorKind,
-        PolicyState, WitnessAccessRule, WitnessOperation, WitnessPolicy,
+        DescriptorStatus, PolicyError, PolicyErrorKind, PolicyState, WitnessAccessRule,
+        WitnessPolicy, core_operation, platform_assurance_tag, protocol_approval_mode,
     },
 };
 
@@ -1142,8 +1142,8 @@ where
         if manifest.timeout_ms > rule.max_timeout_ms
             || manifest.output_limit_bytes > rule.max_output_bytes
             || manifest.approval_target.entries.len() > usize::from(rule.max_target_count)
-            || platform_rank(manifest.platform_assurance)
-                < required_platform_rank(rule.required_platform_assurance)
+            || manifest.platform_assurance.tag()
+                < platform_assurance_tag(rule.required_platform_assurance)
         {
             return Err(refused(WitnessReasonV1::WorkloadExceeded));
         }
@@ -1791,13 +1791,6 @@ fn tally_approvals(approvals: &[ApprovalDecisionV1], rule: &WitnessAccessRule) -
     }
 }
 
-const fn protocol_approval_mode(mode: ApprovalMode) -> ApprovalModeV1 {
-    match mode {
-        ApprovalMode::Human => ApprovalModeV1::Human,
-        ApprovalMode::Automatic => ApprovalModeV1::Automatic,
-    }
-}
-
 fn same_request(
     left: &jury_protocol::witness_v1::WitnessRequestV1,
     right: &jury_protocol::witness_v1::WitnessRequestV1,
@@ -1830,20 +1823,6 @@ fn random_response_id(source: &mut impl RandomSource) -> Result<ResponseId, Witn
     ResponseId::from_bytes(bytes).map_err(|_| refused(WitnessReasonV1::InternalFailure))
 }
 
-const fn core_operation(operation: WitnessOperationV1) -> WitnessOperation {
-    match operation {
-        WitnessOperationV1::ReadStdout => WitnessOperation::ReadStdout,
-        WitnessOperationV1::WritePrivateFile => WitnessOperation::WritePrivateFile,
-        WitnessOperationV1::TemplateInjection => WitnessOperation::TemplateInjection,
-        WitnessOperationV1::ChildEnvironment => WitnessOperation::ChildEnvironment,
-        WitnessOperationV1::ChildStdin => WitnessOperation::ChildStdin,
-        WitnessOperationV1::ItemMutation => WitnessOperation::ItemMutation,
-        WitnessOperationV1::Backup => WitnessOperation::Backup,
-        WitnessOperationV1::Recovery => WitnessOperation::Recovery,
-        WitnessOperationV1::AdministrativeRekey => WitnessOperation::AdministrativeRekey,
-    }
-}
-
 const fn operation_capability(operation: WitnessOperationV1) -> Capability {
     match operation {
         WitnessOperationV1::ReadStdout
@@ -1856,20 +1835,6 @@ const fn operation_capability(operation: WitnessOperationV1) -> Capability {
         WitnessOperationV1::Recovery | WitnessOperationV1::AdministrativeRekey => {
             Capability::Administer
         }
-    }
-}
-
-const fn platform_rank(platform: jury_protocol::witness_v1::PlatformAssuranceV1) -> u8 {
-    match platform {
-        jury_protocol::witness_v1::PlatformAssuranceV1::NormalizedPathOnly => 1,
-        jury_protocol::witness_v1::PlatformAssuranceV1::StableExecutableIdentity => 2,
-    }
-}
-
-const fn required_platform_rank(platform: PlatformAssurance) -> u8 {
-    match platform {
-        PlatformAssurance::NormalizedPathOnly => 1,
-        PlatformAssurance::StableExecutableIdentity => 2,
     }
 }
 
@@ -1913,8 +1878,8 @@ fn validate_public_request(
     if manifest.timeout_ms > rule.max_timeout_ms
         || manifest.output_limit_bytes > rule.max_output_bytes
         || manifest.approval_target.entries.len() > usize::from(rule.max_target_count)
-        || platform_rank(manifest.platform_assurance)
-            < required_platform_rank(rule.required_platform_assurance)
+        || manifest.platform_assurance.tag()
+            < platform_assurance_tag(rule.required_platform_assurance)
     {
         return Err(refused(WitnessReasonV1::WorkloadExceeded));
     }

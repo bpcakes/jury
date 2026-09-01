@@ -312,28 +312,15 @@ impl VaultMutationPlan {
             }
             envelopes.push(mutation.envelope);
         }
-        let mut deferred_owner_grants = Vec::new();
-        operations.retain(|operation| {
-            if matches!(operation, PolicyOperationV1::OwnerGrant { .. }) {
-                deferred_owner_grants.push(operation.clone());
-                false
-            } else {
-                true
-            }
-        });
-        operations.extend(deferred_owner_grants);
-        for operation in additional_operations {
-            push_batch_operation(&mut operations, operation)?;
-        }
-        let prepared = current_policy
-            .prepare_revision(author, timestamp_ms, operations)
-            .map_err(map_policy_error)?;
-        Self::from_prepared(
+        Self::finish_item_batch(
             current,
             witness_policies,
-            prepared,
-            envelopes,
+            &current_policy,
+            author,
             timestamp_ms,
+            operations,
+            envelopes,
+            additional_operations,
             downgrade,
             kind,
         )
@@ -375,6 +362,33 @@ impl VaultMutationPlan {
             }
             envelopes.push(component.envelope);
         }
+        Self::finish_item_batch(
+            current,
+            witness_policies,
+            &current_policy,
+            author,
+            timestamp_ms,
+            operations,
+            envelopes,
+            additional_operations,
+            downgrade,
+            kind,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_item_batch(
+        current: &VaultFileV1,
+        witness_policies: &[WitnessPolicy],
+        current_policy: &PolicyState,
+        author: &VaultPrincipalIdentity,
+        timestamp_ms: u64,
+        mut operations: Vec<PolicyOperationV1>,
+        envelopes: Vec<ItemEnvelopeV1>,
+        additional_operations: Vec<PolicyOperationV1>,
+        downgrade: DirectDowngradeAcknowledgement,
+        kind: MutationKind,
+    ) -> Result<Self, MutationError> {
         let mut deferred_owner_grants = Vec::new();
         operations.retain(|operation| {
             if matches!(operation, PolicyOperationV1::OwnerGrant { .. }) {

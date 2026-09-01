@@ -239,11 +239,7 @@ pub(super) fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<Protecte
         Ok::<usize, ()>(bytes.len())
     };
     let capacity = bytes.len().max(1);
-    let result = if capacity > jury_protected::MAX_PROTECTED_BYTES {
-        ProtectedMemory::initialize_large(capacity, policy, initialize)
-    } else {
-        ProtectedMemory::initialize(capacity, policy, initialize)
-    };
+    let result = ProtectedMemory::initialize_supported(capacity, policy, initialize);
     result.map_err(|_| {
         CliError::new(
             CliErrorKind::ProtectionUnavailable,

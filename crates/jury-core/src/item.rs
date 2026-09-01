@@ -26,6 +26,7 @@ use sha2::{Digest as _, Sha256};
 use vsss_rs::{Gf256, IdentifierGf256};
 use zeroize::Zeroizing;
 
+use crate::canonical::jce_v1 as jce;
 use crate::crypto::{self, CryptoError};
 use crate::domain::{IdentifierGenerationError, NativeIdGenerator};
 use crate::identity::{ProtectedRevisionSecret, VaultPrincipalIdentity};
@@ -999,13 +1000,6 @@ fn share_commitment(
     Ok(FixedBytes::new(digest.finalize().into()))
 }
 
-fn jce(domain: &str) -> Vec<u8> {
-    let mut output = domain.as_bytes().to_vec();
-    output.push(0);
-    output.extend_from_slice(&SUITE.to_be_bytes());
-    output
-}
-
 fn descriptor_metadata(
     revision: u64,
     epoch: u64,
@@ -1153,11 +1147,7 @@ fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<ProtectedMemory, It
         output.copy_from_slice(bytes);
         Ok::<usize, ()>(output.len())
     };
-    let protected = if bytes.len() > jury_protected::MAX_PROTECTED_BYTES {
-        ProtectedMemory::initialize_large(bytes.len(), policy, initialize)
-    } else {
-        ProtectedMemory::initialize(bytes.len(), policy, initialize)
-    };
+    let protected = ProtectedMemory::initialize_supported(bytes.len(), policy, initialize);
     protected.map_err(|_| ItemError::new(ItemErrorKind::ProtectionUnavailable))
 }
 

@@ -24,7 +24,7 @@ pub(super) fn transfer_export(
     }
 
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let catalog = transfer_catalog(&context.catalog)?;
+    let catalog = context.catalog.clone();
     let envelope = TransferCreator::new()
         .create(&context.vault, catalog, &context.identity, timestamp_ms()?)
         .map_err(map_transfer_error)?;
@@ -312,31 +312,12 @@ fn import_existing(
         timestamp_ms()?,
     )
     .map_err(map_transfer_import_error)?;
-    let Some(mut plan) = plan.take() else {
+    let Some(plan) = plan.take() else {
         return transfer_import_output(&context.policy, transfer.policy(), true, false, false);
     };
-    context.catalog = PolicyCatalogV1 {
-        version: transfer.catalog().version,
-        role_descriptors: transfer.catalog().role_descriptors.clone(),
-        witness_policies: transfer.catalog().witness_policies.clone(),
-    };
-    context.catalog.to_json_bytes()?;
-    if let Some(repository) = context.home.repository() {
-        plan = plan.bind_repository_ancestry(
-            repository
-                .git_ancestry_digest()
-                .map_err(map_filesystem_error)?,
-        );
-    }
-    let outcome = commit_mutation(&context, &plan, protection)?;
-    Ok(mutation_output(
-        "transfer-import",
-        None,
-        &context,
-        &plan,
-        false,
-        Some(&outcome),
-    ))
+    context.catalog = transfer.catalog().clone();
+    policy_catalog_json_bytes(&context.catalog)?;
+    finish_mutation_plan(context, plan, "transfer-import", None, false, protection)
 }
 
 fn preview_existing_import_read_only(
@@ -527,12 +508,8 @@ fn import_absent(
             false,
         ),
     };
-    let catalog = PolicyCatalogV1 {
-        version: transfer.catalog().version,
-        role_descriptors: transfer.catalog().role_descriptors.clone(),
-        witness_policies: transfer.catalog().witness_policies.clone(),
-    };
-    let catalog_bytes = catalog.to_json_bytes()?;
+    let catalog = transfer.catalog().clone();
+    let catalog_bytes = policy_catalog_json_bytes(&catalog)?;
     {
         let locked = catalog_state.try_lock().map_err(|_| local_state_error())?;
         let protected_catalog = protect(&catalog_bytes, protection)?;
@@ -598,14 +575,6 @@ fn import_absent(
         true,
         durability(shared_publication),
     )
-}
-
-fn transfer_catalog(catalog: &PolicyCatalogV1) -> Result<TransferPublicCatalogV1, CliError> {
-    TransferPublicCatalogV1::new(
-        catalog.role_descriptors.clone(),
-        catalog.witness_policies.clone(),
-    )
-    .map_err(map_transfer_error)
 }
 
 fn accessible_name_map(
@@ -806,23 +775,12 @@ fn map_transfer_error(error: jury_core::transfer::TransferError) -> CliError {
 }
 
 fn map_transfer_import_error(error: jury_core::mutation::MutationError) -> CliError {
+    map_transfer_import_error_kind(error.kind())
+}
+
+fn map_transfer_import_error_kind(kind: jury_core::mutation::MutationErrorKind) -> CliError {
     use jury_core::mutation::MutationErrorKind;
-    match error.kind() {
-        MutationErrorKind::TransferBehind => CliError::new(
-            CliErrorKind::Conflict,
-            "transfer-behind",
-            "the incoming transfer is behind retained local state",
-        ),
-        MutationErrorKind::TransferDiverged => CliError::new(
-            CliErrorKind::Conflict,
-            "transfer-diverged",
-            "the incoming transfer diverges from retained local state",
-        ),
-        MutationErrorKind::TransferDowngrade => CliError::new(
-            CliErrorKind::Conflict,
-            "transfer-authority-downgrade",
-            "the incoming transfer weakens direct or witnessed authority",
-        ),
+    match kind {
         MutationErrorKind::Unauthorized => identity_not_registered(),
         kind => map_mutation_error(kind),
     }
@@ -846,4 +804,35 @@ const fn identity_not_registered() -> CliError {
 
 fn sha256_digest(bytes: &[u8]) -> Digest32 {
     Digest32::new(Sha256::digest(bytes).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jury_core::mutation::MutationErrorKind;
+
+    #[test]
+    fn transfer_import_overrides_only_the_incoming_identity_error() {
+        assert_eq!(
+            map_transfer_import_error_kind(MutationErrorKind::Unauthorized),
+            identity_not_registered()
+        );
+        for kind in [
+            MutationErrorKind::InvalidCurrentState,
+            MutationErrorKind::InvalidPlan,
+            MutationErrorKind::NoChange,
+            MutationErrorKind::CapacityExhausted,
+            MutationErrorKind::DirectDowngradeRequiresAcknowledgement,
+            MutationErrorKind::MissingItemEnvelope,
+            MutationErrorKind::UnexpectedItemEnvelope,
+            MutationErrorKind::TransferBehind,
+            MutationErrorKind::TransferDiverged,
+            MutationErrorKind::TransferDowngrade,
+        ] {
+            assert_eq!(
+                map_transfer_import_error_kind(kind),
+                map_mutation_error(kind)
+            );
+        }
+    }
 }

@@ -23,6 +23,7 @@ use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 
 use crate::{
+    canonical::jce_v1 as identity_jce,
     crypto::{self, CryptoError},
     domain::{IdentifierGenerationError, NativeIdGenerator},
 };
@@ -763,7 +764,7 @@ fn build_payload(
         output[..2].copy_from_slice(&1_u16.to_be_bytes());
         output[2..4].copy_from_slice(&1_u16.to_be_bytes());
         output[4..36].copy_from_slice(header.principal_id.as_bytes());
-        output[36] = principal_kind_tag(header.principal_kind);
+        output[36] = header.principal_kind.tag();
         recipient_seed.expose(|bytes| output[RECIPIENT_SEED_RANGE].copy_from_slice(bytes))?;
         signing_seed.expose(|bytes| output[SIGNING_SEED_RANGE].copy_from_slice(bytes))?;
         local_seed.expose(|bytes| output[LOCAL_SEED_RANGE].copy_from_slice(bytes))?;
@@ -795,7 +796,7 @@ fn validate_payload(
                 || bytes[..2] != 1_u16.to_be_bytes()
                 || bytes[2..4] != 1_u16.to_be_bytes()
                 || bytes[4..36] != *header.principal_id.as_bytes()
-                || bytes[36] != principal_kind_tag(header.principal_kind)
+                || bytes[36] != header.principal_kind.tag()
             {
                 return Ok(false);
             }
@@ -972,15 +973,6 @@ fn fill_public<const N: usize>(source: &mut impl RandomSource) -> Result<[u8; N]
     Ok(output)
 }
 
-const fn principal_kind_tag(kind: PrincipalKind) -> u8 {
-    match kind {
-        PrincipalKind::Human => 1,
-        PrincipalKind::Machine => 2,
-        PrincipalKind::Approver => 3,
-        PrincipalKind::Witness => 4,
-    }
-}
-
 const fn map_identifier_error(error: IdentifierGenerationError) -> IdentityError {
     match error {
         IdentifierGenerationError::EntropyUnavailable => {
@@ -1005,13 +997,6 @@ const fn map_crypto_error(error: CryptoError) -> IdentityError {
 
 const fn map_format_error(_: IdentityFormatError) -> IdentityError {
     IdentityError::new(IdentityErrorKind::Format)
-}
-
-fn identity_jce(domain: &str) -> Vec<u8> {
-    let mut output = Vec::with_capacity(domain.len() + 3);
-    output.extend_from_slice(domain.as_bytes());
-    output.extend_from_slice(&[0, 0, 1]);
-    output
 }
 
 #[cfg(test)]

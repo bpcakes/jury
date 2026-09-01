@@ -16,7 +16,8 @@ pub enum PrincipalKind {
 }
 
 impl PrincipalKind {
-    pub(crate) const fn tag(self) -> u8 {
+    /// Returns this value's canonical suite-1 encoding tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Human => 1,
             Self::Machine => 2,
@@ -34,7 +35,8 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub(crate) const fn tag(self) -> u8 {
+    /// Returns this value's canonical suite-1 encoding tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Canonical => 1,
             Self::Legacy => 2,
@@ -50,7 +52,8 @@ pub enum ContentRole {
 }
 
 impl ContentRole {
-    pub(crate) const fn tag(self) -> u8 {
+    /// Returns this value's canonical suite-1 encoding tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Descriptor => 1,
             Self::Body => 2,
@@ -67,7 +70,8 @@ pub enum AccessRole {
 }
 
 impl AccessRole {
-    pub(crate) const fn tag(self) -> u8 {
+    /// Returns this value's canonical suite-1 encoding tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::Reader => 1,
             Self::Writer => 2,
@@ -85,7 +89,8 @@ pub enum ItemAccessMode {
 }
 
 impl ItemAccessMode {
-    pub(crate) const fn tag(self) -> u8 {
+    /// Returns this value's canonical suite-1 encoding tag.
+    pub const fn tag(self) -> u8 {
         match self {
             Self::DirectOnly => 1,
             Self::WitnessedOnly => 2,

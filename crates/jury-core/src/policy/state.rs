@@ -8,11 +8,10 @@ use jury_protocol::vault_v1::{
 };
 use sha2::{Digest as _, Sha256};
 
+use crate::canonical::{self, jce_v1 as jce};
 use crate::domain::Capability;
 
 use super::witness::WitnessPolicy;
-
-const SUITE: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicyErrorKind {
@@ -417,10 +416,12 @@ impl PolicyState {
             .map(|(item_id, item)| {
                 let mut entry = Vec::with_capacity(171);
                 entry.extend_from_slice(item_id.as_bytes());
-                entry.push(item_kind_tag(item.item_kind));
-                entry.push(access_mode_tag(item.access_mode().ok_or_else(|| {
-                    PolicyError::new(PolicyErrorKind::InvalidTransition)
-                })?));
+                entry.push(item.item_kind.tag());
+                entry.push(
+                    item.access_mode()
+                        .ok_or_else(|| PolicyError::new(PolicyErrorKind::InvalidTransition))?
+                        .tag(),
+                );
                 entry.extend_from_slice(&item.key_epoch.to_be_bytes());
                 entry.extend_from_slice(&item.descriptor.canonical_bytes());
                 entry.extend_from_slice(item.current_item_revision_hash.as_bytes());
@@ -451,7 +452,7 @@ impl PolicyState {
                     let mut entry = Vec::with_capacity(65);
                     entry.extend_from_slice(item_id.as_bytes());
                     entry.extend_from_slice(principal_id.as_bytes());
-                    entry.push(access_role_tag(*role));
+                    entry.push(role.tag());
                     entry
                 })
             })
@@ -546,59 +547,17 @@ fn role_permits(role: AccessRole, capability: Capability) -> bool {
     )
 }
 
-fn item_kind_tag(kind: ItemKind) -> u8 {
-    match kind {
-        ItemKind::Canonical => 1,
-        ItemKind::Legacy => 2,
-    }
-}
-
-fn access_mode_tag(mode: ItemAccessMode) -> u8 {
-    match mode {
-        ItemAccessMode::DirectOnly => 1,
-        ItemAccessMode::WitnessedOnly => 2,
-        ItemAccessMode::Mixed => 3,
-    }
-}
-
-fn access_role_tag(role: AccessRole) -> u8 {
-    match role {
-        AccessRole::Reader => 1,
-        AccessRole::Writer => 2,
-        AccessRole::Owner => 3,
-    }
-}
-
-fn jce(domain: &str) -> Vec<u8> {
-    let mut output = domain.as_bytes().to_vec();
-    output.push(0);
-    output.extend_from_slice(&SUITE.to_be_bytes());
-    output
-}
-
 fn list_fixed<'a>(
     output: &mut Vec<u8>,
     values: impl IntoIterator<Item = &'a [u8]>,
 ) -> Result<(), PolicyError> {
-    let values = values.into_iter().collect::<Vec<_>>();
-    let count = u32::try_from(values.len())
-        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
+    canonical::list_fixed(output, values, |output, value| {
         output.extend_from_slice(value);
-    }
-    Ok(())
+    })
+    .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))
 }
 
 fn list_bytes(output: &mut Vec<u8>, values: &[Vec<u8>]) -> Result<(), PolicyError> {
-    let count = u32::try_from(values.len())
-        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
-        let length = u32::try_from(value.len())
-            .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-        output.extend_from_slice(&length.to_be_bytes());
-        output.extend_from_slice(value);
-    }
-    Ok(())
+    canonical::list_bytes(output, values)
+        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))
 }

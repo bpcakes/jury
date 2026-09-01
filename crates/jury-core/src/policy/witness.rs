@@ -7,9 +7,13 @@ use jury_protocol::vault_v1::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::canonical::{self, jce_v1 as jce};
 use crate::crypto;
 
-use super::{PolicyError, PolicyErrorKind, PolicyState, replay::replay_policy_with_catalog};
+use super::{
+    PolicyError, PolicyErrorKind, PolicyState, approval_mode_tag, operation_tag,
+    platform_assurance_tag, replay::replay_policy_with_catalog,
+};
 
 const SUITE: u16 = 1;
 const MAX_POLICY_MEMBERS: usize = 32;
@@ -711,43 +715,24 @@ fn hash_body(domain: &str, body: &[u8]) -> Result<Digest32, PolicyError> {
     ))
 }
 
-fn jce(domain: &str) -> Vec<u8> {
-    let mut output = domain.as_bytes().to_vec();
-    output.push(0);
-    output.extend_from_slice(&SUITE.to_be_bytes());
-    output
-}
-
 fn bytes_field(output: &mut Vec<u8>, value: &[u8]) -> Result<(), PolicyError> {
-    let length = u32::try_from(value.len())
-        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(value);
-    Ok(())
+    canonical::bytes_field(output, value)
+        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))
 }
 
 fn list_fixed<const N: usize>(
     output: &mut Vec<u8>,
     values: impl IntoIterator<Item = [u8; N]>,
 ) -> Result<(), PolicyError> {
-    let values = values.into_iter().collect::<Vec<_>>();
-    let count = u32::try_from(values.len())
-        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
+    canonical::list_fixed(output, values, |output, value| {
         output.extend_from_slice(&value);
-    }
-    Ok(())
+    })
+    .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))
 }
 
 fn list_bytes(output: &mut Vec<u8>, values: &[Vec<u8>]) -> Result<(), PolicyError> {
-    let count = u32::try_from(values.len())
-        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))?;
-    output.extend_from_slice(&count.to_be_bytes());
-    for value in values {
-        bytes_field(output, value)?;
-    }
-    Ok(())
+    canonical::list_bytes(output, values)
+        .map_err(|_| PolicyError::new(PolicyErrorKind::CapacityExhausted))
 }
 
 fn strictly_sorted_unique<T: Ord>(values: &[T]) -> bool {
@@ -762,33 +747,5 @@ const fn status_tag(status: DescriptorStatus) -> u8 {
     match status {
         DescriptorStatus::Active => 1,
         DescriptorStatus::Revoked => 2,
-    }
-}
-
-const fn approval_mode_tag(mode: ApprovalMode) -> u8 {
-    match mode {
-        ApprovalMode::Human => 1,
-        ApprovalMode::Automatic => 2,
-    }
-}
-
-const fn platform_assurance_tag(assurance: PlatformAssurance) -> u8 {
-    match assurance {
-        PlatformAssurance::NormalizedPathOnly => 1,
-        PlatformAssurance::StableExecutableIdentity => 2,
-    }
-}
-
-const fn operation_tag(operation: WitnessOperation) -> u8 {
-    match operation {
-        WitnessOperation::ReadStdout => 1,
-        WitnessOperation::WritePrivateFile => 2,
-        WitnessOperation::TemplateInjection => 3,
-        WitnessOperation::ChildEnvironment => 4,
-        WitnessOperation::ChildStdin => 5,
-        WitnessOperation::ItemMutation => 6,
-        WitnessOperation::Backup => 7,
-        WitnessOperation::Recovery => 8,
-        WitnessOperation::AdministrativeRekey => 9,
     }
 }

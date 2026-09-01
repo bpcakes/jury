@@ -1,148 +1,89 @@
 use super::*;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct PolicyCatalogV1 {
-    pub(super) version: u16,
-    pub(super) role_descriptors: Vec<RegistrationRoleDescriptorV1>,
-    pub(super) witness_policies: Vec<WitnessPolicy>,
+pub(super) type PolicyCatalogV1 = TransferPublicCatalogV1;
+
+pub(super) fn policy_catalog_json_bytes(catalog: &PolicyCatalogV1) -> Result<Vec<u8>, CliError> {
+    catalog
+        .to_json_bytes()
+        .map_err(|_| invalid_policy_catalog())
 }
 
-impl PolicyCatalogV1 {
-    pub(super) const fn empty() -> Self {
-        Self {
-            version: 1,
-            role_descriptors: Vec::new(),
-            witness_policies: Vec::new(),
+pub(super) fn add_catalog_role_descriptor(
+    catalog: &mut PolicyCatalogV1,
+    role: &RegistrationRoleDescriptorV1,
+) -> Result<(), CliError> {
+    let id = role.principal_id().ok_or_else(invalid_policy_catalog)?;
+    if let Some(existing) = catalog
+        .role_descriptors
+        .iter()
+        .find(|existing| existing.principal_id() == Some(id))
+    {
+        if existing == role {
+            return Ok(());
         }
+        return Err(CliError::new(
+            CliErrorKind::Conflict,
+            "role-descriptor-conflict",
+            "a different role descriptor already exists for this principal",
+        ));
     }
+    catalog.role_descriptors.push(role.clone());
+    catalog
+        .role_descriptors
+        .sort_by_key(RegistrationRoleDescriptorV1::principal_id);
+    policy_catalog_json_bytes(catalog).map(|_| ())
+}
 
-    pub(super) fn parse(bytes: &[u8]) -> Result<Self, CliError> {
-        let catalog: Self = serde_json::from_slice(bytes).map_err(|_| invalid_policy_catalog())?;
-        if serde_json::to_vec(&catalog).ok().as_deref() != Some(bytes) {
-            return Err(invalid_policy_catalog());
+pub(super) fn add_catalog_witness_policy(
+    catalog: &mut PolicyCatalogV1,
+    current_policy: &PolicyState,
+    policy: &WitnessPolicy,
+) -> Result<(), CliError> {
+    let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
+    if let Some(existing) = catalog
+        .witness_policies
+        .iter()
+        .find(|existing| existing.digest().ok().as_ref() == Some(&digest))
+    {
+        if existing == policy {
+            return Ok(());
         }
-        catalog.validate()?;
-        Ok(catalog)
+        return Err(invalid_policy_catalog());
     }
-
-    pub(super) fn to_json_bytes(&self) -> Result<Vec<u8>, CliError> {
-        self.validate()?;
-        serde_json::to_vec(self).map_err(|_| invalid_policy_catalog())
-    }
-
-    fn validate(&self) -> Result<(), CliError> {
-        if self.version != 1 {
-            return Err(invalid_policy_catalog());
-        }
-        let mut role_ids = BTreeSet::new();
-        for role in &self.role_descriptors {
-            let id = match role {
-                RegistrationRoleDescriptorV1::VaultPrincipal => {
-                    return Err(invalid_policy_catalog());
-                }
-                RegistrationRoleDescriptorV1::Approver { descriptor } => {
-                    descriptor
-                        .validate()
-                        .map_err(|_| invalid_policy_catalog())?;
-                    descriptor.approver_id
-                }
-                RegistrationRoleDescriptorV1::Witness { descriptor } => {
-                    descriptor
-                        .validate()
-                        .map_err(|_| invalid_policy_catalog())?;
-                    descriptor.witness_id
-                }
-            };
-            if !role_ids.insert(id) {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        let mut policy_digests = BTreeSet::new();
-        for policy in &self.witness_policies {
-            policy.validate().map_err(|_| invalid_policy_catalog())?;
-            if !policy_digests.insert(policy.digest().map_err(|_| invalid_policy_catalog())?) {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn add_role_descriptor(
-        &mut self,
-        role: &RegistrationRoleDescriptorV1,
-    ) -> Result<(), CliError> {
-        let id = registration_role_id(role).ok_or_else(invalid_policy_catalog)?;
-        if let Some(existing) = self
-            .role_descriptors
-            .iter()
-            .find(|existing| registration_role_id(existing) == Some(id))
-        {
-            if existing == role {
-                return Ok(());
-            }
-            return Err(CliError::new(
-                CliErrorKind::Conflict,
-                "role-descriptor-conflict",
-                "a different role descriptor already exists for this principal",
-            ));
-        }
-        self.role_descriptors.push(role.clone());
-        self.role_descriptors.sort_by_key(registration_role_id);
-        self.validate()
-    }
-
-    pub(super) fn add_witness_policy(
-        &mut self,
-        current_policy: &PolicyState,
-        policy: &WitnessPolicy,
-    ) -> Result<(), CliError> {
-        let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
-        if let Some(existing) = self
+    catalog.witness_policies.push(policy.clone());
+    let mut retained = current_policy
+        .items()
+        .filter_map(|(_, item)| {
+            item.witnessed_state
+                .as_ref()
+                .and_then(|state| state.slots.first())
+                .map(|slot| slot.witness_policy_digest.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    retained.insert(digest);
+    let mut pending = retained.iter().cloned().collect::<Vec<_>>();
+    while let Some(current) = pending.pop() {
+        let entry = catalog
             .witness_policies
             .iter()
-            .find(|existing| existing.digest().ok().as_ref() == Some(&digest))
-        {
-            if existing == policy {
-                return Ok(());
-            }
-            return Err(invalid_policy_catalog());
+            .find(|entry| entry.digest().ok().as_ref() == Some(&current))
+            .ok_or_else(invalid_policy_catalog)?;
+        if entry.revision > 1 && retained.insert(entry.predecessor_policy_digest.clone()) {
+            pending.push(entry.predecessor_policy_digest.clone());
         }
-        self.witness_policies.push(policy.clone());
-        let mut retained = current_policy
-            .items()
-            .filter_map(|(_, item)| {
-                item.witnessed_state
-                    .as_ref()
-                    .and_then(|state| state.slots.first())
-                    .map(|slot| slot.witness_policy_digest.clone())
-            })
-            .collect::<BTreeSet<_>>();
-        retained.insert(digest);
-        let mut pending = retained.iter().cloned().collect::<Vec<_>>();
-        while let Some(current) = pending.pop() {
-            let entry = self
-                .witness_policies
-                .iter()
-                .find(|entry| entry.digest().ok().as_ref() == Some(&current))
-                .ok_or_else(invalid_policy_catalog)?;
-            if entry.revision > 1 && retained.insert(entry.predecessor_policy_digest.clone()) {
-                pending.push(entry.predecessor_policy_digest.clone());
-            }
-        }
-        self.witness_policies.retain(|entry| {
-            entry
-                .digest()
-                .is_ok_and(|entry_digest| retained.contains(&entry_digest))
-        });
-        self.witness_policies.sort_by_key(|entry| {
-            entry
-                .digest()
-                .map(|digest| *digest.as_bytes())
-                .unwrap_or([0; 32])
-        });
-        self.validate()
     }
+    catalog.witness_policies.retain(|entry| {
+        entry
+            .digest()
+            .is_ok_and(|entry_digest| retained.contains(&entry_digest))
+    });
+    catalog.witness_policies.sort_by_key(|entry| {
+        entry
+            .digest()
+            .map(|digest| *digest.as_bytes())
+            .unwrap_or([0; 32])
+    });
+    policy_catalog_json_bytes(catalog).map(|_| ())
 }
 
 pub(super) struct VaultPrincipalContext {
@@ -317,19 +258,11 @@ pub(super) fn read_policy_catalog(
     state: &VaultStateDirectory,
 ) -> Result<PolicyCatalogV1, CliError> {
     match state.read_vault_state(VaultStateFile::PolicyCatalog) {
-        Ok(bytes) => PolicyCatalogV1::parse(&bytes),
+        Ok(bytes) => {
+            PolicyCatalogV1::parse_local_compatible(&bytes).map_err(|_| invalid_policy_catalog())
+        }
         Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(PolicyCatalogV1::empty()),
         Err(error) => Err(map_filesystem_error(error)),
-    }
-}
-
-pub(super) const fn registration_role_id(
-    role: &RegistrationRoleDescriptorV1,
-) -> Option<PrincipalId> {
-    match role {
-        RegistrationRoleDescriptorV1::VaultPrincipal => None,
-        RegistrationRoleDescriptorV1::Approver { descriptor } => Some(descriptor.approver_id),
-        RegistrationRoleDescriptorV1::Witness { descriptor } => Some(descriptor.witness_id),
     }
 }
 
@@ -563,7 +496,11 @@ pub(super) fn load_vault_principal(
         &early_repositories,
     ) {
         Ok(state) => match state.read_vault_state(VaultStateFile::PolicyCatalog) {
-            Ok(bytes) => (PolicyCatalogV1::parse(&bytes)?, Some(bytes)),
+            Ok(bytes) => (
+                PolicyCatalogV1::parse_local_compatible(&bytes)
+                    .map_err(|_| invalid_policy_catalog())?,
+                Some(bytes),
+            ),
             Err(error) if error.kind() == FilesystemErrorKind::NotFound => {
                 (PolicyCatalogV1::empty(), None)
             }

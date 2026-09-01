@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroize as _;
 
+use crate::canonical;
 use crate::crypto;
 use crate::identity::{UnlockedIdentity, VaultPrincipalIdentity};
 use crate::policy::{
@@ -46,6 +47,17 @@ pub enum RegistrationRoleDescriptorV1 {
     Witness {
         descriptor: Box<WitnessPolicyDescriptor>,
     },
+}
+
+impl RegistrationRoleDescriptorV1 {
+    #[must_use]
+    pub const fn principal_id(&self) -> Option<PrincipalId> {
+        match self {
+            Self::VaultPrincipal => None,
+            Self::Approver { descriptor } => Some(descriptor.approver_id),
+            Self::Witness { descriptor } => Some(descriptor.witness_id),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,12 +139,9 @@ pub struct RegistrationChallengeV1 {
 
 impl RegistrationChallengeV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, RegistrationError> {
-        if bytes.len() > MAX_REGISTRATION_ARTIFACT_BYTES {
-            return Err(RegistrationError::new(
-                RegistrationErrorKind::InvalidArtifact,
-            ));
-        }
-        let artifact: Self = serde_json::from_slice(bytes)
+        canonical::validate_json_input(bytes, MAX_REGISTRATION_ARTIFACT_BYTES)
+            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
+        let artifact: Self = canonical::deserialize_json(bytes)
             .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
         if artifact.to_json_bytes()? != bytes {
             return Err(RegistrationError::new(
@@ -144,14 +153,8 @@ impl RegistrationChallengeV1 {
     }
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, RegistrationError> {
-        let bytes = serde_json::to_vec(self)
-            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
-        if bytes.len() > MAX_REGISTRATION_ARTIFACT_BYTES {
-            return Err(RegistrationError::new(
-                RegistrationErrorKind::InvalidArtifact,
-            ));
-        }
-        Ok(bytes)
+        canonical::compact_json_bytes(self, Some(MAX_REGISTRATION_ARTIFACT_BYTES))
+            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))
     }
 
     pub fn digest(&self) -> Result<Digest32, RegistrationError> {
@@ -243,12 +246,9 @@ pub struct RegistrationProofV1 {
 
 impl RegistrationProofV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, RegistrationError> {
-        if bytes.len() > MAX_REGISTRATION_ARTIFACT_BYTES {
-            return Err(RegistrationError::new(
-                RegistrationErrorKind::InvalidArtifact,
-            ));
-        }
-        let artifact: Self = serde_json::from_slice(bytes)
+        canonical::validate_json_input(bytes, MAX_REGISTRATION_ARTIFACT_BYTES)
+            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
+        let artifact: Self = canonical::deserialize_json(bytes)
             .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
         if artifact.to_json_bytes()? != bytes
             || artifact.version != PROOF_VERSION
@@ -267,14 +267,8 @@ impl RegistrationProofV1 {
     }
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, RegistrationError> {
-        let bytes = serde_json::to_vec(self)
-            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))?;
-        if bytes.len() > MAX_REGISTRATION_ARTIFACT_BYTES {
-            return Err(RegistrationError::new(
-                RegistrationErrorKind::InvalidArtifact,
-            ));
-        }
-        Ok(bytes)
+        canonical::compact_json_bytes(self, Some(MAX_REGISTRATION_ARTIFACT_BYTES))
+            .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidArtifact))
     }
 
     pub fn digest(&self) -> Result<Digest32, RegistrationError> {

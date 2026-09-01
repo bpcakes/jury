@@ -2,14 +2,14 @@ use std::fmt;
 
 use sha2::{Digest as _, Sha256};
 
+use crate::canonical::{self, jce_v1 as jce, optional_fixed, optional_u8};
+
 use super::bytes::{Digest32, FixedBytes, RecipientPublicKey1216};
 use super::types::{
     DescriptorMetadataV1, DirectSlotV1, PolicyGenesisV1, PolicyOperationV1, PrincipalDescriptorV1,
     SignedItemRevisionV1, SignedPolicyRevisionV1, SignedRolloverV1, SignedSuiteMigrationV1,
     SourceAttestationV1, WitnessShareCapsuleV1, WitnessedSlotV1, WitnessedStateV1,
 };
-
-const SUITE: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanonicalError {
@@ -28,79 +28,28 @@ fn u16be(value: u16) -> [u8; 2] {
     value.to_be_bytes()
 }
 
-fn u32be(value: usize) -> Result<[u8; 4], CanonicalError> {
-    u32::try_from(value)
-        .map(u32::to_be_bytes)
-        .map_err(|_| CanonicalError::LengthOverflow)
-}
-
 fn u64be(value: u64) -> [u8; 8] {
     value.to_be_bytes()
 }
 
-fn jce(domain: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(domain.len() + 3);
-    bytes.extend_from_slice(domain.as_bytes());
-    bytes.push(0);
-    bytes.extend_from_slice(&u16be(SUITE));
-    bytes
-}
-
 fn bytes_field(output: &mut Vec<u8>, value: &[u8]) -> Result<(), CanonicalError> {
-    output.extend_from_slice(&u32be(value.len())?);
-    output.extend_from_slice(value);
-    Ok(())
+    canonical::bytes_field(output, value).map_err(|_| CanonicalError::LengthOverflow)
 }
 
 fn list_bytes(output: &mut Vec<u8>, values: &[Vec<u8>]) -> Result<(), CanonicalError> {
-    output.extend_from_slice(&u32be(values.len())?);
-    for value in values {
-        bytes_field(output, value)?;
-    }
-    Ok(())
+    canonical::list_bytes(output, values).map_err(|_| CanonicalError::LengthOverflow)
 }
 
 fn list_fixed<T>(
     output: &mut Vec<u8>,
     values: &[T],
-    mut append: impl FnMut(&mut Vec<u8>, &T),
+    append: impl FnMut(&mut Vec<u8>, &T),
 ) -> Result<(), CanonicalError> {
-    output.extend_from_slice(&u32be(values.len())?);
-    for value in values {
-        append(output, value);
-    }
-    Ok(())
-}
-
-fn optional_fixed(output: &mut Vec<u8>, value: Option<&[u8]>) {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            output.extend_from_slice(value);
-        }
-    }
-}
-
-fn optional_u8(output: &mut Vec<u8>, value: Option<u8>) {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            output.push(value);
-        }
-    }
+    canonical::list_fixed(output, values, append).map_err(|_| CanonicalError::LengthOverflow)
 }
 
 fn optional_bytes(output: &mut Vec<u8>, value: Option<&[u8]>) -> Result<(), CanonicalError> {
-    match value {
-        None => output.push(0),
-        Some(value) => {
-            output.push(1);
-            bytes_field(output, value)?;
-        }
-    }
-    Ok(())
+    canonical::optional_bytes(output, value).map_err(|_| CanonicalError::LengthOverflow)
 }
 
 fn sha256(value: &[u8]) -> Digest32 {

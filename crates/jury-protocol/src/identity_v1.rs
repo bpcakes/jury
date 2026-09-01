@@ -8,6 +8,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::artifact::{self, JsonError};
+use crate::canonical::{self, jce_v1 as jce};
 use crate::vault_v1::{
     BoundedBytes, Digest32, FixedBytes, IdentityPayloadCiphertext149, Nonce12,
     PrincipalDescriptorV1, PrincipalId, PrincipalKind, RecipientPublicKey1216,
@@ -207,14 +209,8 @@ pub struct IdentityFileV1 {
 
 impl IdentityFileV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, IdentityFormatError> {
-        if bytes.len() > MAX_IDENTITY_FILE_BYTES {
-            return Err(IdentityFormatError::ArtifactTooLarge);
-        }
-        if contains_conflict_marker(bytes) {
-            return Err(IdentityFormatError::ConflictMarker);
-        }
-        let identity: Self =
-            serde_json::from_slice(bytes).map_err(|_| IdentityFormatError::InvalidJson)?;
+        artifact::validate_json_input(bytes, MAX_IDENTITY_FILE_BYTES).map_err(map_json_error)?;
+        let identity: Self = artifact::deserialize_json(bytes).map_err(map_json_error)?;
         identity.validate()?;
         if identity.to_json_bytes()? != bytes {
             return Err(IdentityFormatError::NonCanonicalJson);
@@ -231,13 +227,7 @@ impl IdentityFileV1 {
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, IdentityFormatError> {
         self.validate()?;
-        let mut output =
-            serde_json::to_vec_pretty(self).map_err(|_| IdentityFormatError::InvalidJson)?;
-        output.push(b'\n');
-        if output.len() > MAX_IDENTITY_FILE_BYTES {
-            return Err(IdentityFormatError::ArtifactTooLarge);
-        }
-        Ok(output)
+        artifact::pretty_json_bytes(self, MAX_IDENTITY_FILE_BYTES).map_err(map_json_error)
     }
 }
 
@@ -270,28 +260,20 @@ impl fmt::Display for IdentityFormatError {
 
 impl std::error::Error for IdentityFormatError {}
 
+const fn map_json_error(error: JsonError) -> IdentityFormatError {
+    match error {
+        JsonError::ArtifactTooLarge => IdentityFormatError::ArtifactTooLarge,
+        JsonError::ConflictMarker => IdentityFormatError::ConflictMarker,
+        JsonError::InvalidJson => IdentityFormatError::InvalidJson,
+    }
+}
+
 impl From<crate::vault_v1::CanonicalError> for IdentityFormatError {
     fn from(_: crate::vault_v1::CanonicalError) -> Self {
         Self::CanonicalEncoding
     }
 }
 
-fn jce(domain: &str) -> Vec<u8> {
-    let mut output = Vec::with_capacity(domain.len() + 3);
-    output.extend_from_slice(domain.as_bytes());
-    output.extend_from_slice(&[0, 0, 1]);
-    output
-}
-
 fn bytes_field(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), IdentityFormatError> {
-    let length = u32::try_from(bytes.len()).map_err(|_| IdentityFormatError::CanonicalEncoding)?;
-    output.extend_from_slice(&length.to_be_bytes());
-    output.extend_from_slice(bytes);
-    Ok(())
-}
-
-fn contains_conflict_marker(bytes: &[u8]) -> bool {
-    bytes.split(|byte| *byte == b'\n').any(|line| {
-        line.starts_with(b"<<<<<<<") || line.starts_with(b"=======") || line.starts_with(b">>>>>>>")
-    })
+    canonical::bytes_field(output, bytes).map_err(|_| IdentityFormatError::CanonicalEncoding)
 }

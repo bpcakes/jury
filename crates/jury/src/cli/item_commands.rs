@@ -104,7 +104,7 @@ pub(super) fn item_create(
             &inventory,
         )
         .map_err(|error| map_item_error(error.kind()))?;
-    let mut plan = VaultMutationPlan::prepare_item_batch(
+    let plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
         &context.catalog.witness_policies,
         &context.identity,
@@ -115,32 +115,14 @@ pub(super) fn item_create(
         MutationKind::Item,
     )
     .map_err(|error| map_mutation_error(error.kind()))?;
-    if let Some(repository) = context.home.repository() {
-        plan = plan.bind_repository_ancestry(
-            repository
-                .git_ancestry_digest()
-                .map_err(map_filesystem_error)?,
-        );
-    }
-    if arguments.dry_run {
-        return Ok(mutation_output(
-            "item-create",
-            Some(arguments.item.clone()),
-            &context,
-            &plan,
-            true,
-            None,
-        ));
-    }
-    let outcome = commit_mutation(&context, &plan, protection)?;
-    Ok(mutation_output(
+    finish_mutation_plan(
+        context,
+        plan,
         "item-create",
         Some(arguments.item.clone()),
-        &context,
-        &plan,
-        false,
-        Some(&outcome),
-    ))
+        arguments.dry_run,
+        protection,
+    )
 }
 
 pub(super) fn field_list(

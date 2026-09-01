@@ -6,6 +6,7 @@
 mod replay;
 mod state;
 mod witness;
+mod witness_v1_bridge;
 
 #[cfg(test)]
 mod model_tests;
@@ -26,4 +27,8 @@ pub use witness::{
     ApprovalMode, ApproverPolicyDescriptor, AutomaticReadTarget, DescriptorStatus, OperationRule,
     PlatformAssurance, WitnessAccessRule, WitnessOperation, WitnessPolicy, WitnessPolicyDescriptor,
     replay_policy_with_witness_policies,
+};
+pub(crate) use witness_v1_bridge::{
+    approval_mode_tag, core_operation, operation_tag, platform_assurance_tag,
+    protocol_approval_mode,
 };

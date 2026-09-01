@@ -187,9 +187,7 @@ pub(super) fn policy_require_witnessed(
         )
         .map_err(|error| map_item_error(error.kind()))?;
     let mut context = context;
-    context
-        .catalog
-        .add_witness_policy(&context.policy, &witness_policy)?;
+    add_catalog_witness_policy(&mut context.catalog, &context.policy, &witness_policy)?;
     context.policy = planning_policy;
     finish_item_mutation(
         context,
