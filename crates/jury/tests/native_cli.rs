@@ -628,6 +628,24 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
         0o600
     );
 
+    let revealed = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "read",
+            "ExampleItem",
+            "ExampleField",
+            "--reveal",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(revealed.status.success());
+    assert_eq!(revealed.stdout, b"ExampleValue");
+    assert!(revealed.stderr.is_empty());
+
     let template_path = temporary.path().join("template.txt");
     fs::write(
         &template_path,
@@ -655,6 +673,24 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_eq!(injected["plaintext_in_structured_output"], false);
     assert!(!injected.to_string().contains("ExampleValue"));
     assert_eq!(fs::read(&injected_path)?, b"prefix=ExampleValue;suffix");
+
+    let revealed_injection = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "inject",
+            "--template",
+            template_path.to_str().ok_or("non-UTF-8 template path")?,
+            "--reveal",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(revealed_injection.status.success());
+    assert_eq!(revealed_injection.stdout, b"prefix=ExampleValue;suffix");
+    assert!(revealed_injection.stderr.is_empty());
 
     let denied_template = temporary.path().join("denied-template.txt");
     fs::write(

@@ -517,6 +517,9 @@ pub(super) fn write_private_file(
 
 pub(super) fn read_bounded_standard_input(maximum: usize) -> Result<Zeroizing<Vec<u8>>, CliError> {
     let mut bytes = Zeroizing::new(Vec::new());
+    bytes
+        .try_reserve_exact(maximum.saturating_add(1))
+        .map_err(|_| filesystem_error())?;
     let limit = u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1);
     std::io::stdin()
         .lock()

@@ -239,6 +239,12 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
     assert_eq!(committed["vault_changed"], true);
     assert_eq!(committed["pending_requests_invalidated"], true);
     assert_eq!(committed["item_quorum_claim_suppressed"], false);
+    assert_eq!(committed["warnings"].as_array().map(Vec::len), Some(1));
+    assert!(
+        committed["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("local policy catalog"))
+    );
 
     let vault = VaultFileV1::parse(&fs::read(&vault_path)?)?;
     let (direct_slots, witnessed_state) = vault

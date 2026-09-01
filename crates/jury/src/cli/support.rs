@@ -24,6 +24,13 @@ pub(super) fn mutation_output(
         redistribution_recommended: plan.warnings().redistribution_required,
         pending_requests_invalidated: plan.warnings().pending_witness_requests_invalidated,
         item_quorum_claim_suppressed: plan.warnings().item_quorum_claim_suppressed,
+        warnings: if operation == "policy-require-witnessed" {
+            vec![
+                "witness policy validation currently requires this machine's local policy catalog; portable distribution is not implemented",
+            ]
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -442,6 +449,20 @@ pub(super) fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
     (output.iter().any(|byte| *byte != 0)).then_some(output)
 }
 
+pub(super) fn decode_presented_hex_32(value: &str) -> Option<[u8; 32]> {
+    let mut normalized = String::with_capacity(64);
+    for character in value.chars() {
+        if character == '-' || character.is_ascii_whitespace() {
+            continue;
+        }
+        if normalized.len() == 64 {
+            return None;
+        }
+        normalized.push(character);
+    }
+    decode_hex_32(&normalized)
+}
+
 pub(super) const fn decode_hex_nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -726,4 +747,20 @@ pub(super) fn grouped(fingerprint: &str) -> String {
         grouped.push(character);
     }
     grouped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_presented_hex_32;
+
+    #[test]
+    fn presented_fingerprint_accepts_display_grouping_and_whitespace() {
+        let raw = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let grouped = "01234567-89abcdef-01234567-89abcdef\n 01234567-89abcdef-01234567-89abcdef";
+        assert_eq!(
+            decode_presented_hex_32(raw),
+            decode_presented_hex_32(grouped)
+        );
+        assert!(decode_presented_hex_32("01234567_not_hex").is_none());
+    }
 }

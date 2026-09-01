@@ -27,7 +27,8 @@ $ jury vault init
 $ jury vault status
 $ jury item create ExampleItem --allow-direct
 $ jury vault field set ExampleItem ExampleField --value-stdin
-$ jury principal challenge --from descriptor.json --out challenge.json
+$ jury principal challenge --from /absolute/path/descriptor.json \
+    --out /absolute/private/path/challenge.json
 $ jury access matrix
 $ jury policy require witnessed --item ExampleItem \
     --approver PRINCIPAL --approvals 1 \
@@ -49,8 +50,22 @@ This is still pre-alpha plumbing, not a claim that Jury protects secrets.
 Witnessed-only policy can be configured, but witnessed request, approval, and
 open execution remain J22 work. The signed public role descriptors and policy
 bodies used by the current CLI are local state; J16/J23 own their portable
-distribution. Do not treat a witnessed-only configuration as an operational
-secret-access path yet.
+distribution. A vault copied to another machine without that local catalog
+cannot validate its witnessed policy and fails closed. Successful
+`policy require witnessed` output repeats this limitation. Do not treat a
+witnessed-only configuration as an operational secret-access path yet.
+
+Registration descriptors, challenges, and proofs are machine-generated
+canonical JSON artifacts, not editable configuration files. Preserve their
+exact bytes: reformatting, key reordering, or adding fields is rejected. Public
+registration inputs must be absolute, direct paths to regular files owned by
+the current effective user and must not be group/world writable or linked. For
+a cross-user registration, transfer each generated artifact over an
+authenticated channel and have the receiving operator write a fresh
+recipient-owned file before invoking Jury. `principal add` and `principal
+replace` intentionally require both `--from DESCRIPTOR` and `--proof PROOF`;
+Jury cross-checks the separately selected descriptor against the candidate
+descriptor authenticated inside the proof before changing policy.
 
 `jury exec` inherits the ordinary environment and stdin, removes every
 `JURY_*` variable, and streams independently redacted child output. `jury run`

@@ -83,9 +83,8 @@ pub(super) fn template_inject(
     }
 
     let mut output = Zeroizing::new(Vec::new());
-    let estimated = template.len().min(MAX_TEMPLATE_OUTPUT_BYTES);
     output
-        .try_reserve(estimated)
+        .try_reserve_exact(MAX_TEMPLATE_OUTPUT_BYTES)
         .map_err(|_| filesystem_error())?;
     let mut cursor = 0;
     for reference in &references {

@@ -76,6 +76,7 @@ pub enum CommandOutput {
         redistribution_recommended: bool,
         pending_requests_invalidated: bool,
         item_quorum_claim_suppressed: bool,
+        warnings: Vec<&'static str>,
     },
     FieldList {
         fields: Vec<FieldSummary>,
@@ -128,7 +129,7 @@ pub struct FieldSummary {
 
 impl CommandOutput {
     pub fn write(&self, json: bool) {
-        if matches!(self, Self::Execution { streamed: true, .. }) {
+        if matches!(self, Self::Silent | Self::Execution { streamed: true, .. }) {
             return;
         }
         if json {
@@ -324,6 +325,7 @@ impl CommandOutput {
                 redistribution_recommended,
                 pending_requests_invalidated,
                 item_quorum_claim_suppressed,
+                warnings,
             } => serde_json::json!({
                 "ok": true,
                 "operation": operation,
@@ -338,6 +340,7 @@ impl CommandOutput {
                 "redistribution_recommended": redistribution_recommended,
                 "pending_requests_invalidated": pending_requests_invalidated,
                 "item_quorum_claim_suppressed": item_quorum_claim_suppressed,
+                "warnings": warnings,
                 "delivery_claimed": false,
                 "maturity": "pre-alpha"
             }),
@@ -571,6 +574,7 @@ impl CommandOutput {
                 redistribution_recommended,
                 pending_requests_invalidated,
                 item_quorum_claim_suppressed,
+                warnings,
             } => {
                 println!("Operation: {operation}");
                 if let Some(item) = item {
@@ -587,6 +591,9 @@ impl CommandOutput {
                 println!("Redistribution recommended: {redistribution_recommended}");
                 println!("Pending witnessed requests invalidated: {pending_requests_invalidated}");
                 println!("Item quorum claim suppressed: {item_quorum_claim_suppressed}");
+                for warning in warnings {
+                    println!("Warning: {warning}");
+                }
                 println!("No delivery to another recipient is claimed.");
             }
             Self::FieldList { fields } => {

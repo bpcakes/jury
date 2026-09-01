@@ -371,7 +371,9 @@ pub(super) fn probe_principal_state(
 pub(super) fn confirm_expected_genesis(cli: &Cli, vault: &VaultFileV1) -> Result<(), CliError> {
     let expected = hex(vault.header.genesis_fingerprint.as_bytes());
     if let Some(provided) = &cli.expected_genesis {
-        if decode_hex_32(provided).as_ref() != Some(vault.header.genesis_fingerprint.as_bytes()) {
+        if decode_presented_hex_32(provided).as_ref()
+            != Some(vault.header.genesis_fingerprint.as_bytes())
+        {
             return Err(CliError::new(
                 CliErrorKind::Conflict,
                 "genesis-fingerprint-mismatch",
@@ -395,7 +397,9 @@ pub(super) fn confirm_expected_genesis(cli: &Cli, vault: &VaultFileV1) -> Result
     std::io::stdin()
         .read_line(&mut confirmation)
         .map_err(|_| filesystem_error())?;
-    if confirmation.trim_end() != expected {
+    if decode_presented_hex_32(&confirmation).as_ref()
+        != Some(vault.header.genesis_fingerprint.as_bytes())
+    {
         return Err(CliError::new(
             CliErrorKind::Conflict,
             "genesis-confirmation-failed",
@@ -579,7 +583,8 @@ pub(super) fn load_vault_principal(
         .map_err(map_filesystem_error)?;
     let identity_file = IdentityFileV1::parse(&identity_bytes).map_err(|_| invalid_identity())?;
     if let Some(expected) = &cli.expected_genesis
-        && decode_hex_32(expected).as_ref() != Some(vault.header.genesis_fingerprint.as_bytes())
+        && decode_presented_hex_32(expected).as_ref()
+            != Some(vault.header.genesis_fingerprint.as_bytes())
     {
         return Err(CliError::new(
             CliErrorKind::Conflict,
