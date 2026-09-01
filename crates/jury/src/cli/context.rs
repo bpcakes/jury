@@ -819,14 +819,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_local_catalog_without_registration_proofs_remains_readable() {
+    fn legacy_local_catalog_without_registration_proofs_remains_readable() -> Result<(), CliError> {
         let bytes = br#"{"version":1,"role_descriptors":[],"witness_policies":[]}"#;
-        let catalog = PolicyCatalogV1::parse_local_compatible(bytes).expect("legacy catalog");
+        let catalog = PolicyCatalogV1::parse_local_compatible(bytes)?;
 
         assert!(catalog.registration_proofs.is_empty());
-        assert_eq!(
-            policy_catalog_json_bytes(&catalog).expect("serialize catalog"),
-            bytes
-        );
+        assert_eq!(policy_catalog_json_bytes(&catalog)?, bytes);
+        Ok(())
     }
 }
