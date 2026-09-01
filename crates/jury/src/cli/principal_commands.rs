@@ -163,7 +163,7 @@ pub(super) fn principal_add(
         proof.role_descriptor,
         RegistrationRoleDescriptorV1::VaultPrincipal
     ) {
-        add_catalog_role_descriptor(&mut context.catalog, &proof.role_descriptor)?;
+        add_catalog_registration_proof(&mut context.catalog, &proof)?;
     }
     if arguments.readers.is_empty() && arguments.writers.is_empty() {
         return finish_policy_mutation(
@@ -361,7 +361,7 @@ pub(super) fn principal_replace(
         proof.role_descriptor,
         RegistrationRoleDescriptorV1::VaultPrincipal
     ) {
-        add_catalog_role_descriptor(&mut context.catalog, &proof.role_descriptor)?;
+        add_catalog_registration_proof(&mut context.catalog, &proof)?;
     }
     let affected = context
         .policy

@@ -35,8 +35,8 @@ code may depend on this plan.
 - [x] Run formatting, targeted tests, Clippy, repository tests, and review the diff.
 - [x] Resolve transfer-review open questions from the J16 contract and source invariants.
 - [x] Commit the previously staged J16 transfer baseline independently.
-- [ ] Commit DU-001 through DU-014 as one behavior-preserving refactor slice.
-- [ ] Bind portable role metadata to policy-authenticated registration proofs.
+- [x] Commit DU-001 through DU-014 as one behavior-preserving refactor slice.
+- [x] Bind portable role metadata to policy-authenticated registration proofs.
 - [ ] Make first-install import deterministic, recoverable, and shared-artifact-last.
 - [ ] Separate bounded public export from protected-memory publication and contain destinations.
 - [ ] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
@@ -51,18 +51,17 @@ code may depend on this plan.
   DU-001 intentionally builds on those files rather than treating them as unrelated.
 - `TransferPublicCatalogV1` already has a public constructor and fields, so using it
   directly in the CLI preserves that API better than moving it behind a new wrapper.
-- Jig's aggregate `verify` evidence is fresh and all five configured targets passed
-  for the current worktree. Plan completion remains blocked because individual gate
-  applicability is `unknown` while the pre-existing staged J16 versions differ from
-  both the plan baseline and this task's unstaged versions. Resolving that requires
-  changing the user's index state.
+- The staged J16 baseline and DU-001 through DU-014 were committed separately before
+  review repairs began, removing the earlier index/baseline ambiguity.
+- The shared local/portable catalog type was itself a boundary mistake: local caches
+  need legacy readability, while a signed portable artifact must carry the full
+  registration proof whose digest is authenticated by policy history.
 
 ## Decision Log
 
-- Use the existing public `jury-core` transfer catalog as the canonical type so its
-  constructor, fields, error type, and module path remain unchanged.
-- Normalize legacy unordered catalog input at the local persistence boundary, while
-  keeping the signed transfer format strict and canonical.
+- Keep the existing public `jury-core` transfer catalog name, but split its portable
+  representation from the CLI's local compatibility cache. Normalize legacy local
+  input while requiring strict, canonical registration proofs in signed transfers.
 - Keep versioned protocol enums distinct from non-versioned domain enums; centralize
   conversion and parity checks instead of merging nominal types.
 - Keep local checkpoint and receipt formats distinct; share only private mechanics.
@@ -88,12 +87,10 @@ code may depend on this plan.
 DU-001 through DU-014 are consolidated without merging the intentional wire/domain,
 local-document schema, JSON-format, filesystem-capability, or process-safety
 boundaries. Focused crate tests, exact frozen-vector tests, formatting, Clippy,
-workspace tests, the repository contract, and the aggregate `verify` profile all
-pass. The follow-up duplicate scan finds the former parallel owners removed; the
-remaining highest-scored similarities are thin format-specific adapters over the
-shared mechanics. The plan cannot be closed in Jig while required-gate applicability
-is unknown for the user's pre-existing partially staged J16 files. No staging or
-unstaging was performed, so that index state remains preserved.
+workspace tests, the repository contract, and the aggregate `verify` profile passed
+for that refactor slice. The follow-up duplicate scan finds the former parallel
+owners removed; the remaining highest-scored similarities are thin format-specific
+adapters over the shared mechanics. Transfer-review repair work continues below.
 
 ## Context and orientation
 
@@ -141,6 +138,7 @@ tests. Do not regenerate conformance vectors or weaken assertions.
 
 ## Interfaces and dependencies
 
-No dependency changes are expected. Public compatibility is preserved through the
-existing `jury_core::transfer::TransferPublicCatalogV1` name. No Jig artifact is a
-runtime dependency.
+No dependency changes are expected. The existing
+`jury_core::transfer::TransferPublicCatalogV1` name remains public, but its pre-alpha
+field representation now carries policy-bound registration proofs instead of the
+CLI's local role cache. No Jig artifact is a runtime dependency.

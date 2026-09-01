@@ -24,7 +24,7 @@ pub(super) fn transfer_export(
     }
 
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let catalog = context.catalog.clone();
+    let catalog = context.catalog.transfer_catalog(&context.policy)?;
     let envelope = TransferCreator::new()
         .create(&context.vault, catalog, &context.identity, timestamp_ms()?)
         .map_err(map_transfer_error)?;
@@ -315,7 +315,7 @@ fn import_existing(
     let Some(plan) = plan.take() else {
         return transfer_import_output(&context.policy, transfer.policy(), true, false, false);
     };
-    context.catalog = transfer.catalog().clone();
+    context.catalog.merge_transfer(transfer.catalog())?;
     policy_catalog_json_bytes(&context.catalog)?;
     finish_mutation_plan(context, plan, "transfer-import", None, false, protection)
 }
@@ -508,7 +508,7 @@ fn import_absent(
             false,
         ),
     };
-    let catalog = transfer.catalog().clone();
+    let catalog = PolicyCatalogV1::from_transfer(transfer.catalog())?;
     let catalog_bytes = policy_catalog_json_bytes(&catalog)?;
     {
         let locked = catalog_state.try_lock().map_err(|_| local_state_error())?;

@@ -16,7 +16,7 @@ use crate::canonical;
 use crate::identity::VaultPrincipalIdentity;
 use crate::local_state::CheckpointCandidate;
 use crate::policy::{PolicyState, WitnessPolicy, replay_policy_with_witness_policies};
-use crate::registration::RegistrationRoleDescriptorV1;
+use crate::registration::{RegistrationProofV1, RegistrationRoleDescriptorV1};
 use crate::{crypto, identity::IdentityErrorKind};
 
 const MAX_TRANSFER_ID_ATTEMPTS: usize = 16;
@@ -84,7 +84,7 @@ impl std::error::Error for TransferError {}
 #[serde(deny_unknown_fields)]
 pub struct TransferPublicCatalogV1 {
     pub version: u16,
-    pub role_descriptors: Vec<RegistrationRoleDescriptorV1>,
+    pub registration_proofs: Vec<RegistrationProofV1>,
     pub witness_policies: Vec<WitnessPolicy>,
 }
 
@@ -93,18 +93,18 @@ impl TransferPublicCatalogV1 {
     pub const fn empty() -> Self {
         Self {
             version: 1,
-            role_descriptors: Vec::new(),
+            registration_proofs: Vec::new(),
             witness_policies: Vec::new(),
         }
     }
 
     pub fn new(
-        role_descriptors: Vec<RegistrationRoleDescriptorV1>,
+        registration_proofs: Vec<RegistrationProofV1>,
         witness_policies: Vec<WitnessPolicy>,
     ) -> Result<Self, TransferError> {
         let catalog = Self {
             version: 1,
-            role_descriptors,
+            registration_proofs,
             witness_policies,
         };
         catalog.validate()?;
@@ -121,33 +121,6 @@ impl TransferPublicCatalogV1 {
         Ok(catalog)
     }
 
-    /// Parses the exact compact JSON accepted for locally persisted catalogs,
-    /// then normalizes entry ordering to the canonical transfer representation.
-    /// Signed transfer parsing remains strict through [`Self::parse`].
-    pub fn parse_local_compatible(bytes: &[u8]) -> Result<Self, TransferError> {
-        let mut catalog: Self = canonical::deserialize_json(bytes)
-            .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-        if canonical::compact_json_bytes(&catalog, None)
-            .ok()
-            .as_deref()
-            != Some(bytes)
-        {
-            return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
-        }
-        catalog.validate_entries()?;
-        catalog
-            .role_descriptors
-            .sort_by_key(RegistrationRoleDescriptorV1::principal_id);
-        catalog.witness_policies.sort_by_key(|policy| {
-            policy
-                .digest()
-                .map(|digest| *digest.as_bytes())
-                .unwrap_or([0; 32])
-        });
-        catalog.validate()?;
-        Ok(catalog)
-    }
-
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, TransferError> {
         self.validate()?;
         canonical::compact_json_bytes(self, None)
@@ -156,15 +129,18 @@ impl TransferPublicCatalogV1 {
 
     fn validate(&self) -> Result<(), TransferError> {
         self.validate_entries()?;
-        let mut prior_role = None;
-        for role in &self.role_descriptors {
-            let id = role
+        let mut prior_principal = None;
+        for proof in &self.registration_proofs {
+            let id = proof
+                .role_descriptor
                 .principal_id()
                 .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-            if prior_role.is_some_and(|prior| prior >= id) {
+            if id != proof.candidate_principal_id
+                || prior_principal.is_some_and(|prior| prior >= id)
+            {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
-            prior_role = Some(id);
+            prior_principal = Some(id);
         }
         let mut prior_digest: Option<Digest32> = None;
         for policy in &self.witness_policies {
@@ -184,8 +160,14 @@ impl TransferPublicCatalogV1 {
             return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
         }
         let mut role_ids = BTreeSet::new();
-        for role in &self.role_descriptors {
-            match role {
+        for proof in &self.registration_proofs {
+            let bytes = proof
+                .to_json_bytes()
+                .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+            if RegistrationProofV1::parse(&bytes).is_err() {
+                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+            }
+            match &proof.role_descriptor {
                 RegistrationRoleDescriptorV1::VaultPrincipal => {
                     return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
                 }
@@ -196,7 +178,8 @@ impl TransferPublicCatalogV1 {
                     .validate()
                     .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?,
             }
-            let id = role
+            let id = proof
+                .role_descriptor
                 .principal_id()
                 .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
             if !role_ids.insert(id) {
@@ -214,6 +197,74 @@ impl TransferPublicCatalogV1 {
             if !policy_digests.insert(digest) {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_for_policy(
+        &self,
+        vault: &VaultFileV1,
+        policy: &PolicyState,
+    ) -> Result<(), TransferError> {
+        let mut expected = BTreeMap::new();
+        for revision in &vault.policy.revisions {
+            for operation in &revision.operations {
+                match operation {
+                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalAdd {
+                        descriptor,
+                        registration_proof_digest,
+                        ..
+                    } => {
+                        expected.insert(descriptor.principal_id, registration_proof_digest.clone());
+                    }
+                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalRemove {
+                        principal_id,
+                        ..
+                    } => {
+                        expected.remove(principal_id);
+                    }
+                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalReplace {
+                        prior_principal_id,
+                        next_descriptor,
+                        registration_proof_digest,
+                    } => {
+                        expected.remove(prior_principal_id);
+                        expected.insert(
+                            next_descriptor.principal_id,
+                            registration_proof_digest.clone(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let mut supplied = BTreeSet::new();
+        for proof in &self.registration_proofs {
+            let principal_id = proof.candidate_principal_id;
+            let principal = policy
+                .principal(&principal_id)
+                .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+            let expected_digest = expected
+                .get(&principal_id)
+                .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+            if proof.challenge.candidate_descriptor != principal.descriptor
+                || proof
+                    .digest()
+                    .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?
+                    != *expected_digest
+                || !supplied.insert(principal_id)
+            {
+                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+            }
+        }
+        if policy.principals().any(|(principal_id, principal)| {
+            matches!(
+                principal.descriptor.principal_kind,
+                PrincipalKind::Approver | PrincipalKind::Witness
+            ) && !supplied.contains(principal_id)
+        }) {
+            return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
         }
         Ok(())
     }
@@ -256,6 +307,7 @@ impl<R: RandomSource> TransferCreator<R> {
             .to_json_bytes()
             .map_err(|_| TransferError::new(TransferErrorKind::InvalidVault))?;
         let policy = validate_vault(vault, &catalog.witness_policies)?;
+        catalog.validate_for_policy(vault, &policy)?;
         require_exporter(&policy, exporter.principal_id())?;
         let catalog_bytes = catalog.to_json_bytes()?;
         let transfer_id = self.draw_transfer_id()?;
@@ -316,6 +368,7 @@ impl ValidatedTransfer {
         let vault = VaultFileV1::parse(envelope.vault_json.as_bytes())
             .map_err(|_| TransferError::new(TransferErrorKind::InvalidVault))?;
         let policy = validate_vault(&vault, &catalog.witness_policies)?;
+        catalog.validate_for_policy(&vault, &policy)?;
         let exporter = policy
             .principal(&envelope.exporting_principal_id)
             .ok_or_else(|| TransferError::new(TransferErrorKind::UnauthorizedExporter))?;

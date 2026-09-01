@@ -5,7 +5,8 @@ use jury_protocol::vault_v1::{
 
 use super::*;
 use crate::identity::{UnlockedIdentity, unlocked_identity_for_test};
-use crate::policy::PolicyCreator;
+use crate::policy::{PolicyCreator, replay_policy};
+use crate::registration::{RegistrationCreator, answer_challenge};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -71,6 +72,43 @@ fn relabel(
     Ok(target)
 }
 
+fn register_approver(
+    vault: &VaultFileV1,
+    owner: &VaultPrincipalIdentity,
+) -> TestResult<(VaultFileV1, RegistrationProofV1)> {
+    let candidate_id = PrincipalId::from_bytes([0x22; 32])?;
+    let candidate = unlocked_identity_for_test(
+        candidate_id,
+        PrincipalKind::Approver,
+        &mut CounterRandom(0x60),
+    )?;
+    let candidate_descriptor = candidate.public_descriptor()?;
+    let policy = replay_policy(&vault.policy)?;
+    let challenge = RegistrationCreator::new(jury_protected::ProtectionPolicy::Strict)
+        .create_challenge(
+            &policy,
+            owner,
+            candidate_descriptor.clone(),
+            11,
+            1_000,
+            None,
+        )?;
+    let proof = answer_challenge(&policy, &candidate, &challenge, 12)?;
+    let revision = policy.prepare_revision(
+        owner,
+        13,
+        vec![PolicyOperationV1::PrincipalAdd {
+            descriptor: candidate_descriptor,
+            display_label: "ExampleApprover".to_owned(),
+            registration_proof_digest: proof.digest()?,
+        }],
+    )?;
+    let mut registered = vault.clone();
+    registered.policy.revisions.push(revision.revision);
+    registered.validate()?;
+    Ok((registered, proof))
+}
+
 #[test]
 fn signed_transfer_round_trip_carries_only_public_portable_state() -> TestResult {
     let (owner, vault) = fixture()?;
@@ -94,30 +132,44 @@ fn signed_transfer_round_trip_carries_only_public_portable_state() -> TestResult
 }
 
 #[test]
-fn local_catalog_compatibility_normalizes_order_without_broadening_transfer_parse() -> TestResult {
-    let (policy, _, _) = crate::policy::witness_tests::frozen_policy()?;
-    let first = RegistrationRoleDescriptorV1::Approver {
-        descriptor: policy.approver_descriptors[0].clone(),
-    };
-    let second = RegistrationRoleDescriptorV1::Approver {
-        descriptor: policy.approver_descriptors[1].clone(),
-    };
-    let noncanonical = TransferPublicCatalogV1 {
-        version: 1,
-        role_descriptors: vec![second.clone(), first.clone()],
-        witness_policies: Vec::new(),
-    };
-    let bytes = serde_json::to_vec(&noncanonical)?;
+fn portable_catalog_requires_the_registration_proof_bound_by_policy() -> TestResult {
+    let (owner, vault) = fixture()?;
+    let (registered, proof) = register_approver(&vault, &owner)?;
 
+    let missing = TransferPublicCatalogV1::empty();
     assert!(matches!(
-        TransferPublicCatalogV1::parse(&bytes),
+        TransferCreator::from_source(CounterRandom(0x70)).create(
+            &registered,
+            missing,
+            &owner,
+            20
+        ),
         Err(error) if error.kind() == TransferErrorKind::InvalidCatalog
     ));
-    let normalized = TransferPublicCatalogV1::parse_local_compatible(&bytes)?;
-    assert_eq!(normalized.role_descriptors, vec![first, second]);
+
+    let mut substituted = proof.clone();
+    substituted.response_mac = jury_protocol::vault_v1::Digest32::new([0x55; 32]);
+    let substituted = TransferPublicCatalogV1::new(vec![substituted], Vec::new())?;
+    assert!(matches!(
+        TransferCreator::from_source(CounterRandom(0x71)).create(
+            &registered,
+            substituted,
+            &owner,
+            20
+        ),
+        Err(error) if error.kind() == TransferErrorKind::InvalidCatalog
+    ));
+
+    let catalog = TransferPublicCatalogV1::new(vec![proof], Vec::new())?;
+    let envelope = TransferCreator::from_source(CounterRandom(0x72)).create(
+        &registered,
+        catalog,
+        &owner,
+        20,
+    )?;
     assert_eq!(
-        TransferPublicCatalogV1::parse(&normalized.to_json_bytes()?)?,
-        normalized
+        ValidatedTransfer::parse(&envelope.to_json_bytes()?)?.vault(),
+        &registered
     );
     Ok(())
 }
