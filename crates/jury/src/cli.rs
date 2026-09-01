@@ -492,6 +492,13 @@ pub struct PrincipalChallengeArgs {
     pub from: PathBuf,
     #[arg(long, value_name = "CHALLENGE")]
     pub out: PathBuf,
+    /// Assign the witness's stable protocol share coordinate in 1..=32.
+    #[arg(
+        long = "witness-share-index",
+        value_name = "INDEX",
+        value_parser = clap::value_parser!(u8).range(1..=32)
+    )]
+    pub witness_share_index: Option<u8>,
     #[arg(long)]
     pub overwrite: bool,
 }

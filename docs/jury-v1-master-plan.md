@@ -3930,7 +3930,7 @@ Add:
 ```text
 jury principal list
 jury principal challenge --from PUBLIC_DESCRIPTOR --out CHALLENGE \
-  [--overwrite]
+  [--witness-share-index INDEX] [--overwrite]
 jury principal add --from PUBLIC_DESCRIPTOR \
   --proof PROOF [--reader ITEM]... [--writer ITEM]... \
   [--acknowledge-direct-access] [--dry-run]

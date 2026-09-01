@@ -9,6 +9,7 @@ use jury_protocol::{
 use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};
 use crate::local_state::{CheckpointCandidate, PrincipalLocalState};
 use crate::policy::PolicyCreator;
+use vsss_rs::IdentifierGf256;
 
 struct FillByte(u8);
 
@@ -99,6 +100,30 @@ fn runtime_shamir_split_matches_the_frozen_construction_vector()
         expected.push(hex::decode(share.as_str().ok_or("share differs")?)?);
     }
     assert_eq!(shares, expected);
+
+    let participant_ids = [2_u8, 7, 31]
+        .into_iter()
+        .map(|index| IdentifierGf256(Gf256(index)));
+    let explicit = Gf256::split_bytes_with_participant_ids_iter(
+        2,
+        3,
+        &secret,
+        ChaCha20Rng::from_seed(seed),
+        participant_ids,
+    )
+    .map_err(|error| format!("split at explicit indexes: {error:?}"))?;
+    assert_eq!(
+        explicit
+            .iter()
+            .map(|share| share.first().copied())
+            .collect::<Vec<_>>(),
+        vec![Some(2), Some(7), Some(31)]
+    );
+    assert_eq!(
+        Gf256::combine_bytes(&explicit[..2])
+            .map_err(|error| format!("combine explicit shares: {error:?}"))?,
+        secret
+    );
     Ok(())
 }
 

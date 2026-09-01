@@ -319,12 +319,14 @@ fn witnessed_item_uses_only_the_bound_membership_quorums_and_workload_rule() -> 
     created.journal.revisions.push(add.revision);
 
     let item_id = ItemId::from_bytes([0x61; 32])?;
+    let share_indexes = [2, 7, 31];
     let policy = witnessed_policy(
         add.state.vault_id(),
         add.state.genesis_fingerprint().clone(),
         2,
         &approvers,
         &witnesses,
+        share_indexes,
         item_id,
     )?;
     policy
@@ -342,6 +344,7 @@ fn witnessed_item_uses_only_the_bound_membership_quorums_and_workload_rule() -> 
         policy.witness_policy_id,
         policy_digest.clone(),
         &witnesses,
+        share_indexes,
         ItemAccessMode::WitnessedOnly,
         0x75,
     )?;
@@ -354,6 +357,7 @@ fn witnessed_item_uses_only_the_bound_membership_quorums_and_workload_rule() -> 
         policy.witness_policy_id,
         policy_digest,
         &witnesses,
+        share_indexes,
         ItemAccessMode::Mixed,
         0x95,
     )?;
@@ -632,6 +636,7 @@ fn witnessed_policy(
     sequence: u64,
     approvers: &[TestSigner; 2],
     witnesses: &[TestSigner; 3],
+    share_indexes: [u8; 3],
     item_id: ItemId,
 ) -> AnyResult<WitnessPolicy> {
     let approver_descriptors = approvers
@@ -640,8 +645,8 @@ fn witnessed_policy(
         .collect::<AnyResult<Vec<_>>>()?;
     let witness_descriptors = witnesses
         .iter()
-        .enumerate()
-        .map(|(index, signer)| witness_policy_descriptor(index, signer))
+        .zip(share_indexes)
+        .map(|(signer, share_index)| witness_policy_descriptor(share_index, signer))
         .collect::<AnyResult<Vec<_>>>()?;
     Ok(WitnessPolicy {
         schema: 1,
@@ -700,14 +705,14 @@ fn approver_policy_descriptor(signer: &TestSigner) -> AnyResult<ApproverPolicyDe
 }
 
 fn witness_policy_descriptor(
-    index: usize,
+    share_index: u8,
     signer: &TestSigner,
 ) -> AnyResult<WitnessPolicyDescriptor> {
     let signing_public_key = signer.descriptor.verification_public_key.clone();
     let mut descriptor = WitnessPolicyDescriptor {
         schema: 1,
         witness_id: signer.principal_id(),
-        share_index: u8::try_from(index)?.saturating_add(1),
+        share_index,
         signing_public_key: signing_public_key.clone(),
         signing_key_fingerprint: signing_fingerprint(3, signer.principal_id(), &signing_public_key),
         signing_key_epoch: 1,
@@ -751,6 +756,7 @@ fn witnessed_state(
     policy_id: WitnessPolicyId,
     policy_digest: Digest32,
     witnesses: &[TestSigner; 3],
+    share_indexes: [u8; 3],
     mode: ItemAccessMode,
     marker_base: u8,
 ) -> AnyResult<WitnessedStateV1> {
@@ -765,8 +771,7 @@ fn witnessed_state(
         let slot_id = SlotId::from_bytes([marker; 32])?;
         let seal_id = RevisionSealId::from_bytes([marker.saturating_add(2); 32])?;
         let mut capsules = Vec::new();
-        for (index, witness) in witnesses.iter().enumerate() {
-            let share_index = u8::try_from(index)?.saturating_add(1);
+        for (witness, share_index) in witnesses.iter().zip(share_indexes) {
             let mut capsule = WitnessShareCapsuleV1 {
                 capsule_schema: 1,
                 protocol: 1,

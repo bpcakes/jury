@@ -73,6 +73,7 @@ pub(super) fn register_role_principal(
     artifacts: &Path,
     name: &str,
     kind: &str,
+    witness_share_index: Option<u8>,
     passphrase: &str,
     owner_passphrase: &str,
 ) -> TestResult<serde_json::Value> {
@@ -114,21 +115,26 @@ pub(super) fn register_role_principal(
         ],
         format!("{passphrase}\n").as_bytes(),
     )?)?;
+    let mut challenge_arguments = vec![
+        "--json",
+        "--passphrase-stdin",
+        "--allow-degraded-protection",
+        "principal",
+        "challenge",
+        "--from",
+        descriptor.to_str().ok_or("non-UTF-8 descriptor path")?,
+        "--out",
+        challenge.to_str().ok_or("non-UTF-8 challenge path")?,
+    ];
+    let witness_share_index_text = witness_share_index.map(|index| index.to_string());
+    if let Some(index) = witness_share_index_text.as_deref() {
+        challenge_arguments.extend(["--witness-share-index", index]);
+    }
     success_json(run(
         repository,
         data,
         state,
-        &[
-            "--json",
-            "--passphrase-stdin",
-            "--allow-degraded-protection",
-            "principal",
-            "challenge",
-            "--from",
-            descriptor.to_str().ok_or("non-UTF-8 descriptor path")?,
-            "--out",
-            challenge.to_str().ok_or("non-UTF-8 challenge path")?,
-        ],
+        &challenge_arguments,
         format!("{owner_passphrase}\n").as_bytes(),
     )?)?;
     success_json(run(

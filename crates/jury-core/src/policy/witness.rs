@@ -441,9 +441,7 @@ impl WitnessPolicy {
             .iter()
             .map(|descriptor| descriptor.share_index)
             .collect::<BTreeSet<_>>();
-        let expected_share_indexes =
-            (1..=u8::try_from(active_witnesses.len()).unwrap_or(0)).collect::<BTreeSet<_>>();
-        if share_indexes != expected_share_indexes {
+        if share_indexes.len() != active_witnesses.len() {
             return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));
         }
         for rule in &self.operation_rules {

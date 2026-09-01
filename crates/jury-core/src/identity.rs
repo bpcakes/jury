@@ -617,7 +617,7 @@ impl WitnessIdentity {
             || !(2..=32).contains(&capsule.member_count)
             || !(2..=capsule.member_count).contains(&capsule.threshold)
             || capsule.share_index == 0
-            || capsule.share_index > capsule.member_count
+            || capsule.share_index > 32
             || !matches!(
                 capsule.item_access_mode,
                 ItemAccessMode::WitnessedOnly | ItemAccessMode::Mixed

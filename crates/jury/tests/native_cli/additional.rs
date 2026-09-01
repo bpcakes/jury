@@ -65,6 +65,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         &artifacts,
         "approver",
         "approver",
+        None,
         "ApproverPass1234",
         "OwnerPassphrase1234",
     )?;
@@ -75,6 +76,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         &artifacts,
         "witness-one",
         "witness",
+        Some(2),
         "WitnessOnePass1234",
         "OwnerPassphrase1234",
     )?;
@@ -85,6 +87,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
         &artifacts,
         "witness-two",
         "witness",
+        Some(31),
         "WitnessTwoPass1234",
         "OwnerPassphrase1234",
     )?;

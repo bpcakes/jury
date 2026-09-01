@@ -23,7 +23,7 @@ use jury_protocol::vault_v1::{
     WitnessedStateV1, item_body_aad, item_descriptor_aad, recipient_public_key_fingerprint,
 };
 use sha2::{Digest as _, Sha256};
-use vsss_rs::Gf256;
+use vsss_rs::{Gf256, IdentifierGf256};
 use zeroize::Zeroizing;
 
 use crate::crypto::{self, CryptoError};
@@ -875,9 +875,7 @@ fn build_witnessed_slot(
         .iter()
         .map(|descriptor| descriptor.share_index)
         .collect::<BTreeSet<_>>();
-    if members.len() > 32
-        || share_indexes != (1..=u8::try_from(members.len()).unwrap_or(0)).collect::<BTreeSet<_>>()
-    {
+    if members.len() > 32 || share_indexes.len() != members.len() {
         return Err(ItemError::new(ItemErrorKind::InvalidInput));
     }
     let member_count = u8::try_from(members.len())
@@ -894,11 +892,14 @@ fn build_witnessed_slot(
                     .try_into()
                     .map_err(|_| ItemError::new(ItemErrorKind::ProviderFailure))?;
                 let mut rng = ChaCha20Rng::from_seed(*seed);
-                Gf256::split_bytes(
+                Gf256::split_bytes_with_participant_ids_iter(
                     usize::from(witness_policy.witness_threshold),
                     members.len(),
                     secret,
                     &mut rng,
+                    members
+                        .iter()
+                        .map(|descriptor| IdentifierGf256(Gf256(descriptor.share_index))),
                 )
                 .map_err(|_| ItemError::new(ItemErrorKind::ProviderFailure))
             })
@@ -907,10 +908,10 @@ fn build_witnessed_slot(
         .map_err(|_| ItemError::new(ItemErrorKind::ProtectionUnavailable))??;
     let shares = Zeroizing::new(shares);
     let mut capsules = Vec::with_capacity(members.len());
-    for descriptor in members {
-        let bytes = shares
-            .get(usize::from(descriptor.share_index).saturating_sub(1))
-            .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?;
+    for (descriptor, bytes) in members.into_iter().zip(shares.iter()) {
+        if bytes.first().copied() != Some(descriptor.share_index) {
+            return Err(ItemError::new(ItemErrorKind::ProviderFailure));
+        }
         let share = protect(bytes, protection)?;
         let mut capsule = WitnessShareCapsuleV1 {
             capsule_schema: 1,

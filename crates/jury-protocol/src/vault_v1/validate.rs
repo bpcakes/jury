@@ -630,7 +630,7 @@ fn validate_capsule(
         || capsule.threshold != slot.threshold
         || capsule.member_count != slot.member_count
         || capsule.share_index == 0
-        || capsule.share_index > slot.member_count
+        || capsule.share_index > 32
         || capsule.recomputed_context_digest() != capsule.context_digest
     {
         return Err(FormatError::Invalid("witness capsule context differs"));

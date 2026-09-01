@@ -60,12 +60,25 @@ pub(super) fn principal_challenge(
     if !context.policy.is_owner(&context.identity.principal_id()) {
         return Err(access_denied());
     }
-    let mut creator = RegistrationCreator::new(protection);
-    let witness_share_index = if descriptor.principal_kind == PrincipalKind::Witness {
-        Some(next_witness_share_index(&context.vault)?)
-    } else {
-        None
+    let witness_share_index = match (descriptor.principal_kind, arguments.witness_share_index) {
+        (PrincipalKind::Witness, Some(index)) => Some(index),
+        (PrincipalKind::Witness, None) => {
+            return Err(CliError::new(
+                CliErrorKind::InvalidArguments,
+                "witness-share-index-required",
+                "witness registration requires an explicit stable share index",
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(CliError::new(
+                CliErrorKind::InvalidArguments,
+                "witness-share-index-not-applicable",
+                "a witness share index applies only to witness identities",
+            ));
+        }
+        (_, None) => None,
     };
+    let mut creator = RegistrationCreator::new(protection);
     let challenge = creator
         .create_challenge(
             &context.policy,
@@ -93,6 +106,7 @@ pub(super) fn principal_challenge(
             "candidate_principal_id": hex(descriptor.principal_id.as_bytes()),
             "candidate_fingerprint": hex(&fingerprint),
             "candidate_kind": principal_kind(descriptor.principal_kind),
+            "witness_share_index": witness_share_index,
             "challenge_digest": hex(challenge.digest().map_err(|error| map_registration_error(error.kind()))?.as_bytes()),
             "expires_at_ms": challenge.expires_at_ms,
             "sink": "hardened-private-file",
@@ -104,34 +118,6 @@ pub(super) fn principal_challenge(
             format!("Expires at: {} ms", challenge.expires_at_ms),
         ],
     })
-}
-
-pub(super) fn next_witness_share_index(vault: &VaultFileV1) -> Result<u8, CliError> {
-    let used = vault
-        .policy
-        .revisions
-        .iter()
-        .flat_map(|revision| &revision.operations)
-        .filter(|operation| match operation {
-            PolicyOperationV1::PrincipalAdd { descriptor, .. } => {
-                descriptor.principal_kind == PrincipalKind::Witness
-            }
-            PolicyOperationV1::PrincipalReplace {
-                next_descriptor, ..
-            } => next_descriptor.principal_kind == PrincipalKind::Witness,
-            _ => false,
-        })
-        .count();
-    u8::try_from(used.saturating_add(1))
-        .ok()
-        .filter(|index| *index <= 32)
-        .ok_or_else(|| {
-            CliError::new(
-                CliErrorKind::Conflict,
-                "witness-membership-capacity-exhausted",
-                "the witness membership index bound is exhausted",
-            )
-        })
 }
 
 pub(super) fn principal_add(
