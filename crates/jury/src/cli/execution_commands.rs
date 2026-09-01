@@ -480,8 +480,7 @@ fn run_resolved(
         protection,
     )
     .is_ok();
-    let output =
-        process_result.map_err(|error| map_process_error(error, observer.output_failed))?;
+    let output = process_result.map_err(map_process_error)?;
     let status = output.portable_status();
     let stdout = output.stdout.unwrap_or(BoundedProcessOutput {
         bytes: Vec::new(),
@@ -684,29 +683,20 @@ fn is_reserved_execution_environment(name: &[u8]) -> bool {
 struct ExecutionObserver<'a> {
     mode: ExecutionMode,
     signals: &'a mut Signals,
-    output_failed: bool,
 }
 
 impl<'a> ExecutionObserver<'a> {
     const fn new(mode: ExecutionMode, signals: &'a mut Signals) -> Self {
-        Self {
-            mode,
-            signals,
-            output_failed: false,
-        }
+        Self { mode, signals }
     }
 }
 
 impl OwnedProcessObserver for ExecutionObserver<'_> {
-    fn cancelled(&mut self) -> bool {
-        self.output_failed
-    }
-
-    fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
-        if self.mode != ExecutionMode::Transparent || self.output_failed {
-            return;
+    fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) -> std::io::Result<()> {
+        if self.mode != ExecutionMode::Transparent {
+            return Ok(());
         }
-        let result = match stream {
+        match stream {
             OwnedProcessOutputStream::Stdout => {
                 let mut output = std::io::stdout().lock();
                 output.write_all(bytes).and_then(|()| output.flush())
@@ -715,8 +705,7 @@ impl OwnedProcessObserver for ExecutionObserver<'_> {
                 let mut output = std::io::stderr().lock();
                 output.write_all(bytes).and_then(|()| output.flush())
             }
-        };
-        self.output_failed |= result.is_err();
+        }
     }
 
     fn signal(&mut self) -> Option<ProcessSignal> {
@@ -1118,15 +1107,13 @@ fn update_digest_bytes(digest: &mut Sha256, bytes: &[u8]) -> Result<(), CliError
     Ok(())
 }
 
-fn map_process_error(error: OwnedProcessTreeError, output_failed: bool) -> CliError {
-    if output_failed {
-        return CliError::new(
+fn map_process_error(error: OwnedProcessTreeError) -> CliError {
+    match error {
+        OwnedProcessTreeError::Output => CliError::new(
             CliErrorKind::Process,
             "process-output-failed",
             "child output could not be delivered safely",
-        );
-    }
-    match error {
+        ),
         OwnedProcessTreeError::TimedOut => CliError::new(
             CliErrorKind::Process,
             "process-timeout",

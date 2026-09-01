@@ -221,6 +221,34 @@ fn protected_stdin_is_delivered_while_output_is_drained() -> Result<(), Box<dyn 
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn partial_stdin_consumer_is_a_delivery_failure() -> Result<(), Box<dyn std::error::Error>> {
+    let input = ProtectedMemory::initialize(
+        1024 * 1024,
+        ProtectionPolicy::EmergencyAllowDegraded,
+        |destination| {
+            destination.fill(0xa5);
+            Ok::<usize, ()>(destination.len())
+        },
+    )?;
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "dd bs=1 count=7 of=/dev/null 2>/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut observer = IgnoreProcessActivity;
+    let mut options = OwnedProcessTreeOptions::bounded(Duration::from_secs(2));
+    options.stdin = Some(input);
+
+    let error = run_owned_process_tree_with_options(&mut command, options, &mut observer)
+        .err()
+        .ok_or("partial child stdin consumption unexpectedly succeeded")?;
+    assert!(matches!(error, OwnedProcessTreeError::Stdin));
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn refused_protected_stdin_terminates_the_owned_tree() -> Result<(), Box<dyn std::error::Error>> {
     let input = ProtectedMemory::initialize(
         1024 * 1024,
@@ -254,10 +282,15 @@ fn unbounded_streaming_retains_nothing_but_observes_every_byte()
     #[derive(Default)]
     struct StreamObserver(Vec<u8>);
     impl OwnedProcessObserver for StreamObserver {
-        fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        fn output(
+            &mut self,
+            stream: OwnedProcessOutputStream,
+            bytes: &[u8],
+        ) -> std::io::Result<()> {
             if stream == OwnedProcessOutputStream::Stdout {
                 self.0.extend_from_slice(bytes);
             }
+            Ok(())
         }
     }
 
@@ -279,6 +312,63 @@ fn unbounded_streaming_retains_nothing_but_observes_every_byte()
     let retained = output.stdout.ok_or("stdout was not captured")?;
     assert!(retained.bytes.is_empty());
     assert!(retained.truncated);
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn observer_output_failure_is_terminal() -> Result<(), Box<dyn std::error::Error>> {
+    struct FailingObserver;
+    impl OwnedProcessObserver for FailingObserver {
+        fn output(
+            &mut self,
+            _stream: OwnedProcessOutputStream,
+            _bytes: &[u8],
+        ) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "example downstream closure",
+            ))
+        }
+    }
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "printf output; sleep 1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let error = run_owned_process_tree_with_output_limits_and_observer(
+        &mut command,
+        Duration::from_secs(2),
+        ProcessOutputLimits::default(),
+        &mut FailingObserver,
+    )
+    .err()
+    .ok_or("observer output failure unexpectedly succeeded")?;
+    assert!(matches!(error, OwnedProcessTreeError::Output));
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn supervision_preserves_command_environment_for_reuse() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "printf %s \"$EXAMPLE_REUSABLE_VALUE\""])
+        .env("EXAMPLE_REUSABLE_VALUE", "present")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    for _ in 0..2 {
+        let output =
+            run_owned_process_tree_with_output(&mut command, Duration::from_secs(2), || false)?;
+        assert_eq!(
+            output.stdout.ok_or("stdout was not captured")?.bytes,
+            b"present"
+        );
+    }
     Ok(())
 }
 
@@ -337,10 +427,15 @@ fn forwarded_signal_reaches_the_group_and_preserves_status()
     }
 
     impl OwnedProcessObserver for ForwardOnReady {
-        fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        fn output(
+            &mut self,
+            stream: OwnedProcessOutputStream,
+            bytes: &[u8],
+        ) -> std::io::Result<()> {
             if stream == OwnedProcessOutputStream::Stdout && !bytes.is_empty() {
                 self.ready = true;
             }
+            Ok(())
         }
 
         fn signal(&mut self) -> Option<ProcessSignal> {
@@ -501,8 +596,13 @@ fn streaming_redaction_precedes_capture_and_observation() -> Result<(), Box<dyn 
     #[derive(Default)]
     struct CaptureObserver(Vec<u8>);
     impl OwnedProcessObserver for CaptureObserver {
-        fn output(&mut self, _stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        fn output(
+            &mut self,
+            _stream: OwnedProcessOutputStream,
+            bytes: &[u8],
+        ) -> std::io::Result<()> {
             self.0.extend_from_slice(bytes);
+            Ok(())
         }
     }
 

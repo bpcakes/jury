@@ -189,7 +189,12 @@ pub trait OwnedProcessObserver {
         false
     }
 
-    fn output(&mut self, _stream: OwnedProcessOutputStream, _bytes: &[u8]) {}
+    /// Receives already-redacted output. An error is terminal: the supervisor
+    /// terminates and reaps the owned process tree instead of silently losing
+    /// bytes that the observer promised to deliver.
+    fn output(&mut self, _stream: OwnedProcessOutputStream, _bytes: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
 
     /// Returns one pending signal to forward to the still-pinned process
     /// group. The supervisor observes the unreaped leader immediately before
@@ -317,6 +322,9 @@ pub struct OwnedProcessTreeOptions {
     pub limits: ProcessOutputLimits,
     pub overflow_policy: ProcessOutputOverflowPolicy,
     pub redaction: Option<ProcessOutputRedaction>,
+    /// Protected stdin has an all-bytes-delivered contract. If the child
+    /// closes the pipe before every byte is written, supervision fails with
+    /// [`OwnedProcessTreeError::Stdin`] even if the child exits successfully.
     pub stdin: Option<ProtectedMemory>,
 }
 
@@ -460,10 +468,6 @@ pub fn run_owned_process_tree_with_options(
         ProcessRunTimeout::Unbounded => None,
     };
     let mut process = spawn_owned_process(command).map_err(OwnedProcessTreeError::Start)?;
-    // `std::process::Command` retains owned copies of explicit environment
-    // values. Spawn has transferred them to the child, so release those
-    // parent-side copies before supervising a potentially long-lived tree.
-    command.env_clear();
     let input = match prepare_process_input(&mut process.child, options.stdin) {
         Ok(input) => input,
         Err(_) => {

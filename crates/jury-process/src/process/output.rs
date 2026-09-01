@@ -34,7 +34,7 @@ struct CaptureSink<'a> {
 
 impl Write for CaptureSink<'_> {
     fn write(&mut self, visible: &[u8]) -> std::io::Result<usize> {
-        self.observer.output(self.stream, visible);
+        self.observer.output(self.stream, visible)?;
         let remaining = self.limit.saturating_sub(self.bytes.len());
         let retained = remaining.min(visible.len());
         self.bytes.extend_from_slice(&visible[..retained]);
