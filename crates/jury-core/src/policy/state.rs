@@ -212,6 +212,13 @@ impl PolicyState {
         self.principals.len()
     }
 
+    /// Active public principal records in canonical identifier order.
+    pub fn principals(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&PrincipalId, &PrincipalPolicyState)> {
+        self.principals.iter()
+    }
+
     #[must_use]
     pub fn owner_count(&self) -> usize {
         self.owners.len()
@@ -220,6 +227,20 @@ impl PolicyState {
     #[must_use]
     pub fn item_count(&self) -> usize {
         self.items.len()
+    }
+
+    /// Active public item policy records in canonical opaque-ID order.
+    pub fn items(&self) -> impl ExactSizeIterator<Item = (&ItemId, &ItemPolicyState)> {
+        self.items.iter()
+    }
+
+    /// Number of authenticated deleted-item identifiers retained by policy.
+    ///
+    /// Public status may report this count, but adapters must not project the
+    /// opaque identifiers or any formerly encrypted item names.
+    #[must_use]
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones.len()
     }
 
     #[must_use]
@@ -368,7 +389,8 @@ impl PolicyState {
         readers.into_iter().collect()
     }
 
-    pub(crate) fn owner_ids(&self) -> impl Iterator<Item = PrincipalId> + '_ {
+    /// Active owner identifiers in canonical order.
+    pub fn owner_ids(&self) -> impl Iterator<Item = PrincipalId> + '_ {
         self.owners.iter().copied()
     }
 

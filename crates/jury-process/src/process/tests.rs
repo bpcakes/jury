@@ -13,6 +13,9 @@ use std::time::Instant;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::tempdir;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use jury_protected::{ProtectedMemory, ProtectionPolicy};
+
 use super::*;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -21,6 +24,12 @@ const TEST_MODE_ENV: &str = "JURY_PROCESS_TEST_MODE";
 const TEST_MARKER_ENV: &str = "JURY_PROCESS_TEST_MARKER";
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const TEST_GATE_ENV: &str = "JURY_PROCESS_TEST_GATE";
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct IgnoreProcessActivity;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl OwnedProcessObserver for IgnoreProcessActivity {}
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn shell_quote(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -175,6 +184,101 @@ fn output_only_supervision_closes_unused_piped_stdin() -> Result<(), Box<dyn std
         output.stdout.ok_or("stdout was not captured")?.bytes,
         b"done"
     );
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn protected_stdin_is_delivered_while_output_is_drained() -> Result<(), Box<dyn std::error::Error>>
+{
+    let bytes = b"Example binary input\0with a suffix";
+    let input = ProtectedMemory::initialize(
+        bytes.len(),
+        ProtectionPolicy::EmergencyAllowDegraded,
+        |destination| {
+            destination.copy_from_slice(bytes);
+            Ok::<usize, ()>(bytes.len())
+        },
+    )?;
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "cat; printf stderr-ready >&2"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut observer = IgnoreProcessActivity;
+    let mut options = OwnedProcessTreeOptions::bounded(Duration::from_secs(2));
+    options.stdin = Some(input);
+
+    let output = run_owned_process_tree_with_options(&mut command, options, &mut observer)?;
+    assert_eq!(output.stdout.ok_or("stdout was not captured")?.bytes, bytes);
+    assert_eq!(
+        output.stderr.ok_or("stderr was not captured")?.bytes,
+        b"stderr-ready"
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn refused_protected_stdin_terminates_the_owned_tree() -> Result<(), Box<dyn std::error::Error>> {
+    let input = ProtectedMemory::initialize(
+        1024 * 1024,
+        ProtectionPolicy::EmergencyAllowDegraded,
+        |destination| {
+            destination.fill(0xa5);
+            Ok::<usize, ()>(destination.len())
+        },
+    )?;
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "exec 0<&-; sleep 1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut observer = IgnoreProcessActivity;
+    let mut options = OwnedProcessTreeOptions::bounded(Duration::from_secs(2));
+    options.stdin = Some(input);
+
+    let error = run_owned_process_tree_with_options(&mut command, options, &mut observer)
+        .err()
+        .ok_or("closed child stdin unexpectedly succeeded")?;
+    assert!(matches!(error, OwnedProcessTreeError::Stdin));
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn unbounded_streaming_retains_nothing_but_observes_every_byte()
+-> Result<(), Box<dyn std::error::Error>> {
+    #[derive(Default)]
+    struct StreamObserver(Vec<u8>);
+    impl OwnedProcessObserver for StreamObserver {
+        fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+            if stream == OwnedProcessOutputStream::Stdout {
+                self.0.extend_from_slice(bytes);
+            }
+        }
+    }
+
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "printf 'streamed-output'"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut observer = StreamObserver::default();
+    let mut options = OwnedProcessTreeOptions::unbounded();
+    options.limits = ProcessOutputLimits {
+        stdout: 0,
+        stderr: 0,
+    };
+
+    let output = run_owned_process_tree_with_options(&mut command, options, &mut observer)?;
+    assert_eq!(observer.0, b"streamed-output");
+    let retained = output.stdout.ok_or("stdout was not captured")?;
+    assert!(retained.bytes.is_empty());
+    assert!(retained.truncated);
     Ok(())
 }
 

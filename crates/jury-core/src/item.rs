@@ -16,7 +16,7 @@ use hpke::rand_core::SeedableRng as _;
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::vault_v1::{
     AccessRole, ContentRole, DescriptorCiphertext272, DescriptorMetadataV1, Digest32,
-    DirectCiphertext48, DirectSlotV1, Encapsulation1120, FixedBytes, ItemAccessMode,
+    DirectCiphertext48, DirectSlotV1, Encapsulation1120, FieldId, FixedBytes, ItemAccessMode,
     ItemDescriptorV1, ItemEnvelopeV1, ItemId, ItemKind, ItemStateV1, Nonce12, PolicyOperationV1,
     PrincipalDescriptorV1, PrincipalId, PrincipalKind, RecipientPublicKey1216, RevisionSealId,
     ShareCiphertext49, Signature64, SignedItemRevisionV1, WitnessShareCapsuleV1, WitnessedSlotV1,
@@ -119,6 +119,12 @@ pub struct RekeyedItem {
     pub bucket_id: u8,
     pub access: ItemAccessPlan,
     pub principal_replacement: Option<PrincipalReplacement>,
+    /// One not-yet-registered recipient to add before this item's role and
+    /// slot changes in the same signed policy revision.
+    pub principal_registration: Option<PrincipalRegistration>,
+    /// One owner-set change whose implicit reader-set transition is rotated
+    /// atomically with this item.
+    pub owner_change: Option<OwnerChange>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,9 +134,29 @@ pub struct PrincipalReplacement {
     pub registration_proof_digest: Digest32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrincipalRegistration {
+    pub descriptor: PrincipalDescriptorV1,
+    pub display_label: String,
+    pub registration_proof_digest: Digest32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnerChange {
+    Grant(PrincipalId),
+    Revoke(PrincipalId),
+}
+
 pub struct PreparedItemMutation {
     pub policy: PreparedPolicyRevision,
     pub envelope: ItemEnvelopeV1,
+}
+
+/// One cryptographically complete item replacement awaiting validation as
+/// part of a multi-item policy revision.
+pub struct PreparedItemBatchComponent {
+    pub(crate) operations: Vec<PolicyOperationV1>,
+    pub(crate) envelope: ItemEnvelopeV1,
 }
 
 pub struct ItemCreator<R = OsRandom> {
@@ -174,7 +200,7 @@ impl<R: RandomSource> ItemCreator<R> {
                 .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))?
         };
         let sequence = next(policy.sequence())?;
-        let resolved = resolve_access(policy, sequence, &input.access, None)?;
+        let resolved = resolve_access(policy, sequence, &input.access, None, None, None)?;
         let mut reserved = inventory.clone();
         let descriptor = self.seal_content(
             policy,
@@ -258,6 +284,27 @@ impl<R: RandomSource> ItemCreator<R> {
         })
     }
 
+    /// Generates a nonzero field identifier distinct from every identifier in
+    /// the decrypted item body. The adapter never supplies caller-chosen field
+    /// identifiers and cannot inject its own randomness source in production.
+    pub fn generate_field_id(&mut self, existing: &[FieldId]) -> Result<FieldId, ItemError> {
+        for _ in 0..crate::domain::IDENTIFIER_COLLISION_RETRY_ATTEMPTS {
+            for _ in 0..crate::domain::IDENTIFIER_ZERO_RETRY_ATTEMPTS {
+                let mut bytes = [0_u8; 32];
+                self.source
+                    .fill(&mut bytes)
+                    .map_err(|_| ItemError::new(ItemErrorKind::EntropyUnavailable))?;
+                let Ok(candidate) = FieldId::from_bytes(bytes) else {
+                    continue;
+                };
+                if !existing.contains(&candidate) {
+                    return Ok(candidate);
+                }
+            }
+        }
+        Err(ItemError::new(ItemErrorKind::RetryExhausted))
+    }
+
     pub fn prepare_rekey(
         &mut self,
         policy: &PolicyState,
@@ -267,6 +314,36 @@ impl<R: RandomSource> ItemCreator<R> {
         input: RekeyedItem,
         inventory: &ItemArtifactInventory,
     ) -> Result<PreparedItemMutation, ItemError> {
+        let component = self.prepare_rekey_batch_component(
+            policy,
+            author,
+            timestamp_ms,
+            prior,
+            input,
+            inventory,
+        )?;
+        let prepared = policy
+            .prepare_revision(author, timestamp_ms, component.operations)
+            .map_err(map_policy_error)?;
+        Ok(PreparedItemMutation {
+            policy: prepared,
+            envelope: component.envelope,
+        })
+    }
+
+    /// Prepares one item for an atomic multi-item revision. The returned
+    /// component is opaque outside `jury-core` and must be consumed by
+    /// `VaultMutationPlan::prepare_item_component_batch`, which validates the
+    /// complete combined transition before exposing commit bytes.
+    pub fn prepare_rekey_batch_component(
+        &mut self,
+        policy: &PolicyState,
+        author: &VaultPrincipalIdentity,
+        timestamp_ms: u64,
+        prior: &ItemEnvelopeV1,
+        input: RekeyedItem,
+        inventory: &ItemArtifactInventory,
+    ) -> Result<PreparedItemBatchComponent, ItemError> {
         verify_item_ancestry(prior, |principal_id| policy.verification_key(&principal_id))?;
         let item = policy
             .item(&prior.item_id)
@@ -286,7 +363,23 @@ impl<R: RandomSource> ItemCreator<R> {
         let descriptor_revision = next(item.descriptor.revision)?;
         let body_revision = next(prior.current_revision.item_revision)?;
         let replacement = input.principal_replacement.as_ref();
-        let resolved = resolve_access(policy, sequence, &input.access, replacement)?;
+        let registration = input.principal_registration.as_ref();
+        let owner_change = input.owner_change;
+        if usize::from(replacement.is_some())
+            + usize::from(registration.is_some())
+            + usize::from(owner_change.is_some())
+            > 1
+        {
+            return Err(ItemError::new(ItemErrorKind::InvalidInput));
+        }
+        let resolved = resolve_access(
+            policy,
+            sequence,
+            &input.access,
+            replacement,
+            registration,
+            owner_change,
+        )?;
         let mut reserved = inventory.clone();
         let descriptor = self.seal_content(
             policy,
@@ -349,21 +442,34 @@ impl<R: RandomSource> ItemCreator<R> {
                 .map_err(|_| ItemError::new(ItemErrorKind::CapacityExhausted))?,
         };
 
-        let mut operations = replacement.map_or_else(Vec::new, |replacement| {
+        let mut operations = registration.map_or_else(Vec::new, |registration| {
+            vec![PolicyOperationV1::PrincipalAdd {
+                descriptor: registration.descriptor.clone(),
+                display_label: registration.display_label.clone(),
+                registration_proof_digest: registration.registration_proof_digest.clone(),
+            }]
+        });
+        operations.extend(replacement.map_or_else(Vec::new, |replacement| {
             vec![PolicyOperationV1::PrincipalReplace {
                 prior_principal_id: replacement.prior_principal_id,
                 next_descriptor: replacement.next_descriptor.clone(),
                 registration_proof_digest: replacement.registration_proof_digest.clone(),
             }]
-        });
+        }));
+        if let Some(OwnerChange::Revoke(principal_id)) = owner_change {
+            operations.push(PolicyOperationV1::OwnerRevoke { principal_id });
+        }
         operations.extend(role_change_operations(
             item,
             &input.access,
             prior.item_id,
             replacement,
         )?);
+        if let Some(OwnerChange::Grant(principal_id)) = owner_change {
+            operations.push(PolicyOperationV1::OwnerGrant { principal_id });
+        }
         let prior_readers = policy.effective_reader_ids(&prior.item_id);
-        let next_readers = next_reader_ids(policy, &input.access, replacement);
+        let next_readers = next_reader_ids(policy, &input.access, replacement, owner_change);
         operations.push(PolicyOperationV1::ItemReaderSetChange {
             item_id: prior.item_id,
             prior_epoch: item.key_epoch,
@@ -379,11 +485,8 @@ impl<R: RandomSource> ItemCreator<R> {
             direct_slots: slots.direct,
             witnessed_state: slots.witnessed,
         });
-        let prepared = policy
-            .prepare_revision(author, timestamp_ms, operations)
-            .map_err(map_policy_error)?;
-        Ok(PreparedItemMutation {
-            policy: prepared,
+        Ok(PreparedItemBatchComponent {
+            operations,
             envelope,
         })
     }
@@ -554,6 +657,8 @@ fn resolve_access<'a>(
     sequence: u64,
     plan: &ItemAccessPlan,
     replacement: Option<&PrincipalReplacement>,
+    registration: Option<&PrincipalRegistration>,
+    owner_change: Option<OwnerChange>,
 ) -> Result<ResolvedAccess<'a>, ItemError> {
     if replacement.is_some_and(|replacement| {
         replacement.prior_principal_id == replacement.next_descriptor.principal_id
@@ -564,6 +669,17 @@ fn resolve_access<'a>(
             || plan
                 .direct_recipient_ids
                 .contains(&replacement.prior_principal_id)
+    }) {
+        return Err(ItemError::new(ItemErrorKind::InvalidInput));
+    }
+    if registration.is_some_and(|registration| {
+        policy.principal_id_was_used(&registration.descriptor.principal_id) || replacement.is_some()
+    }) {
+        return Err(ItemError::new(ItemErrorKind::InvalidInput));
+    }
+    if owner_change.is_some_and(|change| match change {
+        OwnerChange::Grant(principal_id) => policy.is_owner(&principal_id),
+        OwnerChange::Revoke(principal_id) => !policy.is_owner(&principal_id),
     }) {
         return Err(ItemError::new(ItemErrorKind::InvalidInput));
     }
@@ -582,14 +698,19 @@ fn resolve_access<'a>(
         }
         let principal_kind = replacement
             .filter(|replacement| replacement.next_descriptor.principal_id == grant.principal_id)
-            .map_or_else(
-                || {
-                    policy
-                        .principal(&grant.principal_id)
-                        .map(|principal| principal.descriptor.principal_kind)
-                },
-                |replacement| Some(replacement.next_descriptor.principal_kind),
-            )
+            .map(|replacement| replacement.next_descriptor.principal_kind)
+            .or_else(|| {
+                registration
+                    .filter(|registration| {
+                        registration.descriptor.principal_id == grant.principal_id
+                    })
+                    .map(|registration| registration.descriptor.principal_kind)
+            })
+            .or_else(|| {
+                policy
+                    .principal(&grant.principal_id)
+                    .map(|principal| principal.descriptor.principal_kind)
+            })
             .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?;
         if !matches!(
             principal_kind,
@@ -610,14 +731,16 @@ fn resolve_access<'a>(
     for principal_id in &plan.direct_recipient_ids {
         let replaced = replacement
             .filter(|replacement| replacement.next_descriptor.principal_id == *principal_id);
-        let descriptor = replaced.map_or_else(
-            || {
+        let registered = registration
+            .filter(|registration| registration.descriptor.principal_id == *principal_id);
+        let descriptor = replaced
+            .map(|replacement| &replacement.next_descriptor)
+            .or_else(|| registered.map(|registration| &registration.descriptor))
+            .or_else(|| {
                 policy
                     .principal(principal_id)
                     .map(|principal| &principal.descriptor)
-            },
-            |replacement| Some(&replacement.next_descriptor),
-        );
+            });
         let descriptor = descriptor.ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?;
         if !matches!(
             descriptor.principal_kind,
@@ -627,7 +750,12 @@ fn resolve_access<'a>(
         }
         let is_replacement_owner =
             replaced.is_some_and(|replacement| policy.is_owner(&replacement.prior_principal_id));
-        let role = if policy.is_owner(principal_id) || is_replacement_owner {
+        let will_be_owner = match owner_change {
+            Some(OwnerChange::Grant(candidate)) if candidate == *principal_id => true,
+            Some(OwnerChange::Revoke(candidate)) if candidate == *principal_id => false,
+            _ => policy.is_owner(principal_id),
+        };
+        let role = if will_be_owner || is_replacement_owner {
             AccessRole::Owner
         } else {
             grants
@@ -743,10 +871,12 @@ fn build_witnessed_slot(
         .iter()
         .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
         .collect::<Vec<_>>();
+    let share_indexes = members
+        .iter()
+        .map(|descriptor| descriptor.share_index)
+        .collect::<BTreeSet<_>>();
     if members.len() > 32
-        || members.iter().enumerate().any(|(index, descriptor)| {
-            usize::from(descriptor.share_index) != index.saturating_add(1)
-        })
+        || share_indexes != (1..=u8::try_from(members.len()).unwrap_or(0)).collect::<BTreeSet<_>>()
     {
         return Err(ItemError::new(ItemErrorKind::InvalidInput));
     }
@@ -777,7 +907,10 @@ fn build_witnessed_slot(
         .map_err(|_| ItemError::new(ItemErrorKind::ProtectionUnavailable))??;
     let shares = Zeroizing::new(shares);
     let mut capsules = Vec::with_capacity(members.len());
-    for (descriptor, bytes) in members.iter().zip(shares.iter()) {
+    for descriptor in members {
+        let bytes = shares
+            .get(usize::from(descriptor.share_index).saturating_sub(1))
+            .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?;
         let share = protect(bytes, protection)?;
         let mut capsule = WitnessShareCapsuleV1 {
             capsule_schema: 1,
@@ -821,6 +954,7 @@ fn build_witnessed_slot(
             .map_err(|_| ItemError::new(ItemErrorKind::ProviderFailure))?;
         capsules.push(capsule);
     }
+    capsules.sort_by_key(|capsule| capsule.share_index);
     let mut slot = WitnessedSlotV1 {
         slot_schema: 1,
         slot_algorithm: 2,
@@ -987,6 +1121,7 @@ fn next_reader_ids(
     policy: &PolicyState,
     access: &ItemAccessPlan,
     replacement: Option<&PrincipalReplacement>,
+    owner_change: Option<OwnerChange>,
 ) -> Vec<PrincipalId> {
     let mut ids = policy
         .owner_ids()
@@ -998,6 +1133,16 @@ fn next_reader_ids(
                 })
         })
         .collect::<BTreeSet<_>>();
+    if let Some(change) = owner_change {
+        match change {
+            OwnerChange::Grant(principal_id) => {
+                ids.insert(principal_id);
+            }
+            OwnerChange::Revoke(principal_id) => {
+                ids.remove(&principal_id);
+            }
+        }
+    }
     ids.extend(access.grants.iter().map(|grant| grant.principal_id));
     ids.into_iter().collect()
 }

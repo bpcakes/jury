@@ -21,6 +21,7 @@ pub use state::{
     AccessExplanation, AccessPath, AccessReason, ItemPolicyState, PolicyError, PolicyErrorKind,
     PolicyState, PrincipalPolicyState, TombstoneState, WitnessAuthority,
 };
+pub(crate) use witness::signing_key_fingerprint;
 pub use witness::{
     ApprovalMode, ApproverPolicyDescriptor, AutomaticReadTarget, DescriptorStatus, OperationRule,
     PlatformAssurance, WitnessAccessRule, WitnessOperation, WitnessPolicy, WitnessPolicyDescriptor,

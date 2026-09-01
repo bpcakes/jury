@@ -23,9 +23,10 @@ mod unix;
 pub use process::interaction;
 pub use process::{
     BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,
-    OwnedProcessTreeOutput, PortableExitStatus, ProcessOutputLimits, ProcessOutputOverflowPolicy,
-    ProcessOutputRedaction, ProcessSignal, ProcessTreePlatformSupport, format_exit_status,
-    process_tree_platform_support, run_owned_process_tree_with_output,
+    OwnedProcessTreeOptions, OwnedProcessTreeOutput, PortableExitStatus, ProcessOutputLimits,
+    ProcessOutputOverflowPolicy, ProcessOutputRedaction, ProcessRunTimeout, ProcessSignal,
+    ProcessTreePlatformSupport, format_exit_status, process_tree_platform_support,
+    run_owned_process_tree_with_options, run_owned_process_tree_with_output,
     run_owned_process_tree_with_output_limits,
     run_owned_process_tree_with_output_limits_and_observer,
     run_owned_process_tree_with_output_policy_and_observer,

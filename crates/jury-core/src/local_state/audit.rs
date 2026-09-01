@@ -34,6 +34,7 @@ pub enum AuditFailureStage {
     PublicSyntax,
     Authorization,
     PrivateAuthentication,
+    Execution,
     Mutation,
     DurableCommit,
 }
@@ -493,5 +494,6 @@ const fn failure_stage_tag(stage: AuditFailureStage) -> u8 {
         AuditFailureStage::PrivateAuthentication => 3,
         AuditFailureStage::Mutation => 4,
         AuditFailureStage::DurableCommit => 5,
+        AuditFailureStage::Execution => 6,
     }
 }

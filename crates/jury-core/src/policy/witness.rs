@@ -18,13 +18,15 @@ const MAX_AUTOMATIC_TARGETS: usize = 64;
 const MAX_REQUEST_LIFETIME_MS: u64 = 900_000;
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum DescriptorStatus {
     Active,
     Revoked,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ApprovalMode {
     Human,
     Automatic,
@@ -44,19 +46,22 @@ pub enum WitnessOperation {
     AdministrativeRekey,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PlatformAssurance {
     NormalizedPathOnly,
     StableExecutableIdentity,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AutomaticReadTarget {
     pub item_id: ItemId,
     pub field_id: Option<FieldId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApproverPolicyDescriptor {
     pub schema: u16,
     pub approver_id: PrincipalId,
@@ -135,7 +140,8 @@ impl ApproverPolicyDescriptor {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WitnessPolicyDescriptor {
     pub schema: u16,
     pub witness_id: PrincipalId,
@@ -214,7 +220,8 @@ impl WitnessPolicyDescriptor {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OperationRule {
     pub operation: WitnessOperation,
     pub eligible_approver_ids: Vec<PrincipalId>,
@@ -283,7 +290,8 @@ impl OperationRule {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WitnessPolicy {
     pub schema: u16,
     pub witness_policy_id: WitnessPolicyId,
@@ -433,7 +441,9 @@ impl WitnessPolicy {
             .iter()
             .map(|descriptor| descriptor.share_index)
             .collect::<BTreeSet<_>>();
-        if share_indexes.len() != active_witnesses.len() {
+        let expected_share_indexes =
+            (1..=u8::try_from(active_witnesses.len()).unwrap_or(0)).collect::<BTreeSet<_>>();
+        if share_indexes != expected_share_indexes {
             return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));
         }
         for rule in &self.operation_rules {
@@ -566,9 +576,21 @@ pub fn replay_policy_with_witness_policies(
     policies: &[WitnessPolicy],
 ) -> Result<PolicyState, PolicyError> {
     let mut catalog = BTreeMap::new();
+    let mut lineage_revisions = BTreeMap::new();
+    let mut successors = BTreeMap::new();
     for policy in policies {
         policy.validate()?;
         let digest = policy.digest()?;
+        if lineage_revisions
+            .insert((policy.witness_policy_id, policy.revision), digest.clone())
+            .is_some()
+            || (policy.revision > 1
+                && successors
+                    .insert(policy.predecessor_policy_digest.clone(), digest.clone())
+                    .is_some())
+        {
+            return Err(PolicyError::new(PolicyErrorKind::InvalidAncestry));
+        }
         if catalog.insert(digest, policy.clone()).is_some() {
             return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));
         }
@@ -615,19 +637,25 @@ pub(super) fn validate_item_policy_binding(
         .iter()
         .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
         .collect::<Vec<_>>();
-    let policy_members = active_witnesses
+    let mut policy_members = active_witnesses
         .iter()
         .map(|descriptor| descriptor.witness_id)
         .collect::<Vec<_>>();
-    let slot_members = first
+    let mut slot_members = first
         .capsules
         .iter()
         .map(|capsule| capsule.witness_id)
         .collect::<Vec<_>>();
+    policy_members.sort_unstable();
+    slot_members.sort_unstable();
     if policy_members != slot_members || first.item_id != *item_id {
         return Err(PolicyError::new(PolicyErrorKind::InvalidTransition));
     }
-    for (descriptor, capsule) in active_witnesses.iter().zip(&first.capsules) {
+    for capsule in &first.capsules {
+        let descriptor = active_witnesses
+            .iter()
+            .find(|descriptor| descriptor.witness_id == capsule.witness_id)
+            .ok_or_else(|| PolicyError::new(PolicyErrorKind::InvalidRole))?;
         let principal = state
             .principals
             .get(&descriptor.witness_id)
@@ -659,7 +687,7 @@ pub(super) fn validate_item_policy_binding(
     Ok(())
 }
 
-fn signing_key_fingerprint(
+pub(crate) fn signing_key_fingerprint(
     role: u8,
     subject_id: &PrincipalId,
     epoch: u64,

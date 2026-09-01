@@ -455,7 +455,10 @@ fn preflight_direct<'a>(
         || slot.key_epoch != target.key_epoch
         || slot.revision != target.revision
         || slot.revision_seal_id != target.revision_seal_id
-        || slot.access_role != target.access_role
+        // The slot records the role at the time its revision secret was
+        // issued. Current policy remains the authorization source, so a
+        // reader/writer-only policy change can retain the same current seals.
+        || !matches!(slot.access_role, AccessRole::Reader | AccessRole::Writer | AccessRole::Owner)
         || slot.item_access_mode != target.item_access_mode
         || slot.policy_sequence == 0
         || slot.policy_sequence > target.policy_sequence

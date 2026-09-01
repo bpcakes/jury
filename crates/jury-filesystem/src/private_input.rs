@@ -60,6 +60,33 @@ pub(crate) fn read_public_from_dir(
     )
 }
 
+/// Reads one bounded public regular file selected by an absolute direct path.
+/// The leaf must not be a link or hard-link alias and must not be group/world
+/// writable. The parent is retained as a capability for the complete read.
+pub fn read_public_file(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, FilesystemError> {
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Read,
+            FilesystemErrorKind::Traversal,
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Traversal)
+    })?;
+    let name = path.file_name().ok_or_else(|| {
+        FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Traversal)
+    })?;
+    let directory = crate::capability::open_absolute_dir(parent, FilesystemOperation::Read)?;
+    read_public_from_dir(&directory.dir, Path::new(name), maximum_bytes)
+}
+
 #[derive(Clone, Copy)]
 enum PermissionProfile {
     OwnerOnly,

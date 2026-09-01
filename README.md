@@ -13,37 +13,74 @@ claim.
 > Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
 > must not be used with real credentials.
 
-## Available native CLI foundation
+## Available native Linux CLI
 
-The Linux CLI can now create and inspect portable identities and empty vaults:
+The Linux CLI now covers portable identity and vault setup, direct item and
+field operations, principal/access administration, witnessed-policy
+configuration, controlled read/injection sinks, privacy cover, audit
+verification, direct transparent execution, bounded brokered execution, and
+public history/capacity status. Representative commands are:
 
 ```console
 $ jury identity init
-$ jury identity list
-$ jury identity status
-$ jury identity passphrase change
 $ jury vault init
 $ jury vault status
+$ jury item create ExampleItem --allow-direct
+$ jury vault field set ExampleItem ExampleField --value-stdin
+$ jury principal challenge --from descriptor.json --out challenge.json
+$ jury access matrix
+$ jury policy require witnessed --item ExampleItem \
+    --approver PRINCIPAL --approvals 1 \
+    --witness WITNESS_ONE --witness WITNESS_TWO --witness-quorum 2 \
+    --operation read-stdout --request-lifetime 300
+$ jury read ExampleItem ExampleField --out value.txt
+$ jury inject --template template.txt --out rendered.txt
+$ jury exec --env-file /absolute/path/to/example.env -- example-command
+$ jury run --env TOKEN=ExampleItem.ExampleField --timeout 300 -- example-command
+$ jury privacy cover --item ExampleItem
+$ jury vault audit verify
+$ jury history status
 ```
 
 Inside a Git worktree, vault initialization writes only encrypted
 `.jury/vault.json` and the fixed `.jury/.gitattributes` merge rule. Identities
 and authenticated local state stay in their separate Linux data/state roots.
 This is still pre-alpha plumbing, not a claim that Jury protects secrets.
+Witnessed-only policy can be configured, but witnessed request, approval, and
+open execution remain J22 work. The signed public role descriptors and policy
+bodies used by the current CLI are local state; J16/J23 own their portable
+distribution. Do not treat a witnessed-only configuration as an operational
+secret-access path yet.
+
+`jury exec` inherits the ordinary environment and stdin, removes every
+`JURY_*` variable, and streams independently redacted child output. `jury run`
+starts from a small environment allowlist and uses an
+explicit timeout plus bounded captured output. Both commands authorize and
+resolve every `Item.Field` reference before starting a child, support protected
+stdin and sealed anonymous-file delivery, and own the resulting Linux process
+group through cleanup. These are direct-access pre-alpha mechanics, not the
+witnessed execution path: J22 must bind a verified action manifest and witnessed
+authorization before the same delivery layer may spawn. An authorized child
+can copy or retain every plaintext value it receives.
 
 ## Intended experience
 
 ```console
 $ jury init
-$ jury put ExampleSecret
-$ jury policy require --approvers 2 --witnesses 3
+$ jury item create ExampleSecret --allow-direct
+$ jury policy require witnessed --item ExampleSecret \
+    --approver APPROVER_ONE --approver APPROVER_TWO --approvals 2 \
+    --witness WITNESS_ONE --witness WITNESS_TWO --witness-quorum 2 \
+    --operation child-environment --request-lifetime 300
 $ jury request exec -- example-command
 $ jury approve REQUEST_ID
 $ jury request run REQUEST_ID
 ```
 
-The item, policy, request, approval, and execution commands in this example are
-design targets, not implemented interfaces.
+The request and approval commands in this example, including their request-
+bound execution spellings, are design targets rather than implemented
+interfaces. Direct `jury exec` and `jury run`, plus the item and policy
+configuration commands above, are implemented native Linux commands.
 
 ## Design principles
 

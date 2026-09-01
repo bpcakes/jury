@@ -146,6 +146,43 @@ impl HardenedStateRoot {
         }
     }
 
+    /// Opens one existing owner-only child without following a link or
+    /// creating filesystem state.
+    pub fn open_private_child(&self, name: &Path) -> Result<Self, FilesystemError> {
+        #[cfg(not(unix))]
+        {
+            let _ = name;
+            return Err(FilesystemError::new(
+                FilesystemOperation::OpenStateRoot,
+                FilesystemErrorKind::Unsupported,
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let name =
+                crate::capability::single_component(name, FilesystemOperation::OpenStateRoot)?;
+            let dir = nofollow_directory_child(
+                &self.root.dir,
+                Path::new(&name),
+                FilesystemOperation::OpenStateRoot,
+            )?;
+            let metadata = dir.dir_metadata().map_err(|_| {
+                FilesystemError::new(FilesystemOperation::OpenStateRoot, FilesystemErrorKind::Io)
+            })?;
+            let identity = FileIdentity::from_metadata(&metadata);
+            let mut lineage = self.root.lineage.clone();
+            lineage.push(identity);
+            let child = HardenedDir {
+                dir,
+                absolute: self.root.absolute.join(&name),
+                identity,
+                lineage,
+            };
+            validate_root(&child, &[], &[])?;
+            Ok(Self { root: child })
+        }
+    }
+
     pub fn preview_private_file(
         &self,
         name: &Path,

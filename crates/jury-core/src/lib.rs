@@ -14,6 +14,9 @@ pub mod item;
 pub mod local_state;
 pub mod mutation;
 pub mod policy;
+pub mod registration;
+#[cfg(test)]
+mod registration_tests;
 pub mod session;
 pub mod witness_engine;
 

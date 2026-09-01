@@ -8,8 +8,8 @@ use jury_core::local_state::{
 use jury_core::mutation::{MutationWarnings, VaultMutationPlan};
 use jury_core::policy::replay_policy_with_witness_policies;
 use jury_filesystem::{
-    FilesystemError, LockError, PreparedPrivateFile, PrincipalStateFile, PublicationOutcome,
-    RepositoryLocation, VaultStateDirectory,
+    FilesystemError, HardenedStateRoot, LockError, PreparedPrivateFile, PrincipalStateFile,
+    PrivateFilePrecondition, PublicationOutcome, RepositoryLocation, VaultStateDirectory,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 use jury_protocol::vault_v1::{Digest32, FixedBytes, MAX_VAULT_BYTES, VaultFileV1};
@@ -104,7 +104,22 @@ pub enum MutationCommitOutcome {
 /// Composes the core plan with the only two durable authorities it may change:
 /// the encrypted worktree artifact and the acting principal's separate state.
 pub struct RepositoryMutationTarget<'a> {
-    repository: &'a RepositoryLocation,
+    inner: MutationCommitTarget<'a>,
+}
+
+/// Durable publication target for an explicit/global vault outside Git.
+pub struct DetachedMutationTarget<'a> {
+    inner: MutationCommitTarget<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum SharedArtifact<'a> {
+    Repository(&'a RepositoryLocation),
+    Detached(&'a HardenedStateRoot),
+}
+
+struct MutationCommitTarget<'a> {
+    shared: SharedArtifact<'a>,
     state: &'a VaultStateDirectory,
     local: &'a PrincipalLocalState,
     protection: ProtectionPolicy,
@@ -119,14 +134,100 @@ impl<'a> RepositoryMutationTarget<'a> {
         protection: ProtectionPolicy,
     ) -> Self {
         Self {
-            repository,
-            state,
-            local,
-            protection,
+            inner: MutationCommitTarget {
+                shared: SharedArtifact::Repository(repository),
+                state,
+                local,
+                protection,
+            },
         }
     }
 
     pub fn commit(
+        &self,
+        plan: &VaultMutationPlan,
+    ) -> Result<MutationCommitOutcome, MutationCommitError> {
+        self.inner.commit(plan)
+    }
+}
+
+impl<'a> DetachedMutationTarget<'a> {
+    #[must_use]
+    pub const fn new(
+        home: &'a HardenedStateRoot,
+        state: &'a VaultStateDirectory,
+        local: &'a PrincipalLocalState,
+        protection: ProtectionPolicy,
+    ) -> Self {
+        Self {
+            inner: MutationCommitTarget {
+                shared: SharedArtifact::Detached(home),
+                state,
+                local,
+                protection,
+            },
+        }
+    }
+
+    pub fn commit(
+        &self,
+        plan: &VaultMutationPlan,
+    ) -> Result<MutationCommitOutcome, MutationCommitError> {
+        self.inner.commit(plan)
+    }
+}
+
+impl SharedArtifact<'_> {
+    fn preview(self) -> Result<PrivateFilePrecondition, FilesystemError> {
+        match self {
+            Self::Repository(repository) => repository.preview_encrypted_shared_artifact(),
+            Self::Detached(home) => home.preview_private_file(std::path::Path::new("vault.json")),
+        }
+    }
+
+    fn read(self, maximum_bytes: usize) -> Result<Vec<u8>, FilesystemError> {
+        match self {
+            Self::Repository(repository) => {
+                repository.read_encrypted_shared_artifact(maximum_bytes)
+            }
+            Self::Detached(home) => {
+                home.read_private_file(std::path::Path::new("vault.json"), maximum_bytes)
+            }
+        }
+    }
+
+    fn prepare(
+        self,
+        precondition: PrivateFilePrecondition,
+        contents: &ProtectedMemory,
+    ) -> Result<PreparedPrivateFile, FilesystemError> {
+        let _ = self;
+        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
+    }
+
+    const fn matches_ancestry(self, expected: Option<[u8; 32]>) -> bool {
+        matches!(
+            (self, expected),
+            (Self::Repository(_), Some(_)) | (Self::Detached(_), None)
+        )
+    }
+
+    fn ancestry_is_current(self, expected: Option<[u8; 32]>) -> Result<bool, MutationCommitError> {
+        match (self, expected) {
+            (Self::Repository(repository), Some(expected)) => Ok(repository
+                .git_ancestry_digest()
+                .map_err(map_git_ancestry_error)?
+                == expected),
+            (Self::Detached(_), None) => Ok(true),
+            _ => Err(MutationCommitError::new(
+                MutationCommitErrorKind::MissingRepositoryPrecondition,
+            )),
+        }
+    }
+}
+
+impl MutationCommitTarget<'_> {
+    fn commit(
         &self,
         plan: &VaultMutationPlan,
     ) -> Result<MutationCommitOutcome, MutationCommitError> {
@@ -145,13 +246,10 @@ impl<'a> RepositoryMutationTarget<'a> {
         }
 
         let locked = self.state.try_lock().map_err(map_lock_error)?;
-        let shared_precondition = self
-            .repository
-            .preview_encrypted_shared_artifact()
-            .map_err(map_shared_read_error)?;
+        let shared_precondition = self.shared.preview().map_err(map_shared_read_error)?;
         let current_bytes = self
-            .repository
-            .read_encrypted_shared_artifact(MAX_VAULT_BYTES)
+            .shared
+            .read(MAX_VAULT_BYTES)
             .map_err(map_shared_read_error)?;
         let current = VaultFileV1::parse(&current_bytes)
             .map_err(|_| MutationCommitError::new(MutationCommitErrorKind::InvalidArtifact))?;
@@ -174,16 +272,13 @@ impl<'a> RepositoryMutationTarget<'a> {
                 MutationCommitErrorKind::StaleArtifact,
             ));
         }
-        let expected_ancestry = plan.precondition().repository_ancestry.ok_or_else(|| {
-            MutationCommitError::new(MutationCommitErrorKind::MissingRepositoryPrecondition)
-        })?;
-        if is_expected
-            && self
-                .repository
-                .git_ancestry_digest()
-                .map_err(map_git_ancestry_error)?
-                != expected_ancestry
-        {
+        let expected_ancestry = plan.precondition().repository_ancestry;
+        if !self.shared.matches_ancestry(expected_ancestry) {
+            return Err(MutationCommitError::new(
+                MutationCommitErrorKind::MissingRepositoryPrecondition,
+            ));
+        }
+        if is_expected && !self.shared.ancestry_is_current(expected_ancestry)? {
             return Err(MutationCommitError::new(
                 MutationCommitErrorKind::StaleArtifact,
             ));
@@ -269,9 +364,10 @@ impl<'a> RepositoryMutationTarget<'a> {
             )
             .map_err(map_local_error)?;
         let protected_shared = protect(plan.target_bytes(), self.protection)?;
-        let prepared_shared =
-            PreparedPrivateFile::prepare_if_unchanged(shared_precondition, &protected_shared, true)
-                .map_err(|error| map_shared_prepare_error(&error))?;
+        let prepared_shared = self
+            .shared
+            .prepare(shared_precondition, &protected_shared)
+            .map_err(|error| map_shared_prepare_error(&error))?;
 
         let audit_outcome = prepared_audit.publish().map_err(map_local_error)?;
         if audit_outcome != PublicationOutcome::PublishedAndSynced {
@@ -280,12 +376,7 @@ impl<'a> RepositoryMutationTarget<'a> {
             ));
         }
 
-        if self
-            .repository
-            .git_ancestry_digest()
-            .map_err(map_git_ancestry_error)?
-            != expected_ancestry
-        {
+        if !self.shared.ancestry_is_current(expected_ancestry)? {
             return Err(MutationCommitError::new(
                 MutationCommitErrorKind::StaleArtifact,
             ));
@@ -905,7 +996,7 @@ mod tests {
         fs::remove_file(&checkpoint_path)?;
         fs::create_dir(&checkpoint_path)?;
 
-        let outcome = target.finish_checkpoint(
+        let outcome = target.inner.finish_checkpoint(
             &plan,
             &locked,
             &mut local_state,

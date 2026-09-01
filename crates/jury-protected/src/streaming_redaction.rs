@@ -18,6 +18,7 @@ pub enum StreamingRedactorError {
     PatternBytes,
     PatternLength,
     PatternTooShort,
+    ProtectedMemory,
     Matcher,
 }
 
@@ -28,6 +29,7 @@ impl fmt::Display for StreamingRedactorError {
             Self::PatternBytes => "redaction pattern bytes exceed the supported bound",
             Self::PatternLength => "redaction pattern length exceeds the supported bound",
             Self::PatternTooShort => "redaction pattern is below the safe minimum length",
+            Self::ProtectedMemory => "protected redaction input is unavailable",
             Self::Matcher => "bounded redaction matcher construction failed",
         };
         formatter.write_str(message)
@@ -68,6 +70,47 @@ impl StreamingRedactor {
                 MAX_REDACTION_PATTERN_BYTES,
                 MAX_REDACTION_PATTERN_LEN,
             )?;
+        }
+        Self::new(patterns)
+    }
+
+    pub fn from_protected_values<'a>(
+        values: impl IntoIterator<Item = &'a crate::ProtectedMemory>,
+    ) -> Result<Self, StreamingRedactorError> {
+        let mut patterns = Vec::new();
+        let mut total_bytes = 0;
+        for (index, value) in values.into_iter().enumerate() {
+            if index >= crate::MAX_REDACTION_SECRETS {
+                return Err(StreamingRedactorError::PatternCount);
+            }
+            value
+                .expose(|bytes| {
+                    let redactor =
+                        crate::Redactor::try_from_secret_slices([bytes]).map_err(|error| {
+                            match error {
+                                crate::RedactorError::TooManySecrets => {
+                                    StreamingRedactorError::PatternCount
+                                }
+                                crate::RedactorError::SourceBytes => {
+                                    StreamingRedactorError::PatternBytes
+                                }
+                                crate::RedactorError::SecretLength => {
+                                    StreamingRedactorError::PatternLength
+                                }
+                                crate::RedactorError::InputBytes => {
+                                    StreamingRedactorError::PatternBytes
+                                }
+                            }
+                        })?;
+                    redactor.append_streaming_patterns(
+                        &mut patterns,
+                        &mut total_bytes,
+                        MAX_REDACTION_PATTERNS,
+                        MAX_REDACTION_PATTERN_BYTES,
+                        MAX_REDACTION_PATTERN_LEN,
+                    )
+                })
+                .map_err(|_| StreamingRedactorError::ProtectedMemory)??;
         }
         Self::new(patterns)
     }
@@ -274,6 +317,29 @@ mod tests {
         }
         redactor.finish(&mut output)?;
         Ok(output)
+    }
+
+    #[test]
+    fn protected_values_build_raw_and_encoded_streaming_needles()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let secret = [0x00, 0xff, 0x01, 0x02];
+        let protected = crate::ProtectedMemory::initialize(
+            secret.len(),
+            crate::ProtectionPolicy::EmergencyAllowDegraded,
+            |destination| {
+                destination.copy_from_slice(&secret);
+                Ok::<usize, ()>(secret.len())
+            },
+        )?;
+        let mut redactor = StreamingRedactor::from_protected_values([&protected])?;
+        let input = [&secret[..], b"|AP8BAg=="].concat();
+        let mut output = Vec::new();
+        for chunk in input.chunks(3) {
+            redactor.push_chunk(chunk, &mut output)?;
+        }
+        redactor.finish(&mut output)?;
+        assert_eq!(output, b"[REDACTED]|[REDACTED]");
+        Ok(())
     }
 
     #[test]

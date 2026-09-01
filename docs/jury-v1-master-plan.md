@@ -3932,13 +3932,15 @@ jury principal list
 jury principal challenge --from PUBLIC_DESCRIPTOR --out CHALLENGE \
   [--overwrite]
 jury principal add --from PUBLIC_DESCRIPTOR \
-  --proof PROOF [--reader ITEM]... [--writer ITEM]... [--dry-run]
+  --proof PROOF [--reader ITEM]... [--writer ITEM]... \
+  [--acknowledge-direct-access] [--dry-run]
 jury principal replace PRINCIPAL --from PUBLIC_DESCRIPTOR --proof PROOF \
   [--dry-run]
 jury principal label PRINCIPAL --label LABEL
 jury principal remove PRINCIPAL [--dry-run]
 jury principal remove PRINCIPAL --revoke-all [--dry-run]
-jury principal grant-owner PRINCIPAL [--dry-run]
+jury principal grant-owner PRINCIPAL \
+  [--acknowledge-direct-access] [--dry-run]
 jury principal revoke-owner PRINCIPAL [--dry-run]
 ```
 
@@ -3961,6 +3963,11 @@ Adding a principal with no repeated role options grants no item access.
 Adding a principal with initial `--reader`/`--writer` options resolves every name
 through the owner's descriptor catalog, rotates and reseals each affected item,
 and commits registration plus reader-set changes in one policy revision.
+
+Because those options introduce a new unilateral direct recipient, they require
+`--acknowledge-direct-access`; a missing acknowledgement fails before private
+input is read or a mutation is prepared. The same rule applies when owner grant
+would introduce direct recipient slots on existing items.
 
 It preflights the complete batch before writing and rejects duplicate or
 contradictory item arguments.
@@ -3997,9 +4004,10 @@ jury access matrix
 jury access explain ITEM [--require read|write]
 jury access check ITEM --require read|write|owner
 jury access grant ITEM --principal PRINCIPAL --role reader|writer \
-  [--dry-run]
+  --acknowledge-direct-access [--dry-run]
 jury access grant --principal PRINCIPAL \
-  [--reader ITEM]... [--writer ITEM]... [--dry-run]
+  [--reader ITEM]... [--writer ITEM]... \
+  --acknowledge-direct-access [--dry-run]
 jury access change ITEM --principal PRINCIPAL --role reader|writer \
   [--dry-run]
 jury access revoke ITEM --principal PRINCIPAL [--dry-run]

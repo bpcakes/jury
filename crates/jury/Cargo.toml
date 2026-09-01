@@ -10,11 +10,15 @@ publish = false
 clap = { version = "=4.5.50", features = ["derive"] }
 jury-core = { path = "../jury-core" }
 jury-filesystem = { path = "../jury-filesystem" }
+close_fds = "=0.3.2"
 jury-protected = { path = "../jury-protected" }
+jury-process = { path = "../jury-process" }
 jury-protocol = { path = "../jury-protocol" }
-rustix = { version = "=1.1.4", features = ["termios"] }
+rustix = { version = "=1.1.4", features = ["fs", "termios"] }
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.145"
 sha2 = { version = "=0.11.0", default-features = false }
+signal-hook = { version = "=0.4.4", default-features = false, features = ["iterator"] }
 zeroize = { version = "=1.9.0", default-features = false }
 
 [dev-dependencies]

@@ -21,10 +21,12 @@ pub use identity_selection::{
 };
 pub use local_state::{
     LockedPrincipalState, LockedVaultState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES,
-    MAX_RECEIPTS_BYTES, PrincipalStateDirectory, PrincipalStateFile, StatePathError,
-    VaultStateDirectory, resolve_linux_state_root, resolve_state_root_from_environment,
+    MAX_POLICY_CATALOG_BYTES, MAX_RECEIPTS_BYTES, PrincipalStateDirectory, PrincipalStateFile,
+    StatePathError, VaultStateDirectory, VaultStateFile, resolve_linux_state_root,
+    resolve_state_root_from_environment,
 };
 pub use lock::{ExclusiveStateLock, LockError};
+pub use private_input::read_public_file;
 pub use private_output::{
     PreparedPrivateFile, PrivateFilePrecondition, PublicationOutcome, PublicationPolicy,
 };

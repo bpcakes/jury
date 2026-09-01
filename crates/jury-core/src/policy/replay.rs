@@ -834,11 +834,19 @@ fn validate_complete_state(state: &PolicyState) -> Result<(), PolicyError> {
                 .principals
                 .get(&slot.recipient_principal_id)
                 .ok_or_else(|| PolicyError::new(PolicyErrorKind::UnknownPrincipal))?;
+            let effective_role = state.effective_role(item_id, &slot.recipient_principal_id);
+            let slot_role_is_current = effective_role == Some(slot.access_role)
+                || matches!(
+                    (effective_role, slot.access_role),
+                    (
+                        Some(AccessRole::Reader | AccessRole::Writer),
+                        AccessRole::Reader | AccessRole::Writer
+                    )
+                );
             if !matches!(
                 principal.descriptor.principal_kind,
                 PrincipalKind::Human | PrincipalKind::Machine
-            ) || state.effective_role(item_id, &slot.recipient_principal_id)
-                != Some(slot.access_role)
+            ) || !slot_role_is_current
                 || slot.recipient_public_key_fingerprint
                     != jury_protocol::vault_v1::recipient_public_key_fingerprint(
                         &principal.descriptor.recipient_public_key,

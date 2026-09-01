@@ -3,7 +3,7 @@ use std::io::Read;
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
-use jury_protected::StreamingRedactor;
+use jury_protected::{ProtectedMemory, StreamingRedactor};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use rustix::process::Signal;
 use wait_timeout::ChildExt;
@@ -15,9 +15,11 @@ use crate::unix::{
     ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, observe_unreaped_child,
     signal_process_group,
 };
+mod input;
 pub mod interaction;
 mod output;
 
+use input::{ProtectedInputDrain, prepare_process_input};
 use output::{OutputDrain, OwnedProcessOutputDrains};
 
 const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
@@ -220,6 +222,7 @@ pub enum OwnedProcessTreeError {
     Cancelled,
     OutputLimitExceeded(OwnedProcessOutputStream),
     SignalForward(ProcessSignal),
+    Stdin,
     Output,
     Await,
     Cleanup,
@@ -234,6 +237,7 @@ impl OwnedProcessTreeError {
             | Self::TimedOut
             | Self::OutputLimitExceeded(_)
             | Self::SignalForward(_)
+            | Self::Stdin
             | Self::Output
             | Self::Await
             | Self::Cleanup => false,
@@ -262,6 +266,7 @@ impl std::fmt::Display for OwnedProcessTreeError {
             Self::SignalForward(signal) => {
                 write!(formatter, "the process tree could not receive {signal:?}")
             }
+            Self::Stdin => formatter.write_str("the process input could not be delivered safely"),
             Self::Output => formatter.write_str("the process output could not be captured safely"),
             Self::Await => formatter.write_str("the process tree could not be awaited"),
             Self::Cleanup => formatter.write_str("the process tree could not be cleaned up safely"),
@@ -299,6 +304,50 @@ pub struct ProcessOutputLimits {
 
 pub struct ProcessOutputRedaction {
     redactor: StreamingRedactor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessRunTimeout {
+    Bounded(Duration),
+    Unbounded,
+}
+
+pub struct OwnedProcessTreeOptions {
+    pub timeout: ProcessRunTimeout,
+    pub limits: ProcessOutputLimits,
+    pub overflow_policy: ProcessOutputOverflowPolicy,
+    pub redaction: Option<ProcessOutputRedaction>,
+    pub stdin: Option<ProtectedMemory>,
+}
+
+impl OwnedProcessTreeOptions {
+    #[must_use]
+    pub const fn bounded(timeout: Duration) -> Self {
+        Self {
+            timeout: ProcessRunTimeout::Bounded(timeout),
+            limits: ProcessOutputLimits {
+                stdout: OWNED_PROCESS_OUTPUT_LIMIT,
+                stderr: OWNED_PROCESS_OUTPUT_LIMIT,
+            },
+            overflow_policy: ProcessOutputOverflowPolicy::Truncate,
+            redaction: None,
+            stdin: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn unbounded() -> Self {
+        Self {
+            timeout: ProcessRunTimeout::Unbounded,
+            limits: ProcessOutputLimits {
+                stdout: OWNED_PROCESS_OUTPUT_LIMIT,
+                stderr: OWNED_PROCESS_OUTPUT_LIMIT,
+            },
+            overflow_policy: ProcessOutputOverflowPolicy::Truncate,
+            redaction: None,
+            stdin: None,
+        }
+    }
 }
 
 impl ProcessOutputRedaction {
@@ -383,15 +432,49 @@ pub fn run_owned_process_tree_with_redacted_output(
     redaction: Option<ProcessOutputRedaction>,
     observer: &mut dyn OwnedProcessObserver,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
+    run_owned_process_tree_with_options(
+        command,
+        OwnedProcessTreeOptions {
+            timeout: ProcessRunTimeout::Bounded(timeout),
+            limits,
+            overflow_policy,
+            redaction,
+            stdin: None,
+        },
+        observer,
+    )
+}
+
+pub fn run_owned_process_tree_with_options(
+    command: &mut Command,
+    options: OwnedProcessTreeOptions,
+    observer: &mut dyn OwnedProcessObserver,
+) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
     if observer.cancelled() {
         return Err(OwnedProcessTreeError::CancelledBeforeStart);
     }
-    let deadline = ProcessDeadline::after(timeout).ok_or(OwnedProcessTreeError::InvalidTimeout)?;
+    let deadline = match options.timeout {
+        ProcessRunTimeout::Bounded(timeout) => {
+            Some(ProcessDeadline::after(timeout).ok_or(OwnedProcessTreeError::InvalidTimeout)?)
+        }
+        ProcessRunTimeout::Unbounded => None,
+    };
     let mut process = spawn_owned_process(command).map_err(OwnedProcessTreeError::Start)?;
-    // This output-only API never returns the write half to its caller. Close it
-    // immediately so a piped child sees EOF instead of waiting until timeout.
-    drop(process.child.stdin.take());
-    let Ok(mut drains) = OwnedProcessOutputDrains::start(&mut process.child, limits, redaction)
+    // `std::process::Command` retains owned copies of explicit environment
+    // values. Spawn has transferred them to the child, so release those
+    // parent-side copies before supervising a potentially long-lived tree.
+    command.env_clear();
+    let input = match prepare_process_input(&mut process.child, options.stdin) {
+        Ok(input) => input,
+        Err(_) => {
+            return match process.terminate_and_reap() {
+                Ok(_) => Err(OwnedProcessTreeError::Stdin),
+                Err(_) => Err(OwnedProcessTreeError::Cleanup),
+            };
+        }
+    };
+    let Ok(mut drains) =
+        OwnedProcessOutputDrains::start(&mut process.child, options.limits, options.redaction)
     else {
         return match process.terminate_and_reap() {
             Ok(_) => Err(OwnedProcessTreeError::Output),
@@ -401,15 +484,16 @@ pub fn run_owned_process_tree_with_redacted_output(
     let wait_result = wait_for_owned_process(
         &mut process,
         deadline,
-        overflow_policy,
+        options.overflow_policy,
         observer,
         &mut drains,
+        input,
     );
     let status = finish_owned_process_wait(&mut process, wait_result);
     let (stdout, stderr) = drains
         .finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer)
         .map_err(|_| OwnedProcessTreeError::Output)?;
-    finalize_owned_process_output(status, stdout, stderr, overflow_policy)
+    finalize_owned_process_output(status, stdout, stderr, options.overflow_policy)
 }
 
 fn finalize_owned_process_output(
@@ -669,6 +753,8 @@ enum OwnedProcessWait {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     SignalForward(ProcessSignal),
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    InputFailure,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     OutputFailure,
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     Unsupported,
@@ -684,13 +770,18 @@ enum OwnedProcessObservation {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
-    deadline: ProcessDeadline,
+    deadline: Option<ProcessDeadline>,
     overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
+    mut input: Option<ProtectedInputDrain>,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
     loop {
+        let input_progress = match input.as_mut().map(ProtectedInputDrain::poll).transpose() {
+            Ok(input_poll) => input_poll.is_some_and(|poll| poll.made_progress),
+            Err(_) => return Ok(OwnedProcessWait::InputFailure),
+        };
         let output_poll = match drains.poll(observer) {
             Ok(output_poll) => output_poll,
             Err(_) => return Ok(OwnedProcessWait::OutputFailure),
@@ -713,15 +804,22 @@ fn wait_for_owned_process(
             return Ok(OwnedProcessWait::ExitedUnreaped);
         }
 
-        match deadline.remaining() {
-            ProcessDeadlineRemaining::Time(remaining) => {
-                if output_poll.made_progress {
+        match deadline.map(ProcessDeadline::remaining) {
+            Some(ProcessDeadlineRemaining::Time(remaining)) => {
+                if input_progress || output_poll.made_progress {
                     std::thread::sleep(remaining.min(drains.active_poll_interval()));
                 } else {
                     std::thread::sleep(remaining.min(Duration::from_millis(10)));
                 }
             }
-            ProcessDeadlineRemaining::Elapsed => return Ok(OwnedProcessWait::TimedOut),
+            Some(ProcessDeadlineRemaining::Elapsed) => return Ok(OwnedProcessWait::TimedOut),
+            None => {
+                if input_progress || output_poll.made_progress {
+                    std::thread::sleep(drains.active_poll_interval());
+                } else {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
         }
     }
 }
@@ -771,10 +869,11 @@ fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Res
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn wait_for_owned_process(
     _process: &mut OwnedProcess,
-    _deadline: ProcessDeadline,
+    _deadline: Option<ProcessDeadline>,
     _overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
+    _input: Option<ProtectedInputDrain>,
 ) -> std::io::Result<OwnedProcessWait> {
     let _ = drains.poll(observer);
     Ok(OwnedProcessWait::Unsupported)
@@ -799,6 +898,8 @@ fn finish_owned_process_wait(
         Ok(OwnedProcessWait::SignalForward(signal)) => {
             Some(Err(OwnedProcessTreeError::SignalForward(signal)))
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        Ok(OwnedProcessWait::InputFailure) => Some(Err(OwnedProcessTreeError::Stdin)),
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Ok(OwnedProcessWait::OutputFailure) => Some(Err(OwnedProcessTreeError::Output)),
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]

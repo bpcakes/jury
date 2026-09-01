@@ -331,6 +331,8 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
                 bucket_id: 12,
                 access,
                 principal_replacement: None,
+                principal_registration: None,
+                owner_change: None,
             },
             &inventory,
         )
@@ -416,6 +418,8 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
                 next_descriptor: replaced_identity.replacement.descriptor.clone(),
                 registration_proof_digest: FixedBytes::new([0x45; 32]),
             }),
+            principal_registration: None,
+            owner_change: None,
         },
         &inventory,
     )?;
@@ -468,6 +472,8 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
                 witness_policy_digest: None,
             },
             principal_replacement: None,
+            principal_registration: None,
+            owner_change: None,
         },
         &inventory,
     )?;
@@ -699,6 +705,8 @@ fn witnessed_only_capsules_reconstruct_only_the_selected_revision_secret()
                 witness_policy_digest: Some(next_witness_digest),
             },
             principal_replacement: None,
+            principal_registration: None,
+            owner_change: None,
         },
         &inventory,
     )?;

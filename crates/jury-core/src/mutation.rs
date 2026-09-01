@@ -14,7 +14,7 @@ use jury_protocol::vault_v1::{
 use sha2::{Digest as _, Sha256};
 
 use crate::identity::VaultPrincipalIdentity;
-use crate::item::PreparedItemMutation;
+use crate::item::{PreparedItemBatchComponent, PreparedItemMutation};
 use crate::local_state::{
     AuditAction, AuditEventDraft, AuditItemScope, AuditOutcome, CheckpointCandidate,
 };
@@ -192,7 +192,7 @@ impl VaultMutationPlan {
             .sequence()
             .checked_add(1)
             .ok_or_else(|| MutationError::new(MutationErrorKind::CapacityExhausted))?;
-        let mut operations = additional_operations;
+        let mut operations = Vec::new();
         let mut envelopes = Vec::new();
         for mutation in item_mutations {
             let revision = mutation.policy.revision;
@@ -203,8 +203,86 @@ impl VaultMutationPlan {
             {
                 return Err(MutationError::new(MutationErrorKind::InvalidPlan));
             }
-            operations.extend(revision.operations);
+            for operation in revision.operations {
+                push_batch_operation(&mut operations, operation)?;
+            }
             envelopes.push(mutation.envelope);
+        }
+        let mut deferred_owner_grants = Vec::new();
+        operations.retain(|operation| {
+            if matches!(operation, PolicyOperationV1::OwnerGrant { .. }) {
+                deferred_owner_grants.push(operation.clone());
+                false
+            } else {
+                true
+            }
+        });
+        operations.extend(deferred_owner_grants);
+        for operation in additional_operations {
+            push_batch_operation(&mut operations, operation)?;
+        }
+        let prepared = current_policy
+            .prepare_revision(author, timestamp_ms, operations)
+            .map_err(map_policy_error)?;
+        Self::from_prepared(
+            current,
+            witness_policies,
+            prepared,
+            envelopes,
+            timestamp_ms,
+            downgrade,
+            kind,
+        )
+    }
+
+    /// Validates opaque multi-item encryption components as one policy
+    /// revision. This is required for vault-wide owner transitions, where no
+    /// single item is independently a complete transition.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_item_component_batch(
+        current: &VaultFileV1,
+        witness_policies: &[WitnessPolicy],
+        author: &VaultPrincipalIdentity,
+        timestamp_ms: u64,
+        additional_operations: Vec<PolicyOperationV1>,
+        components: Vec<PreparedItemBatchComponent>,
+        downgrade: DirectDowngradeAcknowledgement,
+        kind: MutationKind,
+    ) -> Result<Self, MutationError> {
+        if components.is_empty() && additional_operations.is_empty() {
+            return Err(MutationError::new(MutationErrorKind::NoChange));
+        }
+        let current_policy = validate_complete(current, witness_policies, true)?;
+        let expected_sequence = current_policy
+            .sequence()
+            .checked_add(1)
+            .ok_or_else(|| MutationError::new(MutationErrorKind::CapacityExhausted))?;
+        let mut operations = Vec::new();
+        let mut envelopes = Vec::with_capacity(components.len());
+        for component in components {
+            if component.envelope.current_revision.policy_sequence != expected_sequence
+                || component.envelope.current_revision.author_principal_id != author.principal_id()
+                || component.envelope.current_revision.timestamp_ms != timestamp_ms
+            {
+                return Err(MutationError::new(MutationErrorKind::InvalidPlan));
+            }
+            for operation in component.operations {
+                push_batch_operation(&mut operations, operation)?;
+            }
+            envelopes.push(component.envelope);
+        }
+        let mut deferred_owner_grants = Vec::new();
+        operations.retain(|operation| {
+            if matches!(operation, PolicyOperationV1::OwnerGrant { .. }) {
+                deferred_owner_grants.push(operation.clone());
+                false
+            } else {
+                true
+            }
+        });
+        operations.extend(deferred_owner_grants);
+        for operation in additional_operations {
+            push_batch_operation(&mut operations, operation)?;
         }
         let prepared = current_policy
             .prepare_revision(author, timestamp_ms, operations)
@@ -281,8 +359,18 @@ impl VaultMutationPlan {
             validate_privacy_cover(current, &target, &current_policy, &target_policy)?;
         }
 
-        let (direct_downgrade, _witness_policy_changed, weakened_witness) =
-            transition_flags(&current_policy, &target_policy, &touched_items)?;
+        let latest_operations = target
+            .policy
+            .revisions
+            .last()
+            .map(|revision| revision.operations.as_slice())
+            .unwrap_or(&[]);
+        let (direct_downgrade, _witness_policy_changed, weakened_witness) = transition_flags(
+            &current_policy,
+            &target_policy,
+            &touched_items,
+            latest_operations,
+        )?;
         if (direct_downgrade || weakened_witness)
             && downgrade_acknowledgement != DirectDowngradeAcknowledgement::Acknowledged
         {
@@ -388,6 +476,57 @@ impl VaultMutationPlan {
         )
         .map_err(|_| MutationError::new(MutationErrorKind::InvalidPlan))
     }
+}
+
+fn push_batch_operation(
+    operations: &mut Vec<PolicyOperationV1>,
+    operation: PolicyOperationV1,
+) -> Result<(), MutationError> {
+    let matching = operations
+        .iter()
+        .find(|existing| match (existing, &operation) {
+            (
+                PolicyOperationV1::PrincipalAdd {
+                    descriptor: left, ..
+                },
+                PolicyOperationV1::PrincipalAdd {
+                    descriptor: right, ..
+                },
+            ) => left.principal_id == right.principal_id,
+            (
+                PolicyOperationV1::PrincipalReplace {
+                    prior_principal_id: left_prior,
+                    next_descriptor: left_next,
+                    ..
+                },
+                PolicyOperationV1::PrincipalReplace {
+                    prior_principal_id: right_prior,
+                    next_descriptor: right_next,
+                    ..
+                },
+            ) => left_prior == right_prior || left_next.principal_id == right_next.principal_id,
+            (
+                PolicyOperationV1::OwnerGrant { principal_id: left },
+                PolicyOperationV1::OwnerGrant {
+                    principal_id: right,
+                },
+            )
+            | (
+                PolicyOperationV1::OwnerRevoke { principal_id: left },
+                PolicyOperationV1::OwnerRevoke {
+                    principal_id: right,
+                },
+            ) => left == right,
+            _ => false,
+        });
+    if let Some(existing) = matching {
+        if existing == &operation {
+            return Ok(());
+        }
+        return Err(MutationError::new(MutationErrorKind::InvalidPlan));
+    }
+    operations.push(operation);
+    Ok(())
 }
 
 impl fmt::Debug for VaultMutationPlan {
@@ -568,22 +707,50 @@ fn transition_flags(
     current: &PolicyState,
     target: &PolicyState,
     touched: &BTreeSet<ItemId>,
+    operations: &[PolicyOperationV1],
 ) -> Result<(bool, bool, bool), MutationError> {
     let mut direct_downgrade = false;
     let mut witness_changed = false;
     let mut witness_weakened = false;
+    let replacements = operations
+        .iter()
+        .filter_map(|operation| match operation {
+            PolicyOperationV1::PrincipalReplace {
+                prior_principal_id,
+                next_descriptor,
+                ..
+            } => Some((*prior_principal_id, next_descriptor.principal_id)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     for item_id in touched {
         let Some(next) = target.item(item_id) else {
             continue;
         };
         let prior = current.item(item_id);
-        let next_mode = next.access_mode();
-        let prior_has_direct = prior.is_some_and(|item| !item.direct_slots.is_empty());
-        if !prior_has_direct
-            && matches!(
-                next_mode,
+        let prior_direct_recipients = prior
+            .into_iter()
+            .flat_map(|item| &item.direct_slots)
+            .map(|slot| {
+                replacements
+                    .get(&slot.recipient_principal_id)
+                    .copied()
+                    .unwrap_or(slot.recipient_principal_id)
+            })
+            .collect::<BTreeSet<_>>();
+        let next_direct_recipients = next
+            .direct_slots
+            .iter()
+            .map(|slot| slot.recipient_principal_id)
+            .collect::<BTreeSet<_>>();
+        if (!next_direct_recipients.is_empty()
+            && !matches!(
+                prior.and_then(crate::policy::ItemPolicyState::access_mode),
                 Some(ItemAccessMode::DirectOnly | ItemAccessMode::Mixed)
-            )
+            ))
+            || next_direct_recipients
+                .iter()
+                .any(|principal| !prior_direct_recipients.contains(principal))
         {
             direct_downgrade = true;
         }

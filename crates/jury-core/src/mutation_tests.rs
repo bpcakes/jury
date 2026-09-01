@@ -1,13 +1,15 @@
 use jury_protected::{EntropyError, ProtectionPolicy, RandomSource};
 use jury_protocol::vault_v1::{
-    FieldId, ItemDescriptorV1, ItemFieldKind, ItemFieldV1, ItemFieldValue, ItemKind, ItemStateV1,
-    PolicyOperationV1, PrincipalId, PrincipalKind, VaultFileV1, VaultHeaderV1,
+    Digest32, FieldId, ItemDescriptorV1, ItemFieldKind, ItemFieldV1, ItemFieldValue, ItemKind,
+    ItemStateV1, PolicyOperationV1, PrincipalId, PrincipalKind, VaultFileV1, VaultHeaderV1,
 };
 
 use super::*;
 use crate::domain::Capability;
 use crate::identity::{UnlockedIdentity, unlocked_identity_for_test};
-use crate::item::{ItemAccessPlan, ItemArtifactInventory, ItemCreator, NewItem, RekeyedItem};
+use crate::item::{
+    ItemAccessPlan, ItemArtifactInventory, ItemCreator, NewItem, OwnerChange, RekeyedItem,
+};
 use crate::policy::PolicyCreator;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -249,6 +251,8 @@ fn prepared_item_batch_publishes_policy_and_envelope_as_one_artifact() -> TestRe
             bucket_id: 1,
             access: cover_access,
             principal_replacement: None,
+            principal_registration: None,
+            owner_change: None,
         },
         &ItemArtifactInventory::from_vault(&current_with_item)?,
     )?;
@@ -274,6 +278,212 @@ fn prepared_item_batch_publishes_policy_and_envelope_as_one_artifact() -> TestRe
             .item_revision,
         2
     );
+    Ok(())
+}
+
+#[test]
+fn multi_item_owner_grant_and_revoke_rotate_once_with_one_owner_operation() -> TestResult {
+    let (owner, current) = fixture()?;
+    let UnlockedIdentity::VaultPrincipal(candidate) = unlocked_identity_for_test(
+        PrincipalId::from_bytes([0x22; 32])?,
+        PrincipalKind::Human,
+        &mut CounterRandom(0x80),
+    )?
+    else {
+        return Err("candidate identity role differs".into());
+    };
+    let candidate_descriptor = candidate.public_descriptor()?;
+    let policy = replay_policy_with_witness_policies(&current.policy, &[])?;
+    let state = ItemStateV1 {
+        plaintext_schema: 1,
+        fields: Vec::new(),
+    };
+    let mut items = ItemCreator::new(ProtectionPolicy::EmergencyAllowDegraded);
+    let created_items = ["ExampleOne", "ExampleTwo"]
+        .into_iter()
+        .map(|name| -> TestResult<_> {
+            Ok(items
+                .prepare_create(
+                    &policy,
+                    &owner,
+                    20,
+                    NewItem {
+                        kind: ItemKind::Canonical,
+                        descriptor: ItemDescriptorV1::new(name.to_owned())?,
+                        state: state.clone(),
+                        bucket_id: 1,
+                        access: ItemAccessPlan {
+                            grants: Vec::new(),
+                            direct_recipient_ids: vec![owner.principal_id()],
+                            witness_policy_digest: None,
+                        },
+                    },
+                    &ItemArtifactInventory::default(),
+                )
+                .map_err(|error| format!("prepare owner fixture item: {error:?}"))?)
+        })
+        .collect::<TestResult<Vec<_>>>()?;
+    let item_names = created_items
+        .iter()
+        .zip(["ExampleOne", "ExampleTwo"])
+        .map(|(item, name)| (item.envelope.item_id, name))
+        .collect::<BTreeMap<_, _>>();
+    let created = VaultMutationPlan::prepare_item_batch(
+        &current,
+        &[],
+        &owner,
+        20,
+        Vec::new(),
+        created_items,
+        DirectDowngradeAcknowledgement::Acknowledged,
+        MutationKind::Item,
+    )?;
+    let registered = VaultMutationPlan::prepare_policy(
+        created.target_artifact(),
+        &[],
+        &owner,
+        30,
+        vec![PolicyOperationV1::PrincipalAdd {
+            descriptor: candidate_descriptor,
+            display_label: "second-owner".to_owned(),
+            registration_proof_digest: Digest32::new([0x61; 32]),
+        }],
+        DirectDowngradeAcknowledgement::Absent,
+        MutationKind::Policy,
+    )?;
+    let registered_vault = registered.target_artifact();
+    let registered_policy = registered.target_policy();
+    let inventory = ItemArtifactInventory::from_vault(registered_vault)?;
+    let grant_items = registered_vault
+        .items
+        .iter()
+        .map(|envelope| -> TestResult<_> {
+            Ok(items
+                .prepare_rekey_batch_component(
+                    registered_policy,
+                    &owner,
+                    40,
+                    envelope,
+                    RekeyedItem {
+                        descriptor: ItemDescriptorV1::new(
+                            item_names
+                                .get(&envelope.item_id)
+                                .ok_or("item name absent")?
+                                .to_string(),
+                        )?,
+                        state: state.clone(),
+                        bucket_id: 1,
+                        access: ItemAccessPlan {
+                            grants: Vec::new(),
+                            direct_recipient_ids: vec![
+                                owner.principal_id(),
+                                candidate.principal_id(),
+                            ],
+                            witness_policy_digest: None,
+                        },
+                        principal_replacement: None,
+                        principal_registration: None,
+                        owner_change: Some(OwnerChange::Grant(candidate.principal_id())),
+                    },
+                    &inventory,
+                )
+                .map_err(|error| format!("prepare owner grant: {error:?}"))?)
+        })
+        .collect::<TestResult<Vec<_>>>()?;
+    let granted = VaultMutationPlan::prepare_item_component_batch(
+        registered_vault,
+        &[],
+        &owner,
+        40,
+        Vec::new(),
+        grant_items,
+        DirectDowngradeAcknowledgement::Acknowledged,
+        MutationKind::Policy,
+    )?;
+    assert!(granted.target_policy().is_owner(&candidate.principal_id()));
+    assert_eq!(
+        granted
+            .target_artifact()
+            .policy
+            .revisions
+            .last()
+            .ok_or("grant revision absent")?
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation, PolicyOperationV1::OwnerGrant { .. }))
+            .count(),
+        1
+    );
+    for item in granted.target_policy().items().map(|(_, item)| item) {
+        assert_eq!(item.direct_slots.len(), 4);
+        assert!(item.grants.is_empty());
+    }
+
+    let granted_vault = granted.target_artifact();
+    let granted_policy = granted.target_policy();
+    let inventory = ItemArtifactInventory::from_vault(granted_vault)?;
+    let revoke_items = granted_vault
+        .items
+        .iter()
+        .map(|envelope| -> TestResult<_> {
+            Ok(items
+                .prepare_rekey_batch_component(
+                    granted_policy,
+                    &owner,
+                    50,
+                    envelope,
+                    RekeyedItem {
+                        descriptor: ItemDescriptorV1::new(
+                            item_names
+                                .get(&envelope.item_id)
+                                .ok_or("item name absent")?
+                                .to_string(),
+                        )?,
+                        state: state.clone(),
+                        bucket_id: 1,
+                        access: ItemAccessPlan {
+                            grants: Vec::new(),
+                            direct_recipient_ids: vec![owner.principal_id()],
+                            witness_policy_digest: None,
+                        },
+                        principal_replacement: None,
+                        principal_registration: None,
+                        owner_change: Some(OwnerChange::Revoke(candidate.principal_id())),
+                    },
+                    &inventory,
+                )
+                .map_err(|error| format!("prepare owner revoke: {error:?}"))?)
+        })
+        .collect::<TestResult<Vec<_>>>()?;
+    let revoked = VaultMutationPlan::prepare_item_component_batch(
+        granted_vault,
+        &[],
+        &owner,
+        50,
+        Vec::new(),
+        revoke_items,
+        DirectDowngradeAcknowledgement::Absent,
+        MutationKind::Policy,
+    )?;
+    assert!(!revoked.target_policy().is_owner(&candidate.principal_id()));
+    assert_eq!(revoked.target_policy().owner_count(), 1);
+    assert_eq!(
+        revoked
+            .target_artifact()
+            .policy
+            .revisions
+            .last()
+            .ok_or("revoke revision absent")?
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation, PolicyOperationV1::OwnerRevoke { .. }))
+            .count(),
+        1
+    );
+    for item in revoked.target_policy().items().map(|(_, item)| item) {
+        assert_eq!(item.direct_slots.len(), 2);
+        assert!(item.grants.is_empty());
+    }
     Ok(())
 }
 
@@ -344,3 +554,4 @@ fn oversized_batch_returns_capacity_before_any_artifact_change() -> TestResult {
     assert_eq!(current.to_json_bytes()?, before);
     Ok(())
 }
+use std::collections::BTreeMap;

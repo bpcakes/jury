@@ -87,10 +87,37 @@ values. These are pre-alpha execution mechanics, not a claim that Jury protects
 secrets.
 
 Containment does not erase copies owned by the caller's `Command`, Rust's spawn
-machinery, kernel pipe buffers, or the child address space. Later secret-delivery
-work must keep protected values out of argv and the ambient environment, bound
-stdin or descriptor delivery, close every local pipe owner, and configure
+machinery, kernel pipe buffers, or the child address space. Its delivery caller
+must therefore keep protected values out of argv and the ambient environment,
+bind stdin or descriptor delivery, close every local pipe owner, and configure
 streaming redaction before any output observer or capture sees bytes.
+
+The J14 native adapter now supplies that direct-access delivery layer. It parses
+all restricted environment inputs and resolves the working directory plus an
+opened executable before private capture. It then authenticates every distinct
+item against one parsed vault revision, copies only selected fields into
+protected mappings, clears decrypted item bodies, builds redaction from
+concealed fields, and prepares all delivery channels before child spawn. Field
+values may enter only an explicitly mapped child environment variable,
+protected stdin pipe, or sealed anonymous Linux `memfd`; they never enter child
+arguments or a named plaintext file. A hidden helper re-enters the already
+running Jury image through Linux `/proc/self/exe`, then marks every inherited
+descriptor close-on-exec except the pinned executable and explicitly selected
+anonymous files before replacing itself with that executable.
+
+Transparent `jury exec` inherits ordinary stdin and environment, removes every
+`JURY_*` variable, streams post-redaction stdout/stderr without a capture or
+overall-runtime limit, and mirrors the exact
+child status. Brokered `jury run` starts from a small allowlist, supplies EOF
+unless stdin is mapped, and applies an explicit timeout and separate output
+retention bounds. Both modes suppress ordinary core dumps before credential
+capture and use the same complete process-group owner. Direct J14 records a
+secret-free digest over the pinned executable's path and metadata, exact
+argument bytes, working directory, typed destinations, and field references.
+This is intentionally weaker than a content-stable executable identity: in-place
+file mutation, script interpreters, and dynamic dependencies remain visible
+platform limitations for the J22 action-manifest assurance level. J14 is not
+witnessed authorization, and an authorized child may copy or retain plaintext.
 
 ## Git-backed storage boundary
 

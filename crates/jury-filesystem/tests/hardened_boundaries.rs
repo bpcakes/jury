@@ -8,7 +8,7 @@ use std::path::Path;
 use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
     IdentitySelector, PreparedPrivateFile, PublicationOutcome, PublicationPolicy,
-    RepositoryLocation, list_named_identities,
+    RepositoryLocation, list_named_identities, read_public_file,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -549,5 +549,26 @@ fn errors_are_value_and_path_free() -> Result<(), Box<dyn Error>> {
     assert!(!rendered.contains("ExampleSecret-value"));
     assert!(!rendered.contains("private-name"));
     assert!(!rendered.contains(temp.path().to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[test]
+fn bounded_public_file_read_accepts_read_only_leaf_and_rejects_links() -> Result<(), Box<dyn Error>>
+{
+    let temp = tempfile::tempdir()?;
+    let template = temp.path().join("template.txt");
+    fs::write(&template, b"{{ExampleItem.ExampleField}}")?;
+    fs::set_permissions(&template, fs::Permissions::from_mode(0o644))?;
+    assert_eq!(
+        read_public_file(&template, 1024)?,
+        b"{{ExampleItem.ExampleField}}"
+    );
+
+    let linked = temp.path().join("linked.txt");
+    symlink(&template, &linked)?;
+    let error = read_public_file(&linked, 1024)
+        .err()
+        .ok_or("linked public input should fail")?;
+    assert_eq!(error.kind(), FilesystemErrorKind::HardLinkOrSize);
     Ok(())
 }

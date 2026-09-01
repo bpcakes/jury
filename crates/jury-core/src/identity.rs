@@ -458,6 +458,44 @@ impl fmt::Debug for UnlockedIdentity {
     }
 }
 
+impl UnlockedIdentity {
+    /// Returns the signed public descriptor without exposing private identity material.
+    pub fn public_descriptor(&self) -> Result<PrincipalDescriptorV1, IdentityError> {
+        match self {
+            Self::VaultPrincipal(identity) => identity.public_descriptor(),
+            Self::Approver(identity) => identity.public_descriptor(),
+            Self::Witness(identity) => identity.public_descriptor(),
+        }
+    }
+
+    pub(crate) fn sign_registration_statement(
+        &self,
+        preimage: &[u8],
+    ) -> Result<Signature64, IdentityError> {
+        let payload = match self {
+            Self::VaultPrincipal(identity) => &identity.0.payload,
+            Self::Approver(identity) => &identity.0.payload,
+            Self::Witness(identity) => &identity.0.payload,
+        };
+        sign_payload_statement(payload, preimage)
+    }
+
+    pub(crate) fn open_registration_capsule(
+        &self,
+        encapsulation: &jury_protocol::vault_v1::Encapsulation1120,
+        ciphertext: &[u8],
+        info: &[u8],
+        aad: &[u8],
+    ) -> Result<ProtectedMemory, IdentityError> {
+        let secrets = match self {
+            Self::VaultPrincipal(identity) => &identity.0,
+            Self::Approver(identity) => &identity.0,
+            Self::Witness(identity) => &identity.0,
+        };
+        open_registration_capsule(secrets, encapsulation, ciphertext, info, aad)
+    }
+}
+
 macro_rules! role_identity {
     ($name:ident) => {
         impl $name {
@@ -498,6 +536,16 @@ impl VaultPrincipalIdentity {
         sign_payload_statement(&self.0.payload, preimage)
     }
 
+    pub(crate) fn open_registration_capsule(
+        &self,
+        encapsulation: &jury_protocol::vault_v1::Encapsulation1120,
+        ciphertext: &[u8],
+        info: &[u8],
+        aad: &[u8],
+    ) -> Result<ProtectedMemory, IdentityError> {
+        open_registration_capsule(&self.0, encapsulation, ciphertext, info, aad)
+    }
+
     /// Opens one suite-1 direct slot bound to this exact identity.
     pub(crate) fn open_direct_slot(
         &self,
@@ -535,6 +583,18 @@ impl VaultPrincipalIdentity {
         .map_err(map_crypto_error)?;
         Ok(ProtectedRevisionSecret { bytes })
     }
+}
+
+fn open_registration_capsule(
+    secrets: &IdentitySecrets,
+    encapsulation: &jury_protocol::vault_v1::Encapsulation1120,
+    ciphertext: &[u8],
+    info: &[u8],
+    aad: &[u8],
+) -> Result<ProtectedMemory, IdentityError> {
+    let private_seed = payload_component(&secrets.payload, RECIPIENT_SEED_RANGE)?;
+    crypto::open_hpke(&private_seed, encapsulation, ciphertext, info, aad, 32)
+        .map_err(map_crypto_error)
 }
 
 impl WitnessIdentity {

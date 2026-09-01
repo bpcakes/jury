@@ -12,6 +12,7 @@ use crate::{
 pub const MAX_CHECKPOINT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_AUDIT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_RECEIPTS_BYTES: usize = 256 * 1024;
+pub const MAX_POLICY_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatePathError {
@@ -93,6 +94,25 @@ pub enum PrincipalStateFile {
     Receipts,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultStateFile {
+    PolicyCatalog,
+}
+
+impl VaultStateFile {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::PolicyCatalog => "policy-catalog.json",
+        }
+    }
+
+    const fn maximum_bytes(self) -> usize {
+        match self {
+            Self::PolicyCatalog => MAX_POLICY_CATALOG_BYTES,
+        }
+    }
+}
+
 impl PrincipalStateFile {
     const fn name(self) -> &'static str {
         match self {
@@ -123,6 +143,18 @@ pub struct VaultStateDirectory {
 }
 
 impl VaultStateDirectory {
+    pub fn open_existing(
+        state_root: &Path,
+        vault_id: &[u8; 32],
+        genesis_fingerprint: &[u8; 32],
+        repositories: &[&RepositoryLocation],
+    ) -> Result<Self, FilesystemError> {
+        let root = HardenedStateRoot::open_existing(state_root, repositories)?;
+        let root = descend_hex_existing(&root, vault_id)?;
+        let root = descend_hex_existing(&root, genesis_fingerprint)?;
+        Ok(Self { root })
+    }
+
     pub fn open_or_create(
         state_root: &Path,
         vault_id: &[u8; 32],
@@ -143,6 +175,23 @@ impl VaultStateDirectory {
             directory: self,
             _lock: lock,
         })
+    }
+
+    /// Reads one existing principal-local file without creating state. The
+    /// underlying bounded read rejects links, aliases, permission drift, and
+    /// identity changes while the file is open.
+    pub fn read_principal_state(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+    ) -> Result<Vec<u8>, FilesystemError> {
+        principal_root_existing(&self.root, principal_id)?
+            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+    }
+
+    pub fn read_vault_state(&self, file: VaultStateFile) -> Result<Vec<u8>, FilesystemError> {
+        self.root
+            .read_private_file(Path::new(file.name()), file.maximum_bytes())
     }
 }
 
@@ -202,6 +251,30 @@ impl LockedVaultState<'_> {
         contents: &ProtectedMemory,
     ) -> Result<PublicationOutcome, FilesystemError> {
         self.prepare(principal_id, file, contents)?.publish()
+    }
+
+    pub fn read_vault_state(&self, file: VaultStateFile) -> Result<Vec<u8>, FilesystemError> {
+        self.directory
+            .root
+            .read_private_file(Path::new(file.name()), file.maximum_bytes())
+    }
+
+    pub fn prepare_vault_state(
+        &self,
+        file: VaultStateFile,
+        contents: &ProtectedMemory,
+    ) -> Result<PreparedPrivateFile, FilesystemError> {
+        if contents.len() > file.maximum_bytes() {
+            return Err(FilesystemError::new(
+                crate::FilesystemOperation::Prepare,
+                crate::FilesystemErrorKind::HardLinkOrSize,
+            ));
+        }
+        let precondition = self
+            .directory
+            .root
+            .preview_private_file(Path::new(file.name()))?;
+        PreparedPrivateFile::prepare_if_unchanged(precondition, contents, true)
     }
 }
 
@@ -315,9 +388,28 @@ fn descend_hex(
     parent.open_or_create_private_child(Path::new(&name))
 }
 
+fn descend_hex_existing(
+    parent: &HardenedStateRoot,
+    bytes: &[u8; 32],
+) -> Result<HardenedStateRoot, FilesystemError> {
+    let mut name = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut name, "{byte:02x}");
+    }
+    parent.open_private_child(Path::new(&name))
+}
+
 fn principal_root(
     root: &HardenedStateRoot,
     principal_id: &[u8; 32],
 ) -> Result<HardenedStateRoot, FilesystemError> {
     descend_hex(root, principal_id)
+}
+
+fn principal_root_existing(
+    root: &HardenedStateRoot,
+    principal_id: &[u8; 32],
+) -> Result<HardenedStateRoot, FilesystemError> {
+    descend_hex_existing(root, principal_id)
 }

@@ -71,7 +71,7 @@ impl Redactor {
         Self::try_from_secret_slices(values.iter().map(SecretBytes::as_slice))
     }
 
-    fn try_from_secret_slices<'a>(
+    pub(crate) fn try_from_secret_slices<'a>(
         values: impl IntoIterator<Item = &'a [u8]>,
     ) -> Result<Self, RedactorError> {
         let values = values.into_iter().collect::<Vec<_>>();

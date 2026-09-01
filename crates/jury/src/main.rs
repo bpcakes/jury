@@ -7,8 +7,9 @@ fn main() -> ExitCode {
     let json = cli.json;
     match jury::cli::execute(cli) {
         Ok(output) => {
+            let exit_code = output.exit_code();
             output.write(json);
-            ExitCode::SUCCESS
+            ExitCode::from(exit_code)
         }
         Err(error) => {
             error.write(json);
