@@ -42,6 +42,28 @@ pub struct PrivateFilePrecondition {
     visibility: FileVisibility,
 }
 
+/// Opaque, single-use observation of a caller-selected public destination.
+pub struct PublicFilePrecondition {
+    inner: PrivateFilePrecondition,
+}
+
+impl PublicFilePrecondition {
+    #[must_use]
+    pub const fn destination_exists(&self) -> bool {
+        self.inner.destination_exists()
+    }
+}
+
+impl fmt::Debug for PublicFilePrecondition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PublicFilePrecondition")
+            .field("destination_exists", &self.destination_exists())
+            .field("destination", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl PrivateFilePrecondition {
     #[must_use]
     pub const fn destination_exists(&self) -> bool {
@@ -69,6 +91,65 @@ pub struct PreparedPrivateFile {
     replace: bool,
     byte_len: usize,
     published: bool,
+}
+
+/// Fully written bounded public bytes awaiting atomic namespace publication.
+pub struct PreparedPublicFile {
+    inner: PreparedPrivateFile,
+}
+
+impl PreparedPublicFile {
+    /// Prepares public bytes only if the destination still matches an earlier
+    /// public preview. This path never routes ciphertext through secret memory.
+    pub fn prepare_bounded_if_unchanged(
+        precondition: PublicFilePrecondition,
+        contents: &[u8],
+        maximum_bytes: usize,
+        allow_replace: bool,
+    ) -> Result<Self, FilesystemError> {
+        if contents.len() > maximum_bytes {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Prepare,
+                FilesystemErrorKind::HardLinkOrSize,
+            ));
+        }
+        let precondition = precondition.inner;
+        if precondition.destination_exists() && !allow_replace {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Prepare,
+                FilesystemErrorKind::AlreadyExists,
+            ));
+        }
+        validate_expected(
+            &precondition.parent,
+            &precondition.destination,
+            precondition.state,
+        )?;
+        let replace = precondition.destination_exists();
+        write_prepared(
+            precondition.parent,
+            precondition.destination,
+            PreparedContents::Public(contents),
+            precondition.state,
+            replace,
+            FileVisibility::PublicEncryptedArtifact,
+        )
+        .map(|inner| Self { inner })
+    }
+
+    /// Atomically publishes the complete prepared bytes, then syncs the parent.
+    pub fn publish(self) -> Result<PublicationOutcome, FilesystemError> {
+        self.inner.publish()
+    }
+}
+
+impl fmt::Debug for PreparedPublicFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedPublicFile")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl PreparedPrivateFile {
@@ -123,7 +204,7 @@ impl PreparedPrivateFile {
         write_prepared(
             precondition.parent,
             precondition.destination,
-            contents,
+            PreparedContents::Protected(contents),
             precondition.state,
             replace,
             precondition.visibility,
@@ -210,7 +291,7 @@ pub(crate) fn preview_encrypted_shared_artifact(
 
 /// Retains a bounded public-file destination selected by an absolute direct
 /// path. The parent is opened once and the leaf is never followed.
-pub fn preview_public_file(path: &Path) -> Result<PrivateFilePrecondition, FilesystemError> {
+pub fn preview_public_file(path: &Path) -> Result<PublicFilePrecondition, FilesystemError> {
     if !path.is_absolute()
         || path.components().any(|component| {
             matches!(
@@ -236,6 +317,7 @@ pub fn preview_public_file(path: &Path) -> Result<PrivateFilePrecondition, Files
         Path::new(name),
         FileVisibility::PublicEncryptedArtifact,
     )
+    .map(|inner| PublicFilePrecondition { inner })
 }
 
 fn preview_with_visibility(
@@ -259,6 +341,21 @@ fn preview_with_visibility(
 enum FileVisibility {
     OwnerOnly,
     PublicEncryptedArtifact,
+}
+
+#[derive(Clone, Copy)]
+enum PreparedContents<'a> {
+    Protected(&'a ProtectedMemory),
+    Public(&'a [u8]),
+}
+
+impl PreparedContents<'_> {
+    const fn len(&self) -> usize {
+        match self {
+            Self::Protected(contents) => contents.len(),
+            Self::Public(contents) => contents.len(),
+        }
+    }
 }
 
 fn prepare(
@@ -286,13 +383,20 @@ fn prepare(
             ));
         }
     };
-    write_prepared(parent, destination, contents, expected, replace, visibility)
+    write_prepared(
+        parent,
+        destination,
+        PreparedContents::Protected(contents),
+        expected,
+        replace,
+        visibility,
+    )
 }
 
 fn write_prepared(
     parent: Dir,
     destination: OsString,
-    contents: &ProtectedMemory,
+    contents: PreparedContents<'_>,
     expected: DestinationState,
     replace: bool,
     visibility: FileVisibility,
@@ -321,16 +425,18 @@ fn write_prepared(
         let mut file = parent.open_with(&temporary, &options).map_err(|_| {
             FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
         })?;
-        let write_result = contents.expose(|bytes| file.write_all(bytes));
-        match write_result {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) | Err(_) => {
-                let _ = parent.remove_file(&temporary);
-                return Err(FilesystemError::new(
-                    FilesystemOperation::Prepare,
-                    FilesystemErrorKind::Io,
-                ));
+        let wrote_all = match contents {
+            PreparedContents::Protected(contents) => {
+                matches!(contents.expose(|bytes| file.write_all(bytes)), Ok(Ok(())))
             }
+            PreparedContents::Public(contents) => file.write_all(contents).is_ok(),
+        };
+        if !wrote_all {
+            let _ = parent.remove_file(&temporary);
+            return Err(FilesystemError::new(
+                FilesystemOperation::Prepare,
+                FilesystemErrorKind::Io,
+            ));
         }
         let metadata = match file.metadata() {
             Ok(metadata) => metadata,

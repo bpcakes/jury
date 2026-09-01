@@ -160,6 +160,71 @@ fn assert_portable_export(
     Ok(())
 }
 
+fn assert_export_destination_is_rejected_without_mutation(
+    paths: NativePaths<'_>,
+    destination: &Path,
+) -> TestResult {
+    let before = fs::read(destination).ok();
+    let rejected = run(
+        paths.repository,
+        paths.data,
+        paths.state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "transfer",
+            "export",
+            "--out",
+            destination.to_str().ok_or("non-UTF-8 transfer path")?,
+            "--overwrite",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    let error = serde_json::from_slice::<serde_json::Value>(&rejected.stderr)?;
+    assert_eq!(error["error"]["code"], "private-state-overlap");
+    assert_eq!(fs::read(destination).ok(), before);
+    Ok(())
+}
+
+fn assert_export_destination_containment(
+    paths: NativePaths<'_>,
+    temporary: &Path,
+    vault: &serde_json::Value,
+    principal_id: &str,
+    genesis: &str,
+) -> TestResult {
+    let identity = paths.data.join("jury/identities/default.identity.json");
+    assert_export_destination_is_rejected_without_mutation(paths, &identity)?;
+
+    let receipts = paths
+        .state
+        .join("jury/vaults")
+        .join(
+            vault["vault_id"]
+                .as_str()
+                .ok_or("vault output lacks an ID")?,
+        )
+        .join(genesis)
+        .join(principal_id)
+        .join("receipts.json");
+    assert_export_destination_is_rejected_without_mutation(paths, &receipts)?;
+
+    let other_repository = temporary.join("other-repository");
+    initialize_repository(&other_repository)?;
+    fs::create_dir(other_repository.join(".jury"))?;
+    fs::set_permissions(
+        other_repository.join(".jury"),
+        fs::Permissions::from_mode(0o700),
+    )?;
+    let other_vault = other_repository.join(".jury/vault.json");
+    fs::write(&other_vault, b"ExampleEncryptedVault")?;
+    assert_export_destination_is_rejected_without_mutation(paths, &other_vault)?;
+    Ok(())
+}
+
 fn inspect_and_preview_first_install(
     target: NativePaths<'_>,
     transfer: &Path,
@@ -413,6 +478,7 @@ fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestRe
     let base_path = temporary.path().join("base.jury-transfer.json");
     let base = export(source, &base_path)?;
     assert_portable_export(&base, &vault, &base_path)?;
+    assert_export_destination_containment(source, temporary.path(), &vault, principal_id, genesis)?;
     inspect_and_preview_first_install(target, &base_path, genesis)?;
     install_first(source, target, &base_path, genesis)?;
     assert_first_install_retry_recovers_exact_partial_state(

@@ -38,9 +38,9 @@ use jury_core::transfer::{
 };
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, LockedVaultState,
-    PreparedPrivateFile, PrincipalStateFile, PublicationOutcome, PublicationPolicy,
-    RepositoryLocation, VaultStateDirectory, VaultStateFile, list_named_identities,
-    preview_public_file, read_public_file, resolve_linux_state_root,
+    PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicationOutcome,
+    PublicationPolicy, RepositoryLocation, VaultStateDirectory, VaultStateFile,
+    list_named_identities, preview_public_file, read_public_file, resolve_linux_state_root,
 };
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::identity_v1::{IdentityFileV1, KdfProfile, MAX_IDENTITY_FILE_BYTES};

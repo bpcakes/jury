@@ -13,7 +13,7 @@ pub(super) fn transfer_export(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let home = selected_home(cli, environment, current)?;
-    reject_transfer_home_alias(&home, &arguments.out)?;
+    reject_transfer_destination(cli, environment, &home, &arguments.out)?;
     let destination = preview_public_file(&arguments.out).map_err(map_filesystem_error)?;
     if destination.destination_exists() && !arguments.overwrite {
         return Err(CliError::new(
@@ -30,12 +30,15 @@ pub(super) fn transfer_export(
         .map_err(map_transfer_error)?;
     let bytes = envelope.to_json_bytes().map_err(|_| invalid_transfer())?;
     let output_digest = sha256_digest(&bytes);
-    let protected = protect(&bytes, protection)?;
-    let publication =
-        PreparedPrivateFile::prepare_if_unchanged(destination, &protected, arguments.overwrite)
-            .map_err(map_filesystem_error)?
-            .publish()
-            .map_err(map_filesystem_error)?;
+    let publication = PreparedPublicFile::prepare_bounded_if_unchanged(
+        destination,
+        &bytes,
+        MAX_TRANSFER_BYTES,
+        arguments.overwrite,
+    )
+    .map_err(map_filesystem_error)?
+    .publish()
+    .map_err(map_filesystem_error)?;
     record_transfer_receipt(
         &context,
         TransferReceipt {
@@ -807,7 +810,26 @@ fn absent_import_output(
     })
 }
 
-fn reject_transfer_home_alias(home: &VaultHomeLocation, path: &Path) -> Result<(), CliError> {
+fn reject_transfer_destination(
+    cli: &Cli,
+    environment: &Environment,
+    home: &VaultHomeLocation,
+    path: &Path,
+) -> Result<(), CliError> {
+    let identity = identity_root(environment)?;
+    let state = resolve_linux_state_root(
+        environment.jury_state_home.as_deref(),
+        environment.xdg_state_home.as_deref(),
+        environment.user_home.as_deref(),
+    )
+    .map_err(|_| filesystem_error())?;
+    if overlaps(path, &identity)
+        || overlaps(path, &state)
+        || cli.identity_file.as_ref().is_some_and(|file| file == path)
+        || path.file_name().is_some_and(|name| name == "vault.json")
+    {
+        return Err(containment_error());
+    }
     let aliases = match home {
         VaultHomeLocation::Repository { repository } => {
             repository.is_encrypted_shared_artifact_path(path)
@@ -815,9 +837,16 @@ fn reject_transfer_home_alias(home: &VaultHomeLocation, path: &Path) -> Result<(
         VaultHomeLocation::Detached { path: home, .. } => path == home.join("vault.json"),
     };
     if aliases {
-        Err(containment_error())
-    } else {
-        Ok(())
+        return Err(containment_error());
+    }
+    let parent = path.parent().ok_or_else(filesystem_error)?;
+    match RepositoryLocation::discover(parent) {
+        Ok(repository) if repository.is_encrypted_shared_artifact_path(path) => {
+            Err(containment_error())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(()),
+        Err(error) => Err(map_filesystem_error(error)),
     }
 }
 

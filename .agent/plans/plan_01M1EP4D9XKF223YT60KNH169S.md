@@ -38,7 +38,7 @@ code may depend on this plan.
 - [x] Commit DU-001 through DU-014 as one behavior-preserving refactor slice.
 - [x] Bind portable role metadata to policy-authenticated registration proofs.
 - [x] Make first-install import deterministic, recoverable, and shared-artifact-last.
-- [ ] Separate bounded public export from protected-memory publication and contain destinations.
+- [x] Separate bounded public export from protected-memory publication and contain destinations.
 - [ ] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
 - [ ] Run the full repository gates, review the commit series, close J16, and finish this plan.
 
@@ -77,6 +77,9 @@ code may depend on this plan.
   a compatibility boundary and is no longer the portable trust representation.
 - Treat 32 MiB as the transfer format and public-I/O bound. Encrypted public output
   must use a bounded public writer and must not consume secret-memory capacity.
+- Give caller-selected public files distinct preview/prepared capability types;
+  reject identity roots, state roots, selected explicit identities, and every
+  `vault.json` destination before export preparation.
 - Treat the shared vault publication as the first-install commit point. Publish a
   deterministic, retry-compatible local installation first and reconcile exact
   partial local files; once the shared artifact exists, report local follow-up

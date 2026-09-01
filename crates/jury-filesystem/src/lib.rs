@@ -28,8 +28,8 @@ pub use local_state::{
 pub use lock::{ExclusiveStateLock, LockError};
 pub use private_input::read_public_file;
 pub use private_output::{
-    PreparedPrivateFile, PrivateFilePrecondition, PublicationOutcome, PublicationPolicy,
-    preview_public_file,
+    PreparedPrivateFile, PreparedPublicFile, PrivateFilePrecondition, PublicFilePrecondition,
+    PublicationOutcome, PublicationPolicy, preview_public_file,
 };
 pub use repository::RepositoryLocation;
 pub use state_root::HardenedStateRoot;

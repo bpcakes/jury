@@ -7,8 +7,9 @@ use std::path::Path;
 
 use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
-    IdentitySelector, PreparedPrivateFile, PublicationOutcome, PublicationPolicy,
-    RepositoryLocation, list_named_identities, preview_public_file, read_public_file,
+    IdentitySelector, PreparedPrivateFile, PreparedPublicFile, PublicationOutcome,
+    PublicationPolicy, RepositoryLocation, list_named_identities, preview_public_file,
+    read_public_file,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -416,9 +417,14 @@ fn public_file_preview_publishes_encrypted_bytes_without_following_paths()
     let output = temp.path().join("ExampleTransfer.json");
     let precondition = preview_public_file(&output)?;
     assert!(!precondition.destination_exists());
-    let contents = protected(b"ExampleEncryptedTransfer")?;
-    let publication =
-        PreparedPrivateFile::prepare_if_unchanged(precondition, &contents, false)?.publish()?;
+    let contents = b"ExampleEncryptedTransfer";
+    let publication = PreparedPublicFile::prepare_bounded_if_unchanged(
+        precondition,
+        contents,
+        contents.len(),
+        false,
+    )?
+    .publish()?;
 
     assert_eq!(publication, PublicationOutcome::PublishedAndSynced);
     assert_eq!(fs::read(&output)?, b"ExampleEncryptedTransfer");
@@ -430,6 +436,39 @@ fn public_file_preview_publishes_encrypted_bytes_without_following_paths()
             .kind(),
         FilesystemErrorKind::Traversal
     );
+    Ok(())
+}
+
+#[test]
+fn public_file_writer_enforces_its_own_format_bound() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let output = temp.path().join("ExampleTransfer.json");
+    let precondition = preview_public_file(&output)?;
+    let error = PreparedPublicFile::prepare_bounded_if_unchanged(precondition, b"five!", 4, false)
+        .err()
+        .ok_or("oversized public output should fail")?;
+
+    assert_eq!(error.kind(), FilesystemErrorKind::HardLinkOrSize);
+    assert!(!output.exists());
+    Ok(())
+}
+
+#[test]
+fn public_file_writer_is_not_limited_by_secret_memory_capacity() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let output = temp.path().join("LargeExampleTransfer.json");
+    let contents = vec![0x5a; 16 * 1024 * 1024 + 1];
+    let precondition = preview_public_file(&output)?;
+
+    PreparedPublicFile::prepare_bounded_if_unchanged(
+        precondition,
+        &contents,
+        32 * 1024 * 1024,
+        false,
+    )?
+    .publish()?;
+
+    assert_eq!(fs::metadata(output)?.len(), contents.len() as u64);
     Ok(())
 }
 
