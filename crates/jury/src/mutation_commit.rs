@@ -8,8 +8,9 @@ use jury_core::local_state::{
 use jury_core::mutation::{MutationWarnings, VaultMutationPlan};
 use jury_core::policy::replay_policy_with_witness_policies;
 use jury_filesystem::{
-    FilesystemError, HardenedStateRoot, LockError, PreparedPrivateFile, PrincipalStateFile,
-    PrivateFilePrecondition, PublicationOutcome, RepositoryLocation, VaultStateDirectory,
+    FilesystemError, FilesystemErrorKind, HardenedStateRoot, LockError, PreparedPrivateFile,
+    PrincipalStateFile, PrivateFilePrecondition, PublicationOutcome, RepositoryLocation,
+    VaultStateDirectory, VaultStateFile,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 use jury_protocol::vault_v1::{Digest32, FixedBytes, MAX_VAULT_BYTES, VaultFileV1};
@@ -101,6 +102,24 @@ pub enum MutationCommitOutcome {
     },
 }
 
+#[derive(Clone, Copy)]
+pub struct MutationCatalogUpdate<'a> {
+    prior: Option<&'a [u8]>,
+    rollback: &'a [u8],
+    target: &'a [u8],
+}
+
+impl<'a> MutationCatalogUpdate<'a> {
+    #[must_use]
+    pub const fn new(prior: Option<&'a [u8]>, rollback: &'a [u8], target: &'a [u8]) -> Self {
+        Self {
+            prior,
+            rollback,
+            target,
+        }
+    }
+}
+
 /// Composes the core plan with the only two durable authorities it may change:
 /// the encrypted worktree artifact and the acting principal's separate state.
 pub struct RepositoryMutationTarget<'a> {
@@ -147,7 +166,15 @@ impl<'a> RepositoryMutationTarget<'a> {
         &self,
         plan: &VaultMutationPlan,
     ) -> Result<MutationCommitOutcome, MutationCommitError> {
-        self.inner.commit(plan)
+        self.inner.commit(plan, None)
+    }
+
+    pub fn commit_with_catalog(
+        &self,
+        plan: &VaultMutationPlan,
+        catalog: MutationCatalogUpdate<'_>,
+    ) -> Result<MutationCommitOutcome, MutationCommitError> {
+        self.inner.commit(plan, Some(catalog))
     }
 }
 
@@ -173,7 +200,15 @@ impl<'a> DetachedMutationTarget<'a> {
         &self,
         plan: &VaultMutationPlan,
     ) -> Result<MutationCommitOutcome, MutationCommitError> {
-        self.inner.commit(plan)
+        self.inner.commit(plan, None)
+    }
+
+    pub fn commit_with_catalog(
+        &self,
+        plan: &VaultMutationPlan,
+        catalog: MutationCatalogUpdate<'_>,
+    ) -> Result<MutationCommitOutcome, MutationCommitError> {
+        self.inner.commit(plan, Some(catalog))
     }
 }
 
@@ -230,6 +265,7 @@ impl MutationCommitTarget<'_> {
     fn commit(
         &self,
         plan: &VaultMutationPlan,
+        catalog_update: Option<MutationCatalogUpdate<'_>>,
     ) -> Result<MutationCommitOutcome, MutationCommitError> {
         if self.local.scope().vault_id() != plan.target_artifact().header.vault_id
             || self.local.scope().genesis_fingerprint()
@@ -246,6 +282,10 @@ impl MutationCommitTarget<'_> {
         }
 
         let locked = self.state.try_lock().map_err(map_lock_error)?;
+        let prepared_catalog = catalog_update
+            .map(|update| self.prepare_catalog_update(&locked, update))
+            .transpose()?
+            .flatten();
         let shared_precondition = self.shared.preview().map_err(map_shared_read_error)?;
         let current_bytes = self
             .shared
@@ -312,6 +352,9 @@ impl MutationCommitTarget<'_> {
             .map_err(map_checkpoint_error)?;
 
         if is_target {
+            if let Some(prepared) = prepared_catalog {
+                publish_catalog(prepared)?;
+            }
             return self.reconcile(
                 plan,
                 &locked,
@@ -382,9 +425,27 @@ impl MutationCommitTarget<'_> {
             ));
         }
 
-        let shared_publication = prepared_shared
-            .publish()
-            .map_err(|error| map_shared_prepare_error(&error))?;
+        let catalog_published = if let Some(prepared) = prepared_catalog {
+            publish_catalog(prepared)?;
+            true
+        } else {
+            false
+        };
+        let shared_publication = match prepared_shared.publish() {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if catalog_published
+                    && !self
+                        .shared
+                        .read(MAX_VAULT_BYTES)
+                        .is_ok_and(|bytes| sha256(&bytes) == *plan.target_digest())
+                    && let Some(update) = catalog_update
+                {
+                    self.restore_catalog(&locked, update)?;
+                }
+                return Err(map_shared_prepare_error(&error));
+            }
+        };
         let checkpoint_outcome = match prepared_checkpoint.publish() {
             Ok(outcome) => outcome,
             Err(_) => {
@@ -411,6 +472,41 @@ impl MutationCommitTarget<'_> {
                 plan,
             )),
         }
+    }
+
+    fn prepare_catalog_update(
+        &self,
+        locked: &jury_filesystem::LockedVaultState<'_>,
+        update: MutationCatalogUpdate<'_>,
+    ) -> Result<Option<PreparedPrivateFile>, MutationCommitError> {
+        match locked.read_vault_state(VaultStateFile::PolicyCatalog) {
+            Ok(bytes) if bytes == update.target => return Ok(None),
+            Ok(bytes) if update.prior == Some(bytes.as_slice()) => {}
+            Err(error)
+                if error.kind() == FilesystemErrorKind::NotFound && update.prior.is_none() => {}
+            Ok(_) | Err(_) => {
+                return Err(MutationCommitError::new(
+                    MutationCommitErrorKind::InvalidLocalState,
+                ));
+            }
+        }
+        let protected = protect(update.target, self.protection)?;
+        locked
+            .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected)
+            .map(Some)
+            .map_err(map_local_error)
+    }
+
+    fn restore_catalog(
+        &self,
+        locked: &jury_filesystem::LockedVaultState<'_>,
+        update: MutationCatalogUpdate<'_>,
+    ) -> Result<(), MutationCommitError> {
+        let protected = protect(update.rollback, self.protection)?;
+        let prepared = locked
+            .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected)
+            .map_err(map_local_error)?;
+        publish_catalog(prepared)
     }
 
     fn reconcile(
@@ -559,6 +655,15 @@ fn committed_recovery(
         reason,
         warnings: plan.warnings().clone(),
     }
+}
+
+fn publish_catalog(prepared: PreparedPrivateFile) -> Result<(), MutationCommitError> {
+    if prepared.publish().map_err(map_local_error)? != PublicationOutcome::PublishedAndSynced {
+        return Err(MutationCommitError::new(
+            MutationCommitErrorKind::InvalidLocalState,
+        ));
+    }
+    Ok(())
 }
 
 fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<ProtectedMemory, MutationCommitError> {
@@ -861,6 +966,92 @@ mod tests {
                 .join(".git")
                 .join("index")
                 .exists()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_update_is_committed_before_the_artifact_and_reconciles() -> TestResult {
+        let fixture = fixture()?;
+        let plan = plan(&fixture, "primary-owner")?;
+        let prior = br#"{"version":1,"role_descriptors":[],"witness_policies":[]}"#;
+        let target_catalog =
+            br#"{"version":1,"role_descriptors":["example"],"witness_policies":[]}"#;
+        let update = MutationCatalogUpdate::new(None, prior, target_catalog);
+        let target = RepositoryMutationTarget::new(
+            &fixture.repository,
+            &fixture.state,
+            &fixture.local,
+            ProtectionPolicy::EmergencyAllowDegraded,
+        );
+
+        assert!(matches!(
+            target.commit_with_catalog(&plan, update)?,
+            MutationCommitOutcome::Committed { .. }
+        ));
+        {
+            let locked = fixture.state.try_lock()?;
+            assert_eq!(
+                locked.read_vault_state(VaultStateFile::PolicyCatalog)?,
+                target_catalog
+            );
+        }
+        assert_eq!(
+            VaultFileV1::parse(
+                &fixture
+                    .repository
+                    .read_encrypted_shared_artifact(MAX_VAULT_BYTES)?
+            )?,
+            *plan.target_artifact()
+        );
+        assert!(matches!(
+            target.commit_with_catalog(&plan, update)?,
+            MutationCommitOutcome::Reconciled { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_precondition_conflict_preserves_the_shared_artifact() -> TestResult {
+        let fixture = fixture()?;
+        let plan = plan(&fixture, "primary-owner")?;
+        let protected = protected(
+            b"different-catalog",
+            ProtectionPolicy::EmergencyAllowDegraded,
+        )?;
+        {
+            let locked = fixture.state.try_lock()?;
+            assert_eq!(
+                locked
+                    .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected)?
+                    .publish()?,
+                PublicationOutcome::PublishedAndSynced
+            );
+        }
+        let target = RepositoryMutationTarget::new(
+            &fixture.repository,
+            &fixture.state,
+            &fixture.local,
+            ProtectionPolicy::EmergencyAllowDegraded,
+        );
+
+        let result = target.commit_with_catalog(
+            &plan,
+            MutationCatalogUpdate::new(
+                Some(b"expected-catalog"),
+                b"expected-catalog",
+                b"target-catalog",
+            ),
+        );
+        assert!(matches!(
+            result,
+            Err(error) if error.kind() == MutationCommitErrorKind::InvalidLocalState
+        ));
+        assert_eq!(
+            fixture
+                .repository
+                .read_encrypted_shared_artifact(MAX_VAULT_BYTES)?,
+            fixture.vault.to_json_bytes()?
         );
         Ok(())
     }

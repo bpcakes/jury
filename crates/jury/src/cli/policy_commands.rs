@@ -89,7 +89,7 @@ pub(super) fn policy_require_witnessed(
             .as_ref()
             .and_then(|state| state.slots.first())
             .and_then(|slot| {
-                context.witness_policies.iter().find(|policy| {
+                context.catalog.witness_policies.iter().find(|policy| {
                     policy.digest().ok().as_ref() == Some(&slot.witness_policy_digest)
                 })
             });
@@ -156,7 +156,7 @@ pub(super) fn policy_require_witnessed(
     let witness_digest = witness_policy
         .digest()
         .map_err(|_| invalid_policy_controls())?;
-    let mut witness_policies = context.witness_policies.clone();
+    let mut witness_policies = context.catalog.witness_policies.clone();
     witness_policies.push(witness_policy.clone());
     let planning_policy =
         replay_policy_with_witness_policies(&context.vault.policy, &witness_policies)
@@ -186,12 +186,11 @@ pub(super) fn policy_require_witnessed(
             &inventory,
         )
         .map_err(|error| map_item_error(error.kind()))?;
-    if !arguments.dry_run {
-        persist_witness_policy(&context, &witness_policy, protection)?;
-    }
     let mut context = context;
+    context
+        .catalog
+        .add_witness_policy(&context.policy, &witness_policy)?;
     context.policy = planning_policy;
-    context.witness_policies = witness_policies;
     finish_item_mutation(
         context,
         prepared,
@@ -338,14 +337,14 @@ pub(super) fn policy_status(
     let witnessed = item.witnessed_state.as_ref();
     let carries_quorum_claim =
         witnessed.is_some_and(|state| state.has_item_quorum_claim(item.direct_slots.len()));
-    let witness_policy = witnessed
-        .and_then(|state| state.slots.first())
-        .and_then(|slot| {
-            context
-                .witness_policies
-                .iter()
-                .find(|policy| policy.digest().ok().as_ref() == Some(&slot.witness_policy_digest))
-        });
+    let witness_policy =
+        witnessed
+            .and_then(|state| state.slots.first())
+            .and_then(|slot| {
+                context.catalog.witness_policies.iter().find(|policy| {
+                    policy.digest().ok().as_ref() == Some(&slot.witness_policy_digest)
+                })
+            });
     let witness_policy_id = witness_policy.map(|policy| hex(policy.witness_policy_id.as_bytes()));
     let witness_policy_revision = witness_policy.map(|policy| policy.revision);
     let witness_policy_digest = witness_policy

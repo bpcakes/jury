@@ -145,7 +145,7 @@ pub(super) fn principal_add(
             "the registration proof does not match the selected public descriptor",
         ));
     }
-    let context = load_vault_principal(cli, environment, current, protection)?;
+    let mut context = load_vault_principal(cli, environment, current, protection)?;
     if !context.policy.is_owner(&context.identity.principal_id()) {
         return Err(access_denied());
     }
@@ -159,10 +159,15 @@ pub(super) fn principal_add(
     )
     .map_err(|error| map_registration_error(error.kind()))?;
     let label = default_principal_label(&descriptor);
+    if !matches!(
+        proof.role_descriptor,
+        RegistrationRoleDescriptorV1::VaultPrincipal
+    ) {
+        context
+            .catalog
+            .add_role_descriptor(&proof.role_descriptor)?;
+    }
     if arguments.readers.is_empty() && arguments.writers.is_empty() {
-        if !arguments.dry_run {
-            persist_role_descriptor(&context, &proof.role_descriptor, protection)?;
-        }
         return finish_policy_mutation(
             context,
             vec![PolicyOperationV1::PrincipalAdd {
@@ -247,9 +252,6 @@ pub(super) fn principal_add(
                 .map_err(|error| map_item_error(error.kind()))?,
         );
     }
-    if !arguments.dry_run {
-        persist_role_descriptor(&context, &proof.role_descriptor, protection)?;
-    }
     finish_item_batch_mutation(
         context,
         prepared,
@@ -330,7 +332,7 @@ pub(super) fn principal_replace(
             "the registration proof does not match the selected public descriptor",
         ));
     }
-    let context = load_vault_principal(cli, environment, current, protection)?;
+    let mut context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
     if prior_principal_id == context.identity.principal_id() {
         return Err(CliError::new(
@@ -347,6 +349,7 @@ pub(super) fn principal_replace(
             "principal replacement requires the same identity role",
         ));
     }
+    refuse_active_witness_role_rotation(&context, &prior_principal_id)?;
     let timestamp = timestamp_ms()?;
     let proof_digest = verify_proof(
         &context.policy,
@@ -356,6 +359,14 @@ pub(super) fn principal_replace(
         timestamp,
     )
     .map_err(|error| map_registration_error(error.kind()))?;
+    if !matches!(
+        proof.role_descriptor,
+        RegistrationRoleDescriptorV1::VaultPrincipal
+    ) {
+        context
+            .catalog
+            .add_role_descriptor(&proof.role_descriptor)?;
+    }
     let affected = context
         .policy
         .items()
@@ -371,9 +382,6 @@ pub(super) fn principal_replace(
         registration_proof_digest: proof_digest.clone(),
     };
     if affected.is_empty() {
-        if !arguments.dry_run {
-            persist_role_descriptor(&context, &proof.role_descriptor, protection)?;
-        }
         return finish_policy_mutation(
             context,
             vec![PolicyOperationV1::PrincipalReplace {
@@ -432,9 +440,6 @@ pub(super) fn principal_replace(
                 .map_err(|error| map_item_error(error.kind()))?,
         );
     }
-    if !arguments.dry_run {
-        persist_role_descriptor(&context, &proof.role_descriptor, protection)?;
-    }
     finish_item_component_batch_mutation(
         context,
         prepared,
@@ -468,6 +473,7 @@ pub(super) fn principal_remove(
             "revoke owner authority with a different owner before removing the principal",
         ));
     }
+    refuse_active_witness_role_rotation(&context, &principal_id)?;
     let affected = context
         .policy
         .items()
@@ -546,6 +552,37 @@ pub(super) fn principal_remove(
             protection,
         },
     )
+}
+
+fn refuse_active_witness_role_rotation(
+    context: &VaultPrincipalContext,
+    principal_id: &PrincipalId,
+) -> Result<(), CliError> {
+    let participates = context.policy.items().any(|(_, item)| {
+        item.witnessed_state.as_ref().is_some_and(|state| {
+            state.slots.iter().any(|slot| {
+                context.catalog.witness_policies.iter().any(|policy| {
+                    policy.digest().ok().as_ref() == Some(&slot.witness_policy_digest)
+                        && (policy
+                            .approver_descriptors
+                            .iter()
+                            .any(|descriptor| descriptor.approver_id == *principal_id)
+                            || policy
+                                .witness_descriptors
+                                .iter()
+                                .any(|descriptor| descriptor.witness_id == *principal_id))
+                })
+            })
+        })
+    });
+    if participates {
+        return Err(CliError::new(
+            CliErrorKind::Conflict,
+            "witnessed-role-rotation-required",
+            "this principal participates in an active witnessed policy; rotate the witnessed policy and item slots before replacing or removing it",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn principal_owner_change(

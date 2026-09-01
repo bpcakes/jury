@@ -123,7 +123,7 @@ pub(super) fn finish_item_mutation_with_ack(
     let timestamp = prepared.policy.revision.timestamp_ms;
     let mut plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
-        &context.witness_policies,
+        &context.catalog.witness_policies,
         &context.identity,
         timestamp,
         Vec::new(),
@@ -174,7 +174,7 @@ pub(super) fn finish_item_batch_mutation(
         .timestamp_ms;
     let mut plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
-        &context.witness_policies,
+        &context.catalog.witness_policies,
         &context.identity,
         timestamp,
         additional_operations,
@@ -220,7 +220,7 @@ pub(super) fn finish_item_component_batch_mutation(
 ) -> Result<CommandOutput, CliError> {
     let mut plan = VaultMutationPlan::prepare_item_component_batch(
         &context.vault,
-        &context.witness_policies,
+        &context.catalog.witness_policies,
         &context.identity,
         timestamp,
         additional_operations,
@@ -267,7 +267,7 @@ pub(super) fn finish_policy_mutation(
 ) -> Result<CommandOutput, CliError> {
     let mut plan = VaultMutationPlan::prepare_policy(
         &context.vault,
-        &context.witness_policies,
+        &context.catalog.witness_policies,
         &context.identity,
         timestamp,
         operations,
@@ -303,15 +303,38 @@ pub(super) fn commit_mutation(
     plan: &VaultMutationPlan,
     protection: ProtectionPolicy,
 ) -> Result<MutationCommitOutcome, CliError> {
+    let catalog_before = context.catalog_before.to_json_bytes()?;
+    let catalog_target = context.catalog.to_json_bytes()?;
+    let catalog_update = (catalog_before != catalog_target).then(|| {
+        MutationCatalogUpdate::new(
+            context.catalog_before_bytes.as_deref(),
+            &catalog_before,
+            &catalog_target,
+        )
+    });
     let result = match &context.home {
         VaultHomeLocation::Repository { repository } => {
-            RepositoryMutationTarget::new(repository, &context.state, &context.local, protection)
-                .commit(plan)
+            let target = RepositoryMutationTarget::new(
+                repository,
+                &context.state,
+                &context.local,
+                protection,
+            );
+            if let Some(update) = catalog_update {
+                target.commit_with_catalog(plan, update)
+            } else {
+                target.commit(plan)
+            }
         }
         VaultHomeLocation::Detached { path, .. } => {
             let home = HardenedStateRoot::open_existing(path, &[]).map_err(map_filesystem_error)?;
-            DetachedMutationTarget::new(&home, &context.state, &context.local, protection)
-                .commit(plan)
+            let target =
+                DetachedMutationTarget::new(&home, &context.state, &context.local, protection);
+            if let Some(update) = catalog_update {
+                target.commit_with_catalog(plan, update)
+            } else {
+                target.commit(plan)
+            }
         }
     };
     result.map_err(|error| map_mutation_commit_error(error.kind()))

@@ -52,7 +52,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::home::{HomeSource, VaultHomeLocation, resolve_identity_root, resolve_vault_home};
 use crate::mutation_commit::{
-    DetachedMutationTarget, MutationCommitOutcome, RepositoryMutationTarget,
+    DetachedMutationTarget, MutationCatalogUpdate, MutationCommitOutcome, RepositoryMutationTarget,
 };
 use crate::secret_input;
 

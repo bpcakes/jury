@@ -266,6 +266,31 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
             .all(|slot| slot.threshold == 2 && slot.member_count == 2)
     );
 
+    let before_role_removal = fs::read(&vault_path)?;
+    let removal = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "principal",
+            "remove",
+            &witness_one_id,
+            "--revoke-all",
+        ],
+        b"OwnerPassphrase1234\n",
+    )?;
+    assert_eq!(removal.status.code(), Some(4));
+    assert!(removal.stdout.is_empty());
+    let removal_error: serde_json::Value = serde_json::from_slice(&removal.stderr)?;
+    assert_eq!(
+        removal_error["error"]["code"],
+        "witnessed-role-rotation-required"
+    );
+    assert_eq!(fs::read(&vault_path)?, before_role_removal);
+
     let public_status = success_json(run(
         &repository,
         &data,

@@ -106,7 +106,7 @@ pub(super) fn item_create(
         .map_err(|error| map_item_error(error.kind()))?;
     let mut plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
-        &context.witness_policies,
+        &context.catalog.witness_policies,
         &context.identity,
         timestamp,
         Vec::new(),

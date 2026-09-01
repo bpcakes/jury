@@ -36,7 +36,6 @@ impl PolicyCatalogV1 {
             return Err(invalid_policy_catalog());
         }
         let mut role_ids = BTreeSet::new();
-        let mut share_indexes = BTreeSet::new();
         for role in &self.role_descriptors {
             let id = match role {
                 RegistrationRoleDescriptorV1::VaultPrincipal => {
@@ -52,9 +51,6 @@ impl PolicyCatalogV1 {
                     descriptor
                         .validate()
                         .map_err(|_| invalid_policy_catalog())?;
-                    if !share_indexes.insert(descriptor.share_index) {
-                        return Err(invalid_policy_catalog());
-                    }
                     descriptor.witness_id
                 }
             };
@@ -71,13 +67,91 @@ impl PolicyCatalogV1 {
         }
         Ok(())
     }
+
+    pub(super) fn add_role_descriptor(
+        &mut self,
+        role: &RegistrationRoleDescriptorV1,
+    ) -> Result<(), CliError> {
+        let id = registration_role_id(role).ok_or_else(invalid_policy_catalog)?;
+        if let Some(existing) = self
+            .role_descriptors
+            .iter()
+            .find(|existing| registration_role_id(existing) == Some(id))
+        {
+            if existing == role {
+                return Ok(());
+            }
+            return Err(CliError::new(
+                CliErrorKind::Conflict,
+                "role-descriptor-conflict",
+                "a different role descriptor already exists for this principal",
+            ));
+        }
+        self.role_descriptors.push(role.clone());
+        self.role_descriptors.sort_by_key(registration_role_id);
+        self.validate()
+    }
+
+    pub(super) fn add_witness_policy(
+        &mut self,
+        current_policy: &PolicyState,
+        policy: &WitnessPolicy,
+    ) -> Result<(), CliError> {
+        let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
+        if let Some(existing) = self
+            .witness_policies
+            .iter()
+            .find(|existing| existing.digest().ok().as_ref() == Some(&digest))
+        {
+            if existing == policy {
+                return Ok(());
+            }
+            return Err(invalid_policy_catalog());
+        }
+        self.witness_policies.push(policy.clone());
+        let mut retained = current_policy
+            .items()
+            .filter_map(|(_, item)| {
+                item.witnessed_state
+                    .as_ref()
+                    .and_then(|state| state.slots.first())
+                    .map(|slot| slot.witness_policy_digest.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        retained.insert(digest);
+        let mut pending = retained.iter().cloned().collect::<Vec<_>>();
+        while let Some(current) = pending.pop() {
+            let entry = self
+                .witness_policies
+                .iter()
+                .find(|entry| entry.digest().ok().as_ref() == Some(&current))
+                .ok_or_else(invalid_policy_catalog)?;
+            if entry.revision > 1 && retained.insert(entry.predecessor_policy_digest.clone()) {
+                pending.push(entry.predecessor_policy_digest.clone());
+            }
+        }
+        self.witness_policies.retain(|entry| {
+            entry
+                .digest()
+                .is_ok_and(|entry_digest| retained.contains(&entry_digest))
+        });
+        self.witness_policies.sort_by_key(|entry| {
+            entry
+                .digest()
+                .map(|digest| *digest.as_bytes())
+                .unwrap_or([0; 32])
+        });
+        self.validate()
+    }
 }
 
 pub(super) struct VaultPrincipalContext {
     pub(super) home: VaultHomeLocation,
     pub(super) vault: VaultFileV1,
     pub(super) policy: PolicyState,
-    pub(super) witness_policies: Vec<WitnessPolicy>,
+    pub(super) catalog_before: PolicyCatalogV1,
+    pub(super) catalog_before_bytes: Option<Vec<u8>>,
+    pub(super) catalog: PolicyCatalogV1,
     pub(super) identity: VaultPrincipalIdentity,
     pub(super) state: VaultStateDirectory,
     pub(super) local: PrincipalLocalState,
@@ -239,124 +313,6 @@ pub(super) fn read_policy_catalog(
         Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(PolicyCatalogV1::empty()),
         Err(error) => Err(map_filesystem_error(error)),
     }
-}
-
-pub(super) fn read_locked_policy_catalog(
-    state: &jury_filesystem::LockedVaultState<'_>,
-) -> Result<PolicyCatalogV1, CliError> {
-    match state.read_vault_state(VaultStateFile::PolicyCatalog) {
-        Ok(bytes) => PolicyCatalogV1::parse(&bytes),
-        Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(PolicyCatalogV1::empty()),
-        Err(error) => Err(map_filesystem_error(error)),
-    }
-}
-
-pub(super) fn persist_role_descriptor(
-    context: &VaultPrincipalContext,
-    role: &RegistrationRoleDescriptorV1,
-    protection: ProtectionPolicy,
-) -> Result<(), CliError> {
-    if matches!(role, RegistrationRoleDescriptorV1::VaultPrincipal) {
-        return Ok(());
-    }
-    update_policy_catalog(&context.state, protection, |catalog| {
-        let id = registration_role_id(role).ok_or_else(invalid_policy_catalog)?;
-        if let Some(existing) = catalog
-            .role_descriptors
-            .iter()
-            .find(|existing| registration_role_id(existing) == Some(id))
-        {
-            if existing == role {
-                return Ok(());
-            }
-            return Err(CliError::new(
-                CliErrorKind::Conflict,
-                "role-descriptor-conflict",
-                "a different role descriptor already exists for this principal",
-            ));
-        }
-        catalog.role_descriptors.push(role.clone());
-        catalog.role_descriptors.sort_by_key(registration_role_id);
-        Ok(())
-    })
-}
-
-pub(super) fn persist_witness_policy(
-    context: &VaultPrincipalContext,
-    policy: &WitnessPolicy,
-    protection: ProtectionPolicy,
-) -> Result<(), CliError> {
-    update_policy_catalog(&context.state, protection, |catalog| {
-        let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
-        if let Some(existing) = catalog
-            .witness_policies
-            .iter()
-            .find(|existing| existing.digest().ok().as_ref() == Some(&digest))
-        {
-            if existing == policy {
-                return Ok(());
-            }
-            return Err(invalid_policy_catalog());
-        }
-        catalog.witness_policies.push(policy.clone());
-        let mut retained = context
-            .policy
-            .items()
-            .filter_map(|(_, item)| {
-                item.witnessed_state
-                    .as_ref()
-                    .and_then(|state| state.slots.first())
-                    .map(|slot| slot.witness_policy_digest.clone())
-            })
-            .collect::<BTreeSet<_>>();
-        retained.insert(digest);
-        let mut pending = retained.iter().cloned().collect::<Vec<_>>();
-        while let Some(current) = pending.pop() {
-            let entry = catalog
-                .witness_policies
-                .iter()
-                .find(|entry| entry.digest().ok().as_ref() == Some(&current))
-                .ok_or_else(invalid_policy_catalog)?;
-            if entry.revision > 1 && retained.insert(entry.predecessor_policy_digest.clone()) {
-                pending.push(entry.predecessor_policy_digest.clone());
-            }
-        }
-        catalog.witness_policies.retain(|entry| {
-            entry
-                .digest()
-                .is_ok_and(|entry_digest| retained.contains(&entry_digest))
-        });
-        catalog.witness_policies.sort_by_key(|entry| {
-            entry
-                .digest()
-                .map(|digest| *digest.as_bytes())
-                .unwrap_or([0; 32])
-        });
-        Ok(())
-    })
-}
-
-pub(super) fn update_policy_catalog(
-    state: &VaultStateDirectory,
-    protection: ProtectionPolicy,
-    update: impl FnOnce(&mut PolicyCatalogV1) -> Result<(), CliError>,
-) -> Result<(), CliError> {
-    let locked = state.try_lock().map_err(|_| local_state_error())?;
-    let mut catalog = read_locked_policy_catalog(&locked)?;
-    let prior = catalog.to_json_bytes()?;
-    update(&mut catalog)?;
-    let next = catalog.to_json_bytes()?;
-    if prior == next {
-        return Ok(());
-    }
-    let protected = protect(&next, protection)?;
-    let prepared = locked
-        .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected)
-        .map_err(map_filesystem_error)?;
-    if prepared.publish().map_err(map_filesystem_error)? != PublicationOutcome::PublishedAndSynced {
-        return Err(local_state_error());
-    }
-    Ok(())
 }
 
 pub(super) const fn registration_role_id(
@@ -588,14 +544,22 @@ pub(super) fn load_vault_principal(
     .map_err(|_| filesystem_error())?;
     validate_detached_separation(&state_root, &home)?;
     let early_repositories = repository_refs(&home);
-    let catalog = match VaultStateDirectory::open_existing(
+    let (catalog, catalog_before_bytes) = match VaultStateDirectory::open_existing(
         &state_root,
         vault.header.vault_id.as_bytes(),
         vault.header.genesis_fingerprint.as_bytes(),
         &early_repositories,
     ) {
-        Ok(state) => read_policy_catalog(&state)?,
-        Err(error) if error.kind() == FilesystemErrorKind::NotFound => PolicyCatalogV1::empty(),
+        Ok(state) => match state.read_vault_state(VaultStateFile::PolicyCatalog) {
+            Ok(bytes) => (PolicyCatalogV1::parse(&bytes)?, Some(bytes)),
+            Err(error) if error.kind() == FilesystemErrorKind::NotFound => {
+                (PolicyCatalogV1::empty(), None)
+            }
+            Err(error) => return Err(map_filesystem_error(error)),
+        },
+        Err(error) if error.kind() == FilesystemErrorKind::NotFound => {
+            (PolicyCatalogV1::empty(), None)
+        }
         Err(error) => return Err(map_filesystem_error(error)),
     };
     let policy = replay_policy_with_witness_policies(&vault.policy, &catalog.witness_policies)
@@ -709,7 +673,9 @@ pub(super) fn load_vault_principal(
         home,
         vault,
         policy,
-        witness_policies: catalog.witness_policies,
+        catalog_before: catalog.clone(),
+        catalog_before_bytes,
+        catalog,
         identity,
         state,
         local,
