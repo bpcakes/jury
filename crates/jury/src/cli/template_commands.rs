@@ -37,10 +37,7 @@ pub(super) fn template_inject(
     }
 
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let mut accessible = discover_accessible_items(&context)?
-        .into_iter()
-        .map(|item| (item.descriptor.name().to_owned(), item))
-        .collect::<BTreeMap<_, _>>();
+    let mut accessible = accessible_items_by_name(&context)?;
 
     // Resolve every item name before opening any body. A denied multi-item
     // operation therefore reaches no output sink and decrypts no item body.

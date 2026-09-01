@@ -332,10 +332,7 @@ fn resolve_fields(
     if item_names.len() > MAX_EXEC_ITEMS {
         return Err(invalid_execution_arguments());
     }
-    let mut accessible = discover_accessible_items(context)?
-        .into_iter()
-        .map(|item| (item.descriptor.name().to_owned(), item))
-        .collect::<BTreeMap<_, _>>();
+    let mut accessible = accessible_items_by_name(context)?;
     if item_names.iter().any(|name| !accessible.contains_key(name)) {
         return Err(item_unavailable());
     }

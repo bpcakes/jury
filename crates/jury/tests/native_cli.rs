@@ -234,6 +234,31 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_eq!(with_item["item_count"], 1);
     assert_eq!(with_item["capacity"]["item_revision_proofs"]["used"], 1);
 
+    let before_duplicate = fs::read(repository.join(".jury/vault.json"))?;
+    let duplicate = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "item",
+            "create",
+            "ExampleItem",
+            "--allow-direct",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert_eq!(duplicate.status.code(), Some(4));
+    assert!(duplicate.stdout.is_empty());
+    let duplicate_error: serde_json::Value = serde_json::from_slice(&duplicate.stderr)?;
+    assert_eq!(duplicate_error["error"]["code"], "duplicate-item-name");
+    assert_eq!(
+        fs::read(repository.join(".jury/vault.json"))?,
+        before_duplicate
+    );
+
     let principals = success_json(run(
         &repository,
         &data,

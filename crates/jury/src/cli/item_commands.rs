@@ -50,6 +50,16 @@ pub(super) fn item_create(
     if !context.policy.is_owner(&context.identity.principal_id()) {
         return Err(access_denied());
     }
+    if all_admin_items(&context)?
+        .iter()
+        .any(|item| item.descriptor.name() == arguments.item)
+    {
+        return Err(CliError::new(
+            CliErrorKind::Conflict,
+            "duplicate-item-name",
+            "an active item already uses the selected name",
+        ));
+    }
     if grants
         .iter()
         .any(|grant| grant.principal_id == context.identity.principal_id())

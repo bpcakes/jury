@@ -444,10 +444,7 @@ pub(super) fn select_admin_items<'a, 'b>(
     names: impl Iterator<Item = &'b String>,
 ) -> Result<BTreeMap<String, AccessibleItem>, CliError> {
     let requested = names.cloned().collect::<BTreeSet<_>>();
-    let mut accessible = discover_accessible_items(context)?
-        .into_iter()
-        .map(|item| (item.descriptor.name().to_owned(), item))
-        .collect::<BTreeMap<_, _>>();
+    let mut accessible = accessible_items_by_name(context)?;
     if requested.iter().any(|name| !accessible.contains_key(name)) {
         return Err(item_unavailable());
     }

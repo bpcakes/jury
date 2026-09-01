@@ -212,10 +212,7 @@ pub(super) fn principal_add(
                 .map(|item| (item.clone(), AccessRole::Writer)),
         )
         .collect::<BTreeMap<_, _>>();
-    let mut accessible = discover_accessible_items(&context)?
-        .into_iter()
-        .map(|item| (item.descriptor.name().to_owned(), item))
-        .collect::<BTreeMap<_, _>>();
+    let mut accessible = accessible_items_by_name(&context)?;
     if requested.keys().any(|item| !accessible.contains_key(item)) {
         return Err(item_unavailable());
     }
@@ -701,17 +698,6 @@ pub(super) fn principal_owner_change(
             protection,
         },
     )
-}
-
-pub(super) fn all_admin_items(
-    context: &VaultPrincipalContext,
-) -> Result<Vec<AccessibleItem>, CliError> {
-    let accessible = discover_accessible_items(context)?;
-    if accessible.len() != context.policy.item_count() {
-        Err(invalid_vault())
-    } else {
-        Ok(accessible)
-    }
 }
 
 pub(super) fn read_principal_descriptor(path: &Path) -> Result<PrincipalDescriptorV1, CliError> {

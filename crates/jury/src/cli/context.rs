@@ -138,7 +138,34 @@ pub(super) fn discover_accessible_items(
             Err(_) => return Err(invalid_vault()),
         }
     }
+    let mut names = BTreeSet::new();
+    if items
+        .iter()
+        .any(|item| !names.insert(item.descriptor.name().to_owned()))
+    {
+        return Err(invalid_vault());
+    }
     Ok(items)
+}
+
+pub(super) fn accessible_items_by_name(
+    context: &VaultPrincipalContext,
+) -> Result<BTreeMap<String, AccessibleItem>, CliError> {
+    Ok(discover_accessible_items(context)?
+        .into_iter()
+        .map(|item| (item.descriptor.name().to_owned(), item))
+        .collect())
+}
+
+pub(super) fn all_admin_items(
+    context: &VaultPrincipalContext,
+) -> Result<Vec<AccessibleItem>, CliError> {
+    let accessible = discover_accessible_items(context)?;
+    if accessible.len() != context.policy.item_count() {
+        Err(invalid_vault())
+    } else {
+        Ok(accessible)
+    }
 }
 
 pub(super) fn selected_accessible_item(
@@ -146,9 +173,8 @@ pub(super) fn selected_accessible_item(
     item: &str,
 ) -> Result<AccessibleItem, CliError> {
     ItemSelector::parse(item.to_owned()).map_err(|_| invalid_item_selector())?;
-    discover_accessible_items(context)?
-        .into_iter()
-        .find(|candidate| candidate.descriptor.name() == item)
+    accessible_items_by_name(context)?
+        .remove(item)
         .ok_or_else(item_unavailable)
 }
 
