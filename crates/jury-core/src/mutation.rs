@@ -23,6 +23,12 @@ use crate::policy::{
     replay_policy_with_witness_policies,
 };
 
+use self::{artifact_validation::*, authority_transition::*, error_mapping::*};
+
+mod artifact_validation;
+mod authority_transition;
+mod error_mapping;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MutationErrorKind {
     InvalidCurrentState,
@@ -669,139 +675,6 @@ impl fmt::Debug for VaultMutationPlan {
     }
 }
 
-fn validate_complete(
-    vault: &VaultFileV1,
-    witness_policies: &[WitnessPolicy],
-    current: bool,
-) -> Result<PolicyState, MutationError> {
-    vault.validate().map_err(|error| {
-        if current {
-            map_current_format_error(error)
-        } else {
-            map_target_format_error(error)
-        }
-    })?;
-    let policy = replay_policy_with_witness_policies(&vault.policy, witness_policies)
-        .map_err(|error| map_replay_error(error.kind(), current))?;
-    CheckpointCandidate::from_validated(&policy, &vault.policy, &vault.items).map_err(|_| {
-        MutationError::new(if current {
-            MutationErrorKind::InvalidCurrentState
-        } else {
-            MutationErrorKind::InvalidPlan
-        })
-    })?;
-    Ok(policy)
-}
-
-fn validate_envelope_delta(
-    current: &VaultFileV1,
-    target: &VaultFileV1,
-    current_policy: &PolicyState,
-    target_policy: &PolicyState,
-) -> Result<(), MutationError> {
-    let current_envelopes = current
-        .items
-        .iter()
-        .map(|item| (item.item_id, item))
-        .collect::<BTreeMap<_, _>>();
-    let target_envelopes = target
-        .items
-        .iter()
-        .map(|item| (item.item_id, item))
-        .collect::<BTreeMap<_, _>>();
-    for (item_id, target_item) in &target_policy.items {
-        let target_envelope = target_envelopes
-            .get(item_id)
-            .ok_or_else(|| MutationError::new(MutationErrorKind::MissingItemEnvelope))?;
-        let changed = current_policy.item(item_id).is_none_or(|current_item| {
-            current_item.current_item_revision_hash != target_item.current_item_revision_hash
-                || current_item.descriptor != target_item.descriptor
-        });
-        if changed
-            && current_envelopes
-                .get(item_id)
-                .is_some_and(|current_envelope| *current_envelope == *target_envelope)
-        {
-            return Err(MutationError::new(MutationErrorKind::MissingItemEnvelope));
-        }
-        if !changed
-            && current_envelopes
-                .get(item_id)
-                .is_some_and(|current_envelope| *current_envelope != *target_envelope)
-        {
-            return Err(MutationError::new(
-                MutationErrorKind::UnexpectedItemEnvelope,
-            ));
-        }
-    }
-    if target_envelopes
-        .keys()
-        .any(|item_id| target_policy.item(item_id).is_none())
-    {
-        return Err(MutationError::new(
-            MutationErrorKind::UnexpectedItemEnvelope,
-        ));
-    }
-    Ok(())
-}
-
-fn validate_privacy_cover(
-    current: &VaultFileV1,
-    target: &VaultFileV1,
-    current_policy: &PolicyState,
-    target_policy: &PolicyState,
-) -> Result<(), MutationError> {
-    let operations = &target
-        .policy
-        .revisions
-        .last()
-        .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidPlan))?
-        .operations;
-    let touched = touched_item_ids(operations);
-    if touched.is_empty()
-        || operations.iter().any(|operation| {
-            !matches!(
-                operation,
-                PolicyOperationV1::ItemReaderSetChange { .. }
-                    | PolicyOperationV1::ItemSlotsReplace { .. }
-            )
-        })
-    {
-        return Err(MutationError::new(MutationErrorKind::InvalidPlan));
-    }
-    for item_id in touched {
-        let prior_policy = current_policy
-            .item(&item_id)
-            .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidPlan))?;
-        let next_policy = target_policy
-            .item(&item_id)
-            .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidPlan))?;
-        let prior = current
-            .items
-            .binary_search_by_key(&item_id, |item| item.item_id)
-            .ok()
-            .and_then(|index| current.items.get(index))
-            .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidCurrentState))?;
-        let next = target
-            .items
-            .binary_search_by_key(&item_id, |item| item.item_id)
-            .ok()
-            .and_then(|index| target.items.get(index))
-            .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidPlan))?;
-        if prior_policy.grants != next_policy.grants
-            || current_policy.effective_reader_ids(&item_id)
-                != target_policy.effective_reader_ids(&item_id)
-            || prior_policy.access_mode() != next_policy.access_mode()
-            || prior.current_revision.bucket_id != next.current_revision.bucket_id
-            || prior.current_revision.item_revision.checked_add(1)
-                != Some(next.current_revision.item_revision)
-        {
-            return Err(MutationError::new(MutationErrorKind::InvalidPlan));
-        }
-    }
-    Ok(())
-}
-
 fn touched_item_ids(operations: &[PolicyOperationV1]) -> BTreeSet<ItemId> {
     operations.iter().filter_map(operation_item_id).collect()
 }
@@ -828,129 +701,6 @@ fn operation_item_id(operation: &PolicyOperationV1) -> Option<ItemId> {
     }
 }
 
-fn transition_flags(
-    current: &PolicyState,
-    target: &PolicyState,
-    touched: &BTreeSet<ItemId>,
-    operations: &[PolicyOperationV1],
-) -> Result<(bool, bool, bool), MutationError> {
-    let mut direct_downgrade = false;
-    let mut witness_changed = false;
-    let mut witness_weakened = false;
-    let replacements = operations
-        .iter()
-        .filter_map(|operation| match operation {
-            PolicyOperationV1::PrincipalReplace {
-                prior_principal_id,
-                next_descriptor,
-                ..
-            } => Some((*prior_principal_id, next_descriptor.principal_id)),
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>();
-    for item_id in touched {
-        let Some(next) = target.item(item_id) else {
-            continue;
-        };
-        let prior = current.item(item_id);
-        let prior_direct_recipients = prior
-            .into_iter()
-            .flat_map(|item| &item.direct_slots)
-            .map(|slot| {
-                replacements
-                    .get(&slot.recipient_principal_id)
-                    .copied()
-                    .unwrap_or(slot.recipient_principal_id)
-            })
-            .collect::<BTreeSet<_>>();
-        let next_direct_recipients = next
-            .direct_slots
-            .iter()
-            .map(|slot| slot.recipient_principal_id)
-            .collect::<BTreeSet<_>>();
-        if (!next_direct_recipients.is_empty()
-            && !matches!(
-                prior.and_then(crate::policy::ItemPolicyState::access_mode),
-                Some(ItemAccessMode::DirectOnly | ItemAccessMode::Mixed)
-            ))
-            || next_direct_recipients
-                .iter()
-                .any(|principal| !prior_direct_recipients.contains(principal))
-        {
-            direct_downgrade = true;
-        }
-        let prior_digest = prior.and_then(witness_digest);
-        let next_digest = witness_digest(next);
-        if prior_digest != next_digest {
-            witness_changed |= prior_digest.is_some() || next_digest.is_some();
-            if let (Some(prior_digest), Some(next_digest)) = (prior_digest, next_digest) {
-                let prior_policy = current
-                    .witness_policy(prior_digest)
-                    .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidCurrentState))?;
-                let next_policy = target
-                    .witness_policy(next_digest)
-                    .ok_or_else(|| MutationError::new(MutationErrorKind::InvalidPlan))?;
-                witness_weakened |= witness_policy_is_weaker(prior_policy, next_policy);
-            }
-        }
-    }
-    Ok((direct_downgrade, witness_changed, witness_weakened))
-}
-
-fn witness_digest(item: &crate::policy::ItemPolicyState) -> Option<&Digest32> {
-    item.witnessed_state
-        .as_ref()
-        .and_then(|state| state.slots.first())
-        .map(|slot| &slot.witness_policy_digest)
-}
-
-fn witness_policy_is_weaker(prior: &WitnessPolicy, next: &WitnessPolicy) -> bool {
-    if next.witness_threshold < prior.witness_threshold {
-        return true;
-    }
-    prior.operation_rules.iter().any(|prior_rule| {
-        next.operation_rules
-            .iter()
-            .find(|next_rule| next_rule.operation == prior_rule.operation)
-            .is_none_or(|next_rule| {
-                next_rule.approval_threshold < prior_rule.approval_threshold
-                    || next_rule.allowed_request_lifetime_ms
-                        > prior_rule.allowed_request_lifetime_ms
-                    || next_rule.max_timeout_ms > prior_rule.max_timeout_ms
-                    || next_rule.max_output_bytes > prior_rule.max_output_bytes
-                    || next_rule.max_target_count > prior_rule.max_target_count
-                    || assurance_is_weaker(
-                        prior_rule.required_platform_assurance,
-                        next_rule.required_platform_assurance,
-                    )
-                    || eligible_set_is_broader(
-                        &prior_rule.eligible_approver_ids,
-                        &next_rule.eligible_approver_ids,
-                    )
-            })
-    })
-}
-
-fn assurance_is_weaker(
-    prior: crate::policy::PlatformAssurance,
-    next: crate::policy::PlatformAssurance,
-) -> bool {
-    matches!(
-        (prior, next),
-        (
-            crate::policy::PlatformAssurance::StableExecutableIdentity,
-            crate::policy::PlatformAssurance::NormalizedPathOnly
-        )
-    )
-}
-
-fn eligible_set_is_broader(
-    prior: &[jury_protocol::vault_v1::PrincipalId],
-    next: &[jury_protocol::vault_v1::PrincipalId],
-) -> bool {
-    next.iter().any(|id| !prior.contains(id))
-}
-
 fn reader_removed(current: &PolicyState, target: &PolicyState) -> bool {
     current.items.iter().any(|(item_id, _)| {
         let prior = current.effective_reader_ids(item_id);
@@ -961,50 +711,6 @@ fn reader_removed(current: &PolicyState, target: &PolicyState) -> bool {
 
 fn sha256(bytes: &[u8]) -> Digest32 {
     FixedBytes::new(Sha256::digest(bytes).into())
-}
-
-fn map_current_format_error(error: FormatError) -> MutationError {
-    MutationError::new(if is_capacity(error) {
-        MutationErrorKind::CapacityExhausted
-    } else {
-        MutationErrorKind::InvalidCurrentState
-    })
-}
-
-fn map_target_format_error(error: FormatError) -> MutationError {
-    MutationError::new(if is_capacity(error) {
-        MutationErrorKind::CapacityExhausted
-    } else {
-        MutationErrorKind::InvalidPlan
-    })
-}
-
-const fn is_capacity(error: FormatError) -> bool {
-    matches!(
-        error,
-        FormatError::ArtifactTooLarge | FormatError::CapacityExhausted(_)
-    )
-}
-
-fn map_replay_error(kind: PolicyErrorKind, current: bool) -> MutationError {
-    MutationError::new(match kind {
-        PolicyErrorKind::CapacityExhausted => MutationErrorKind::CapacityExhausted,
-        PolicyErrorKind::Unauthorized | PolicyErrorKind::InvalidRole if !current => {
-            MutationErrorKind::Unauthorized
-        }
-        _ if current => MutationErrorKind::InvalidCurrentState,
-        _ => MutationErrorKind::InvalidPlan,
-    })
-}
-
-fn map_policy_error(error: crate::policy::PolicyError) -> MutationError {
-    MutationError::new(match error.kind() {
-        PolicyErrorKind::CapacityExhausted => MutationErrorKind::CapacityExhausted,
-        PolicyErrorKind::Unauthorized | PolicyErrorKind::InvalidRole => {
-            MutationErrorKind::Unauthorized
-        }
-        _ => MutationErrorKind::InvalidPlan,
-    })
 }
 
 // Keep the public enum imported in rustdoc and make accidental operation
