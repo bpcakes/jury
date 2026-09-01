@@ -166,13 +166,21 @@ pub(super) struct AccessibleItem {
 pub(super) fn discover_accessible_items(
     context: &VaultPrincipalContext,
 ) -> Result<Vec<AccessibleItem>, CliError> {
-    let mut provider = DirectItemAccessProvider::new(&context.identity);
+    discover_accessible_items_in(&context.vault, &context.policy, &context.identity)
+}
+
+pub(super) fn discover_accessible_items_in(
+    vault: &VaultFileV1,
+    policy: &PolicyState,
+    identity: &VaultPrincipalIdentity,
+) -> Result<Vec<AccessibleItem>, CliError> {
+    let mut provider = DirectItemAccessProvider::new(identity);
     let mut items = Vec::new();
-    for (envelope_index, envelope) in context.vault.items.iter().enumerate() {
+    for (envelope_index, envelope) in vault.items.iter().enumerate() {
         let target = match RevisionAccessTarget::current(
-            &context.policy,
+            policy,
             envelope,
-            context.identity.principal_id(),
+            identity.principal_id(),
             ContentRole::Descriptor,
             Capability::Read,
         ) {
@@ -189,7 +197,7 @@ pub(super) fn discover_accessible_items(
             Err(_) => return Err(invalid_vault()),
         };
         let request = RevisionAccessRequest {
-            policy: &context.policy,
+            policy,
             envelope,
             target,
             capability: Capability::Read,
@@ -410,14 +418,14 @@ pub(super) fn confirm_expected_genesis(cli: &Cli, vault: &VaultFileV1) -> Result
 }
 
 pub(super) struct PrincipalStateInitialization<'a> {
-    state_root: &'a Path,
-    home: &'a VaultHomeLocation,
-    vault: &'a VaultFileV1,
-    local: &'a PrincipalLocalState,
-    candidate: &'a CheckpointCandidate,
-    principal_id: &'a PrincipalId,
-    timestamp: u64,
-    protection: ProtectionPolicy,
+    pub(super) state_root: &'a Path,
+    pub(super) home: &'a VaultHomeLocation,
+    pub(super) vault: &'a VaultFileV1,
+    pub(super) local: &'a PrincipalLocalState,
+    pub(super) candidate: &'a CheckpointCandidate,
+    pub(super) principal_id: &'a PrincipalId,
+    pub(super) timestamp: u64,
+    pub(super) protection: ProtectionPolicy,
 }
 
 pub(super) fn initialize_principal_state(

@@ -8,7 +8,7 @@ use std::path::Path;
 use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
     IdentitySelector, PreparedPrivateFile, PublicationOutcome, PublicationPolicy,
-    RepositoryLocation, list_named_identities, read_public_file,
+    RepositoryLocation, list_named_identities, preview_public_file, read_public_file,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -406,6 +406,30 @@ fn preview_and_publish_reject_destination_replacement() -> Result<(), Box<dyn Er
     let error = prepared.publish().err().ok_or("replacement should fail")?;
     assert_eq!(error.kind(), FilesystemErrorKind::IdentityChanged);
     assert_eq!(fs::read(output)?, b"attacker-replacement");
+    Ok(())
+}
+
+#[test]
+fn public_file_preview_publishes_encrypted_bytes_without_following_paths()
+-> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let output = temp.path().join("ExampleTransfer.json");
+    let precondition = preview_public_file(&output)?;
+    assert!(!precondition.destination_exists());
+    let contents = protected(b"ExampleEncryptedTransfer")?;
+    let publication =
+        PreparedPrivateFile::prepare_if_unchanged(precondition, &contents, false)?.publish()?;
+
+    assert_eq!(publication, PublicationOutcome::PublishedAndSynced);
+    assert_eq!(fs::read(&output)?, b"ExampleEncryptedTransfer");
+    assert_eq!(fs::metadata(&output)?.permissions().mode() & 0o777, 0o644);
+    assert_eq!(
+        preview_public_file(Path::new("relative-transfer.json"))
+            .err()
+            .ok_or("relative public destination should fail")?
+            .kind(),
+        FilesystemErrorKind::Traversal
+    );
     Ok(())
 }
 

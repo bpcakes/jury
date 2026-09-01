@@ -22,6 +22,7 @@ The native Linux CLI currently handles:
 - controlled read and template-injection sinks;
 - privacy cover and local audit verification;
 - direct transparent execution and bounded brokered execution;
+- signed portable-ciphertext export, inspection, and strict import;
 - public history and capacity status.
 
 Representative commands:
@@ -46,6 +47,10 @@ $ jury run --env TOKEN=ExampleItem.ExampleField --timeout 300 -- example-command
 $ jury privacy cover --item ExampleItem
 $ jury vault audit verify
 $ jury history status
+$ jury transfer export --out /absolute/path/ExampleTransfer.json
+$ jury transfer inspect --in /absolute/path/ExampleTransfer.json
+$ jury transfer import --in /absolute/path/ExampleTransfer.json --dry-run
+$ jury transfer status
 ```
 
 Inside a Git worktree, `jury vault init` writes only the encrypted
@@ -55,12 +60,16 @@ and state roots. This storage layout is pre-alpha plumbing, not evidence that
 Jury protects secrets.
 
 The CLI can configure a witnessed-only policy, but witnessed requests,
-approvals, and open execution remain J22 work. The current CLI stores signed
-public role descriptors and policy bodies in local state; J16 and J23 own
-their portable distribution. A copied vault cannot validate its witnessed
-policy without that local catalog and therefore fails closed. Successful
-`policy require witnessed` output repeats this limitation. A witnessed-only
-configuration is not yet an operational secret-access path.
+approvals, and open execution remain J22 work. `jury transfer export` packages
+the exact encrypted vault with the bounded public policy catalog required for
+fresh validation; it does not include identities, audit, checkpoints, receipts,
+or plaintext names. Public inspection is value-free by default, and import
+accepts only a first installation, an identical artifact, or a complete
+authenticated strict descendant. It never merges branches. `transfer status`
+describes only the selected identity's last successful local export and never
+claims delivery or synchronization. J23 separately owns portable witness-service
+recovery. A witnessed-only configuration is not yet an operational
+secret-access path.
 
 Jury generates registration descriptors, challenges, and proofs as canonical
 JSON artifacts. They are not editable configuration. Jury rejects reformatted

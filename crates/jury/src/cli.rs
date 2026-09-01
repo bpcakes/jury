@@ -21,7 +21,7 @@ use jury_core::item::{
 };
 use jury_core::local_state::{
     AuditAction, AuditEventDraft, AuditItemScope, AuditOutcome, CheckpointCandidate,
-    CheckpointRelation, PrincipalLocalState,
+    CheckpointRelation, PrincipalLocalState, ReceiptUpdate, TransferReceipt,
 };
 use jury_core::mutation::{DirectDowngradeAcknowledgement, MutationKind, VaultMutationPlan};
 use jury_core::policy::{
@@ -32,14 +32,19 @@ use jury_core::registration::{
     RegistrationChallengeV1, RegistrationCreator, RegistrationErrorKind, RegistrationProofV1,
     RegistrationRoleDescriptorV1, answer_challenge, verify_proof,
 };
+use jury_core::transfer::{
+    ArtifactRelation, TransferCreator, TransferPublicCatalogV1, ValidatedTransfer,
+    compare_artifacts, item_deltas,
+};
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, PreparedPrivateFile,
     PrincipalStateFile, PublicationOutcome, PublicationPolicy, RepositoryLocation,
-    VaultStateDirectory, VaultStateFile, list_named_identities, read_public_file,
-    resolve_linux_state_root,
+    VaultStateDirectory, VaultStateFile, list_named_identities, preview_public_file,
+    read_public_file, resolve_linux_state_root,
 };
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::identity_v1::{IdentityFileV1, KdfProfile, MAX_IDENTITY_FILE_BYTES};
+use jury_protocol::transfer_v1::MAX_TRANSFER_BYTES;
 use jury_protocol::vault_v1::{
     AccessRole, ContentRole, Digest32, ItemAccessMode, ItemDescriptorV1, ItemEnvelopeV1,
     ItemFieldKind, ItemFieldV1, ItemFieldValue, ItemKind, ItemStateV1, MAX_FIELD_VALUE_BYTES,
@@ -61,7 +66,7 @@ pub use self::output::{CliError, CliErrorKind, CommandOutput, FieldSummary, Iden
 use self::{
     access_commands::*, context::*, execution_commands::*, identity_commands::*, item_commands::*,
     mutation_commands::*, policy_commands::*, principal_commands::*, support::*,
-    template_commands::*, vault_commands::*,
+    template_commands::*, transfer_commands::*, vault_commands::*,
 };
 
 mod access_commands;
@@ -76,6 +81,7 @@ mod policy_commands;
 mod principal_commands;
 mod support;
 mod template_commands;
+mod transfer_commands;
 mod vault_commands;
 
 const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: do not use with real secrets";
@@ -178,6 +184,11 @@ pub enum Command {
     History {
         #[command(subcommand)]
         command: HistoryCommand,
+    },
+    /// Export, inspect, and import authenticated portable ciphertext.
+    Transfer {
+        #[command(subcommand)]
+        command: TransferCommand,
     },
     /// Resolve one field to an explicitly selected private sink.
     Read(ReadArgs),
@@ -448,6 +459,47 @@ pub enum AuditCommand {
 pub enum HistoryCommand {
     /// Report value-free public capacity usage and remaining headroom.
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TransferCommand {
+    /// Export the exact validated shared ciphertext artifact.
+    Export(TransferExportArgs),
+    /// Inspect and optionally compare a transfer without mutating state.
+    Inspect(TransferInspectArgs),
+    /// Import an identical artifact or complete authenticated strict descendant.
+    Import(TransferImportArgs),
+    /// Compare current state with this identity's last local export receipt.
+    Status,
+}
+
+#[derive(Debug, Args)]
+pub struct TransferExportArgs {
+    #[arg(long, value_name = "FILE")]
+    pub out: PathBuf,
+    #[arg(long)]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TransferInspectArgs {
+    #[arg(long = "in", value_name = "FILE")]
+    pub input: PathBuf,
+    #[arg(long)]
+    pub against_current: bool,
+    #[arg(long)]
+    pub me: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TransferImportArgs {
+    #[arg(long = "in", value_name = "FILE")]
+    pub input: PathBuf,
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Permit a first installation when this identity has no effective item access.
+    #[arg(long)]
+    pub allow_no_access: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -861,6 +913,34 @@ mod tests {
             assert!(help.contains("authorized child can copy or retain"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn transfer_commands_require_artifact_path_options() {
+        let parsed = Cli::try_parse_from([
+            "jury",
+            "transfer",
+            "import",
+            "--in",
+            "/tmp/ExampleTransfer.json",
+            "--dry-run",
+            "--allow-no-access",
+        ]);
+        assert!(matches!(
+            parsed,
+            Ok(Cli {
+                command: Command::Transfer {
+                    command: TransferCommand::Import(TransferImportArgs {
+                        dry_run: true,
+                        allow_no_access: true,
+                        ..
+                    })
+                },
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["jury", "transfer", "inspect", "--against-current"]).is_err());
+        assert!(Cli::try_parse_from(["jury", "transfer", "export"]).is_err());
     }
 
     #[test]

@@ -22,6 +22,14 @@ pub struct RepositoryLocation {
 }
 
 impl RepositoryLocation {
+    /// Whether an already syntax-validated absolute path names this
+    /// repository's shared Jury artifact. Used to reject transfer self-aliases
+    /// before any credential capture.
+    #[must_use]
+    pub fn is_encrypted_shared_artifact_path(&self, path: &Path) -> bool {
+        path == self.worktree.absolute.join(".jury/vault.json")
+    }
+
     /// Discovers the nearest ordinary or linked Git worktree without following
     /// user-controlled path components or marker links.
     pub fn discover(start: &Path) -> Result<Self, FilesystemError> {

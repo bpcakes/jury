@@ -136,6 +136,118 @@ fn empty_and_wrong_owner_plans_are_typed_and_write_free() -> TestResult {
 }
 
 #[test]
+fn transfer_plan_accepts_only_the_exact_incoming_descendant_bytes() -> TestResult {
+    let (owner, current) = fixture()?;
+    let incoming = VaultMutationPlan::prepare_policy(
+        &current,
+        &[],
+        &owner,
+        20,
+        vec![PolicyOperationV1::PrincipalLabelChange {
+            principal_id: owner.principal_id(),
+            prior_label: "owner".to_owned(),
+            next_label: "incoming-owner".to_owned(),
+        }],
+        DirectDowngradeAcknowledgement::Absent,
+        MutationKind::Policy,
+    )?
+    .target_artifact()
+    .clone();
+    let independent = VaultMutationPlan::prepare_policy(
+        &current,
+        &[],
+        &owner,
+        20,
+        vec![PolicyOperationV1::PrincipalLabelChange {
+            principal_id: owner.principal_id(),
+            prior_label: "owner".to_owned(),
+            next_label: "independent-owner".to_owned(),
+        }],
+        DirectDowngradeAcknowledgement::Absent,
+        MutationKind::Policy,
+    )?
+    .target_artifact()
+    .clone();
+
+    assert_eq!(
+        VaultMutationPlan::preflight_transfer_import(&current, &current, &[])?,
+        crate::transfer::ArtifactRelation::Identical
+    );
+    assert_eq!(
+        VaultMutationPlan::preflight_transfer_import(&current, &incoming, &[])?,
+        crate::transfer::ArtifactRelation::IncomingStrictDescendant
+    );
+    assert!(matches!(
+        VaultMutationPlan::preflight_transfer_import(&incoming, &current, &[]),
+        Err(error) if error.kind() == MutationErrorKind::TransferBehind
+    ));
+    assert!(matches!(
+        VaultMutationPlan::preflight_transfer_import(&incoming, &independent, &[]),
+        Err(error) if error.kind() == MutationErrorKind::TransferDiverged
+    ));
+
+    let plan = VaultMutationPlan::prepare_transfer_import(
+        &current,
+        &incoming,
+        &[],
+        owner.principal_id(),
+        30,
+    )?
+    .ok_or("strict descendant did not produce a plan")?;
+    assert_eq!(plan.target_artifact(), &incoming);
+    assert_eq!(plan.target_bytes(), incoming.to_json_bytes()?);
+    assert_eq!(plan.kind, MutationKind::TransferImport);
+    assert!(!plan.warnings().redistribution_required);
+    assert!(plan.warnings().pending_witness_requests_invalidated);
+    Ok(())
+}
+
+#[test]
+fn transfer_preflight_rejects_a_direct_slot_introduction() -> TestResult {
+    let (owner, current) = fixture()?;
+    let policy = replay_policy_with_witness_policies(&current.policy, &[])?;
+    let mut items = ItemCreator::new(ProtectionPolicy::EmergencyAllowDegraded);
+    let prepared_item = items.prepare_create(
+        &policy,
+        &owner,
+        20,
+        NewItem {
+            kind: ItemKind::Canonical,
+            descriptor: ItemDescriptorV1::new("ExampleDirectItem".to_owned())?,
+            state: ItemStateV1 {
+                plaintext_schema: 1,
+                fields: Vec::new(),
+            },
+            bucket_id: 1,
+            access: ItemAccessPlan {
+                grants: Vec::new(),
+                direct_recipient_ids: vec![owner.principal_id()],
+                witness_policy_digest: None,
+            },
+        },
+        &ItemArtifactInventory::default(),
+    )?;
+    let incoming = VaultMutationPlan::prepare_item_batch(
+        &current,
+        &[],
+        &owner,
+        20,
+        Vec::new(),
+        vec![prepared_item],
+        DirectDowngradeAcknowledgement::Acknowledged,
+        MutationKind::Item,
+    )?
+    .target_artifact()
+    .clone();
+
+    assert!(matches!(
+        VaultMutationPlan::preflight_transfer_import(&current, &incoming, &[]),
+        Err(error) if error.kind() == MutationErrorKind::TransferDowngrade
+    ));
+    Ok(())
+}
+
+#[test]
 fn prepared_item_batch_publishes_policy_and_envelope_as_one_artifact() -> TestResult {
     let (owner, current) = fixture()?;
     let policy = replay_policy_with_witness_policies(&current.policy, &[])?;

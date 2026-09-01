@@ -18,6 +18,7 @@ pub mod registration;
 #[cfg(test)]
 mod registration_tests;
 pub mod session;
+pub mod transfer;
 pub mod witness_engine;
 
 /// Human-readable product name.

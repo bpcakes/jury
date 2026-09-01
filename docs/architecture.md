@@ -167,12 +167,25 @@ documented public policy, principal/grant, size-bucket, and revision-activity
 metadata in a repository.
 
 The Linux CLI currently implements deterministic repository/global/explicit
-home selection, portable identity initialization and public-header status, and
-empty genesis-vault initialization/public status. Repository initialization
-creates only the encrypted artifact plus the fixed `.gitattributes` rule;
-identity and local checkpoint/audit/receipt files are created outside the
-worktree. Administrative item, policy, read, inject, and witnessed workflows
-remain incomplete and are not implied by this storage foundation.
+home selection, portable identity initialization and status, vault and item
+administration, guarded read/inject/execute paths, witnessed policy workflows,
+and portable ciphertext transfer. Repository initialization creates only the
+encrypted artifact plus the fixed `.gitattributes` rule; identity and local
+checkpoint/audit/receipt files remain outside the worktree. This is pre-alpha
+functionality, not a claim that Jury protects secrets or that the intended
+release has shipped.
+
+`jury transfer export` writes a signed, bounded envelope containing the exact
+canonical encrypted vault plus the public policy catalog needed for fresh
+validation. It never includes identity-private bytes, local audit, checkpoints,
+or receipts. `jury transfer inspect` validates the envelope without an identity
+and reports only public identifiers, counts, ancestry, and opaque item revision
+deltas; `--me` may add names only for items the selected identity can directly
+open. Import installs the exact incoming bytes only for a first installation,
+an identical artifact, or a complete authenticated strict descendant. It does
+not perform textual or semantic merge. A raw copy moves the same portable
+ciphertext without the transfer signature or local export receipt; neither a
+copy nor `transfer status` proves delivery, recipient possession, or sync.
 
 ## Intended access modes
 

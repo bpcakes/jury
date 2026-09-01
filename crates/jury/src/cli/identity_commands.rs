@@ -201,9 +201,9 @@ pub(super) const MAX_REGISTRATION_FILE_BYTES: usize = 16 * 1024;
 pub(super) const REGISTRATION_CHALLENGE_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 
 pub(super) struct UnlockedIdentityContext {
-    home: VaultHomeLocation,
-    identity: UnlockedIdentity,
-    protection_degraded: bool,
+    pub(super) home: VaultHomeLocation,
+    pub(super) identity: UnlockedIdentity,
+    pub(super) protection_degraded: bool,
 }
 
 pub(super) fn unlock_selected_identity(

@@ -47,6 +47,18 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::History {
             command: HistoryCommand::Status,
         } => vault_status(&cli, &environment, &current, "history-status"),
+        Command::Transfer {
+            command: TransferCommand::Export(arguments),
+        } => transfer_export(&cli, arguments, &environment, &current, protection),
+        Command::Transfer {
+            command: TransferCommand::Inspect(arguments),
+        } => transfer_inspect(&cli, arguments, &environment, &current, protection),
+        Command::Transfer {
+            command: TransferCommand::Import(arguments),
+        } => transfer_import(&cli, arguments, &environment, &current, protection),
+        Command::Transfer {
+            command: TransferCommand::Status,
+        } => transfer_status(&cli, &environment, &current, protection),
         Command::Item {
             command: ItemCommand::Create(arguments),
         } => item_create(&cli, arguments, &environment, &current, protection),

@@ -270,11 +270,7 @@ impl MutationCommitTarget<'_> {
         if self.local.scope().vault_id() != plan.target_artifact().header.vault_id
             || self.local.scope().genesis_fingerprint()
                 != &plan.target_artifact().header.genesis_fingerprint
-            || self.local.scope().principal_id()
-                != plan.target_artifact().policy.revisions.last().map_or(
-                    plan.target_artifact().policy.genesis.owner.principal_id,
-                    |revision| revision.author_principal_id,
-                )
+            || self.local.scope().principal_id() != plan.acting_principal_id()
         {
             return Err(MutationCommitError::new(
                 MutationCommitErrorKind::InvalidLocalState,

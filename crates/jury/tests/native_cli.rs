@@ -19,6 +19,9 @@ mod native_cli_execution;
 #[path = "native_cli/plaintext.rs"]
 mod native_cli_plaintext;
 
+#[path = "native_cli/transfer.rs"]
+mod native_cli_transfer;
+
 #[path = "native_cli/support.rs"]
 mod support;
 

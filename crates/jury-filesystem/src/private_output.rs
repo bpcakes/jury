@@ -228,6 +228,36 @@ pub(crate) fn preview_encrypted_shared_artifact(
     preview_with_visibility(parent, name, FileVisibility::PublicEncryptedArtifact)
 }
 
+/// Retains a bounded public-file destination selected by an absolute direct
+/// path. The parent is opened once and the leaf is never followed.
+pub fn preview_public_file(path: &Path) -> Result<PrivateFilePrecondition, FilesystemError> {
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::Traversal,
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Traversal)
+    })?;
+    let name = path.file_name().ok_or_else(|| {
+        FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Traversal)
+    })?;
+    let directory = crate::capability::open_absolute_dir(parent, FilesystemOperation::Preview)?;
+    preview_with_visibility(
+        &directory.dir,
+        Path::new(name),
+        FileVisibility::PublicEncryptedArtifact,
+    )
+}
+
 fn preview_with_visibility(
     parent: &Dir,
     name: &Path,

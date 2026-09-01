@@ -33,6 +33,9 @@ pub enum MutationErrorKind {
     DirectDowngradeRequiresAcknowledgement,
     MissingItemEnvelope,
     UnexpectedItemEnvelope,
+    TransferBehind,
+    TransferDiverged,
+    TransferDowngrade,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -77,6 +80,11 @@ impl fmt::Display for MutationError {
             MutationErrorKind::UnexpectedItemEnvelope => {
                 "vault mutation contains an unexpected item envelope"
             }
+            MutationErrorKind::TransferBehind => "incoming transfer is behind local state",
+            MutationErrorKind::TransferDiverged => "incoming transfer diverges from local state",
+            MutationErrorKind::TransferDowngrade => {
+                "incoming transfer weakens direct or witnessed authority"
+            }
         })
     }
 }
@@ -97,6 +105,7 @@ pub enum MutationKind {
     Policy,
     Item,
     PrivacyCover,
+    TransferImport,
 }
 
 impl MutationKind {
@@ -105,6 +114,7 @@ impl MutationKind {
             Self::Policy => AuditAction::PolicyMutation,
             Self::Item => AuditAction::ItemMutation,
             Self::PrivacyCover => AuditAction::PrivacyCover,
+            Self::TransferImport => AuditAction::Transfer,
         }
     }
 }
@@ -137,9 +147,103 @@ pub struct VaultMutationPlan {
     timestamp_ms: u64,
     touched_items: Vec<ItemId>,
     warnings: MutationWarnings,
+    acting_principal_id: jury_protocol::vault_v1::PrincipalId,
 }
 
 impl VaultMutationPlan {
+    /// Performs the complete no-write ancestry and downgrade preflight used by
+    /// both dry-run and durable transfer import.
+    pub fn preflight_transfer_import(
+        current: &VaultFileV1,
+        incoming: &VaultFileV1,
+        witness_policies: &[WitnessPolicy],
+    ) -> Result<crate::transfer::ArtifactRelation, MutationError> {
+        let current_policy = validate_complete(current, witness_policies, true)?;
+        let target_policy = validate_complete(incoming, witness_policies, false)?;
+        let relation = crate::transfer::compare_artifacts(current, incoming);
+        match relation {
+            crate::transfer::ArtifactRelation::Identical => return Ok(relation),
+            crate::transfer::ArtifactRelation::LocalStrictDescendant => {
+                return Err(MutationError::new(MutationErrorKind::TransferBehind));
+            }
+            crate::transfer::ArtifactRelation::Divergent => {
+                return Err(MutationError::new(MutationErrorKind::TransferDiverged));
+            }
+            crate::transfer::ArtifactRelation::IncomingStrictDescendant => {}
+        }
+        let suffix_operations = incoming.policy.revisions[current.policy.revisions.len()..]
+            .iter()
+            .flat_map(|revision| revision.operations.iter().cloned())
+            .collect::<Vec<_>>();
+        let touched_items = touched_item_ids(&suffix_operations);
+        validate_envelope_delta(current, incoming, &current_policy, &target_policy)?;
+        let (direct_downgrade, _, weakened_witness) = transition_flags(
+            &current_policy,
+            &target_policy,
+            &touched_items,
+            &suffix_operations,
+        )?;
+        if direct_downgrade || weakened_witness {
+            return Err(MutationError::new(MutationErrorKind::TransferDowngrade));
+        }
+        Ok(relation)
+    }
+
+    /// Plans publication of one already-authenticated incoming artifact.
+    ///
+    /// No merged candidate is constructed: identical input is a no-op and the
+    /// only accepted replacement is the exact incoming strict descendant.
+    pub fn prepare_transfer_import(
+        current: &VaultFileV1,
+        incoming: &VaultFileV1,
+        witness_policies: &[WitnessPolicy],
+        acting_principal_id: jury_protocol::vault_v1::PrincipalId,
+        timestamp_ms: u64,
+    ) -> Result<Option<Self>, MutationError> {
+        Self::preflight_transfer_import(current, incoming, witness_policies)?;
+        let current_policy = validate_complete(current, witness_policies, true)?;
+        let target_policy = validate_complete(incoming, witness_policies, false)?;
+        if target_policy.principal(&acting_principal_id).is_none() {
+            return Err(MutationError::new(MutationErrorKind::Unauthorized));
+        }
+        if current == incoming {
+            return Ok(None);
+        }
+
+        let source_bytes = current.to_json_bytes().map_err(map_current_format_error)?;
+        let target_bytes = incoming.to_json_bytes().map_err(map_target_format_error)?;
+        let suffix_operations = incoming.policy.revisions[current.policy.revisions.len()..]
+            .iter()
+            .flat_map(|revision| revision.operations.iter().cloned())
+            .collect::<Vec<_>>();
+        let touched_items = touched_item_ids(&suffix_operations);
+        let target_digest = sha256(&target_bytes);
+        let external_credential_rotation_required = reader_removed(&current_policy, &target_policy);
+        Ok(Some(Self {
+            precondition: VaultRevisionPrecondition {
+                vault_digest: sha256(&source_bytes),
+                policy_sequence: current_policy.sequence(),
+                policy_revision_hash: current_policy.terminal_revision_hash().clone(),
+                repository_ancestry: None,
+            },
+            target: incoming.clone(),
+            target_bytes,
+            target_digest,
+            target_policy,
+            witness_policies: witness_policies.to_vec(),
+            kind: MutationKind::TransferImport,
+            timestamp_ms,
+            touched_items: touched_items.into_iter().collect(),
+            warnings: MutationWarnings {
+                redistribution_required: false,
+                external_credential_rotation_required,
+                pending_witness_requests_invalidated: true,
+                item_quorum_claim_suppressed: false,
+            },
+            acting_principal_id,
+        }))
+    }
+
     /// Plans one policy-only revision after validating the complete current
     /// public artifact and all authenticated item ancestry.
     #[allow(clippy::too_many_arguments)]
@@ -335,6 +439,7 @@ impl VaultMutationPlan {
             }
         }
 
+        let acting_principal_id = prepared.revision.author_principal_id;
         let mut target = current.clone();
         target.policy.revisions.push(prepared.revision);
         target
@@ -402,6 +507,7 @@ impl VaultMutationPlan {
             timestamp_ms,
             touched_items: touched_items.into_iter().collect(),
             warnings,
+            acting_principal_id,
         })
     }
 
@@ -451,6 +557,11 @@ impl VaultMutationPlan {
     #[must_use]
     pub const fn warnings(&self) -> &MutationWarnings {
         &self.warnings
+    }
+
+    #[must_use]
+    pub const fn acting_principal_id(&self) -> jury_protocol::vault_v1::PrincipalId {
+        self.acting_principal_id
     }
 
     pub fn audit_intent(&self) -> AuditEventDraft {

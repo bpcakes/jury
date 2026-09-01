@@ -365,6 +365,21 @@ pub(super) fn map_mutation_error(kind: jury_core::mutation::MutationErrorKind) -
             "no-change",
             "the requested mutation makes no change",
         ),
+        MutationErrorKind::TransferBehind => CliError::new(
+            CliErrorKind::Conflict,
+            "transfer-behind",
+            "the incoming transfer is behind retained local state",
+        ),
+        MutationErrorKind::TransferDiverged => CliError::new(
+            CliErrorKind::Conflict,
+            "transfer-diverged",
+            "the incoming transfer diverges from retained local state",
+        ),
+        MutationErrorKind::TransferDowngrade => CliError::new(
+            CliErrorKind::Conflict,
+            "transfer-authority-downgrade",
+            "the incoming transfer weakens direct or witnessed authority",
+        ),
         _ => invalid_vault(),
     }
 }
