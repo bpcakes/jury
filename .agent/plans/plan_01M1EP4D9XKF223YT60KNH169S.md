@@ -40,7 +40,7 @@ code may depend on this plan.
 - [x] Make first-install import deterministic, recoverable, and shared-artifact-last.
 - [x] Separate bounded public export from protected-memory publication and contain destinations.
 - [x] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
-- [ ] Run the full repository gates, review the commit series, close J16, and finish this plan.
+- [x] Run the full repository gates, review the commit series, close J16, and finish this plan.
 
 ## Surprises & Discoveries
 
@@ -56,6 +56,11 @@ code may depend on this plan.
 - The shared local/portable catalog type was itself a boundary mistake: local caches
   need legacy readability, while a signed portable artifact must carry the full
   registration proof whose digest is authenticated by policy history.
+- The first full work check exposed four touched modules above the repository's
+  800-line review threshold and one above the 1,000-line hard limit. The excess was
+  structural accumulation, so cohesive argument, environment, transfer-state,
+  trust-confirmation, validation, transition, error-mapping, and test modules were
+  extracted without changing behavior.
 
 ## Decision Log
 
@@ -90,16 +95,23 @@ code may depend on this plan.
 - Treat public artifact publication as the export commit point. A later receipt
   failure is a successful export with an explicit false receipt field, not an
   ordinary error that invites blind overwrite/retry.
+- Keep the LOC repair behavior-preserving: move cohesive existing items into private
+  child modules, preserve visibility and call paths, and avoid introducing a new
+  abstraction merely to satisfy the counter.
 
 ## Outcomes & Retrospective
 
 DU-001 through DU-014 are consolidated without merging the intentional wire/domain,
 local-document schema, JSON-format, filesystem-capability, or process-safety
-boundaries. Focused crate tests, exact frozen-vector tests, formatting, Clippy,
-workspace tests, the repository contract, and the aggregate `verify` profile passed
-for that refactor slice. The follow-up duplicate scan finds the former parallel
-owners removed; the remaining highest-scored similarities are thin format-specific
-adapters over the shared mechanics. Transfer-review repair work continues below.
+boundaries. The transfer review repairs now bind portable registration evidence,
+make first installation recoverable with the shared vault as the last commit point,
+separate public ciphertext output from protected secret memory, contain export
+destinations, and report post-publication receipt failures as committed outcomes.
+The LOC repair split cohesive private modules instead of weakening the configured
+limit. Focused crate tests, exact frozen-vector tests, formatting, Clippy, workspace
+tests, the repository contract, the Rust LOC gate, and the aggregate `verify` profile
+all pass on the final source commit. The final diff check reports no whitespace
+errors, and the commit series keeps each repair slice independently reviewable.
 
 ## Context and orientation
 
