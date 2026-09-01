@@ -39,7 +39,7 @@ pub(super) fn transfer_export(
     .map_err(map_filesystem_error)?
     .publish()
     .map_err(map_filesystem_error)?;
-    record_transfer_receipt(
+    let local_export_receipt_recorded = record_transfer_receipt(
         &context,
         TransferReceipt {
             transfer_id: envelope.transfer_id.clone(),
@@ -48,7 +48,26 @@ pub(super) fn transfer_export(
             output_digest,
         },
         protection,
-    )?;
+    )
+    .is_ok();
+    let mut lines = vec![
+        format!(
+            "Transfer exported: {}",
+            hex(envelope.transfer_id.as_bytes())
+        ),
+        format!(
+            "Public revision: {}",
+            grouped(&hex(envelope.source_public_revision_hash.as_bytes()))
+        ),
+        format!("Durability: {}", durability(publication)),
+        "This records a local export only; delivery to another recipient is not claimed."
+            .to_owned(),
+    ];
+    if !local_export_receipt_recorded {
+        lines.push(
+            "The artifact was published, but its local export receipt was not recorded.".to_owned(),
+        );
+    }
     Ok(CommandOutput::Safe {
         operation: "transfer-export",
         fields: serde_json::json!({
@@ -59,22 +78,10 @@ pub(super) fn transfer_export(
             "exporting_principal_id": hex(envelope.exporting_principal_id.as_bytes()),
             "artifact_bytes": bytes.len(),
             "durability": durability(publication),
-            "local_export_receipt_recorded": true,
+            "local_export_receipt_recorded": local_export_receipt_recorded,
             "delivery_claimed": false,
         }),
-        lines: vec![
-            format!(
-                "Transfer exported: {}",
-                hex(envelope.transfer_id.as_bytes())
-            ),
-            format!(
-                "Public revision: {}",
-                grouped(&hex(envelope.source_public_revision_hash.as_bytes()))
-            ),
-            format!("Durability: {}", durability(publication)),
-            "This records a local export only; delivery to another recipient is not claimed."
-                .to_owned(),
-        ],
+        lines,
     })
 }
 
@@ -129,14 +136,17 @@ pub(super) fn transfer_inspect(
                 "transfer name inspection requires a vault-principal identity",
             ));
         };
-        let mut names = accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
-        if let Some(local) = &local {
+        let incoming_names = accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
+        let mut names = if let Some(local) = &local {
             let catalog = load_policy_catalog_for_vault(environment, &home, local)?;
             let policy =
                 replay_policy_with_witness_policies(&local.policy, &catalog.witness_policies)
                     .map_err(|_| invalid_vault())?;
-            names.extend(accessible_name_map(local, &policy, &identity)?);
-        }
+            accessible_name_map(local, &policy, &identity)?
+        } else {
+            BTreeMap::new()
+        };
+        names.extend(incoming_names);
         names
     } else {
         BTreeMap::new()
@@ -860,8 +870,12 @@ fn relation_label(relation: ArtifactRelation) -> &'static str {
 }
 
 fn map_transfer_error(error: jury_core::transfer::TransferError) -> CliError {
+    map_transfer_error_kind(error.kind())
+}
+
+fn map_transfer_error_kind(kind: jury_core::transfer::TransferErrorKind) -> CliError {
     use jury_core::transfer::TransferErrorKind;
-    match error.kind() {
+    match kind {
         TransferErrorKind::UnauthorizedExporter => CliError::new(
             CliErrorKind::AuthenticationFailed,
             "unauthorized-transfer-exporter",
@@ -874,6 +888,16 @@ fn map_transfer_error(error: jury_core::transfer::TransferError) -> CliError {
                 "required transfer protection is unavailable",
             )
         }
+        TransferErrorKind::InvalidCatalog => CliError::new(
+            CliErrorKind::InvalidVault,
+            "invalid-transfer-catalog",
+            "the transfer public policy evidence is invalid",
+        ),
+        TransferErrorKind::CapacityExhausted => CliError::new(
+            CliErrorKind::Conflict,
+            "transfer-capacity-exhausted",
+            "the transfer exceeds its hard format capacity",
+        ),
         _ => invalid_transfer(),
     }
 }
@@ -914,6 +938,7 @@ fn sha256_digest(bytes: &[u8]) -> Digest32 {
 mod tests {
     use super::*;
     use jury_core::mutation::MutationErrorKind;
+    use jury_core::transfer::TransferErrorKind;
 
     #[test]
     fn transfer_import_overrides_only_the_incoming_identity_error() {
@@ -938,5 +963,25 @@ mod tests {
                 map_mutation_error(kind)
             );
         }
+    }
+
+    #[test]
+    fn transfer_catalog_and_capacity_errors_remain_typed_at_the_cli_boundary() {
+        assert_eq!(
+            map_transfer_error_kind(TransferErrorKind::InvalidCatalog),
+            CliError::new(
+                CliErrorKind::InvalidVault,
+                "invalid-transfer-catalog",
+                "the transfer public policy evidence is invalid",
+            )
+        );
+        assert_eq!(
+            map_transfer_error_kind(TransferErrorKind::CapacityExhausted),
+            CliError::new(
+                CliErrorKind::Conflict,
+                "transfer-capacity-exhausted",
+                "the transfer exceeds its hard format capacity",
+            )
+        );
     }
 }

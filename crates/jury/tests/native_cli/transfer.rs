@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use jury_filesystem::{RepositoryLocation, VaultStateDirectory};
 use jury_protocol::transfer_v1::TransferEnvelopeV1;
 
 use super::*;
@@ -127,6 +128,27 @@ fn export(paths: NativePaths<'_>, destination: &Path) -> TestResult<serde_json::
         ],
         b"ExamplePass1234\n",
     )?)
+}
+
+fn assert_published_export_reports_unrecorded_receipt(
+    paths: NativePaths<'_>,
+    destination: &Path,
+) -> TestResult {
+    let vault = VaultFileV1::parse(&fs::read(paths.repository.join(".jury/vault.json"))?)?;
+    let repository = RepositoryLocation::discover(paths.repository)?;
+    let state = VaultStateDirectory::open_existing(
+        &paths.state.join("jury/vaults"),
+        vault.header.vault_id.as_bytes(),
+        vault.header.genesis_fingerprint.as_bytes(),
+        &[&repository],
+    )?;
+    let lock = state.try_lock()?;
+
+    let output = export(paths, destination)?;
+    assert_eq!(output["local_export_receipt_recorded"], false);
+    assert!(destination.is_file());
+    drop(lock);
+    Ok(())
 }
 
 fn assert_portable_export(
@@ -474,6 +496,11 @@ fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestRe
     let genesis = vault["genesis_fingerprint"]
         .as_str()
         .ok_or("vault output lacks a genesis fingerprint")?;
+
+    assert_published_export_reports_unrecorded_receipt(
+        source,
+        &temporary.path().join("unrecorded.jury-transfer.json"),
+    )?;
 
     let base_path = temporary.path().join("base.jury-transfer.json");
     let base = export(source, &base_path)?;

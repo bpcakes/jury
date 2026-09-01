@@ -41,6 +41,12 @@ pub struct TransferEnvelopeV1 {
     pub exporter_signature: Signature64,
 }
 
+/// A canonical transfer envelope paired with its already-validated inner vault.
+pub struct ParsedTransferEnvelopeV1 {
+    envelope: TransferEnvelopeV1,
+    vault: VaultFileV1,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransferFormatError {
     ArtifactTooLarge,
@@ -76,17 +82,15 @@ const fn map_json_error(error: JsonError) -> TransferFormatError {
 
 impl TransferEnvelopeV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, TransferFormatError> {
-        artifact::validate_json_input(bytes, MAX_TRANSFER_BYTES).map_err(map_json_error)?;
-        let envelope: Self = artifact::deserialize_json(bytes).map_err(map_json_error)?;
-        envelope.validate_shape()?;
-        if envelope.to_json_bytes()? != bytes {
-            return Err(TransferFormatError::NonCanonicalJson);
-        }
-        Ok(envelope)
+        ParsedTransferEnvelopeV1::parse(bytes).map(Self::from)
     }
 
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, TransferFormatError> {
         self.validate_shape()?;
+        self.canonical_json_bytes()
+    }
+
+    fn canonical_json_bytes(&self) -> Result<Vec<u8>, TransferFormatError> {
         artifact::pretty_json_bytes(self, MAX_TRANSFER_BYTES).map_err(map_json_error)
     }
 
@@ -106,7 +110,7 @@ impl TransferEnvelopeV1 {
         output
     }
 
-    fn validate_shape(&self) -> Result<(), TransferFormatError> {
+    fn validate_shape(&self) -> Result<VaultFileV1, TransferFormatError> {
         if self.magic != "jury-transfer" || self.version != 1 {
             return Err(TransferFormatError::Invalid("unknown magic or version"));
         }
@@ -142,7 +146,31 @@ impl TransferEnvelopeV1 {
         {
             return Err(TransferFormatError::Invalid("source metadata differs"));
         }
-        Ok(())
+        Ok(vault)
+    }
+}
+
+impl ParsedTransferEnvelopeV1 {
+    pub fn parse(bytes: &[u8]) -> Result<Self, TransferFormatError> {
+        artifact::validate_json_input(bytes, MAX_TRANSFER_BYTES).map_err(map_json_error)?;
+        let envelope: TransferEnvelopeV1 =
+            artifact::deserialize_json(bytes).map_err(map_json_error)?;
+        let vault = envelope.validate_shape()?;
+        if envelope.canonical_json_bytes()? != bytes {
+            return Err(TransferFormatError::NonCanonicalJson);
+        }
+        Ok(Self { envelope, vault })
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (TransferEnvelopeV1, VaultFileV1) {
+        (self.envelope, self.vault)
+    }
+}
+
+impl From<ParsedTransferEnvelopeV1> for TransferEnvelopeV1 {
+    fn from(parsed: ParsedTransferEnvelopeV1) -> Self {
+        parsed.envelope
     }
 }
 

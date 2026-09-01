@@ -467,7 +467,7 @@ pub enum TransferCommand {
     Export(TransferExportArgs),
     /// Inspect and optionally compare a transfer without mutating state.
     Inspect(TransferInspectArgs),
-    /// Import an identical artifact or complete authenticated strict descendant.
+    /// Import identical state or an authority-preserving authenticated strict descendant.
     Import(TransferImportArgs),
     /// Compare current state with this identity's last local export receipt.
     Status,

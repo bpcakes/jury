@@ -144,10 +144,12 @@ not an independent trust anchor.
 
 `vault.json` is an opaque Git artifact. Ordinary textual conflict resolution is
 forbidden. The first `0.x` public verifier accepts only an identical artifact or
-an authenticated strict descendant. Any divergence, including independent-item
-progress, remains a conflict and requires explicit operator recovery; semantic
-diff and merge are deferred. Checking out an older or divergent artifact is
-evaluated against retained local state and never silently lowers it.
+an authenticated strict descendant that preserves authority: introducing a
+unilateral direct slot or weakening witnessed authority is refused. Any
+divergence, including independent-item progress, remains a conflict and requires
+explicit operator recovery; semantic diff and merge are deferred. Checking out
+an older or divergent artifact is evaluated against retained local state and
+never silently lowers it.
 
 Mutation dry-runs produce the exact canonical artifact bytes later consumed by
 commit; commit does not regenerate signatures, entropy, slots, or policy
@@ -181,9 +183,10 @@ validation. It never includes identity-private bytes, local audit, checkpoints,
 or receipts. `jury transfer inspect` validates the envelope without an identity
 and reports only public identifiers, counts, ancestry, and opaque item revision
 deltas; `--me` may add names only for items the selected identity can directly
-open. Import installs the exact incoming bytes only for a first installation,
-an identical artifact, or a complete authenticated strict descendant. It does
-not perform textual or semantic merge. A raw copy moves the same portable
+open. Import installs the exact incoming bytes only for a first installation, an
+identical artifact, or a complete authenticated strict descendant that neither
+introduces unilateral direct slots nor weakens witnessed authority. It does not
+perform textual or semantic merge. A raw copy moves the same portable
 ciphertext without the transfer signature or local export receipt; neither a
 copy nor `transfer status` proves delivery, recipient possession, or sync.
 

@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use jury_protected::{OsRandom, RandomSource};
-use jury_protocol::transfer_v1::{TransferCatalogBytes, TransferEnvelopeV1, TransferVaultBytes};
+use jury_protocol::transfer_v1::{
+    ParsedTransferEnvelopeV1, TransferCatalogBytes, TransferEnvelopeV1, TransferVaultBytes,
+};
 use jury_protocol::vault_v1::{
     Digest32, FixedBytes, ItemEnvelopeV1, ItemId, PrincipalId, PrincipalKind, Signature64,
     VaultFileV1,
@@ -362,11 +364,10 @@ pub struct ValidatedTransfer {
 
 impl ValidatedTransfer {
     pub fn parse(bytes: &[u8]) -> Result<Self, TransferError> {
-        let envelope = TransferEnvelopeV1::parse(bytes)
-            .map_err(|_| TransferError::new(TransferErrorKind::InvalidFormat))?;
+        let (envelope, vault) = ParsedTransferEnvelopeV1::parse(bytes)
+            .map_err(|_| TransferError::new(TransferErrorKind::InvalidFormat))?
+            .into_parts();
         let catalog = TransferPublicCatalogV1::parse(envelope.public_catalog_json.as_bytes())?;
-        let vault = VaultFileV1::parse(envelope.vault_json.as_bytes())
-            .map_err(|_| TransferError::new(TransferErrorKind::InvalidVault))?;
         let policy = validate_vault(&vault, &catalog.witness_policies)?;
         catalog.validate_for_policy(&vault, &policy)?;
         let exporter = policy

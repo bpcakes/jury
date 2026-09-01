@@ -65,11 +65,17 @@ the exact encrypted vault with the bounded public policy catalog required for
 fresh validation; it does not include identities, audit, checkpoints, receipts,
 or plaintext names. Public inspection is value-free by default, and import
 accepts only a first installation, an identical artifact, or a complete
-authenticated strict descendant. It never merges branches. `transfer status`
+authenticated strict descendant that does not introduce unilateral direct slots
+or weaken witnessed authority. It never merges branches. `transfer status`
 describes only the selected identity's last successful local export and never
 claims delivery or synchronization. J23 separately owns portable witness-service
 recovery. A witnessed-only configuration is not yet an operational
 secret-access path.
+
+Artifact publication is the export commit point. If the separate local receipt
+cannot be recorded afterward, export still reports the published artifact as a
+success with `local_export_receipt_recorded: false` instead of returning an
+ambiguous failure.
 
 Jury generates registration descriptors, challenges, and proofs as canonical
 JSON artifacts. They are not editable configuration. Jury rejects reformatted

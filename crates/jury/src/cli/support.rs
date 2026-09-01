@@ -374,7 +374,7 @@ pub(super) fn map_mutation_error(kind: jury_core::mutation::MutationErrorKind) -
         MutationErrorKind::TransferDowngrade => CliError::new(
             CliErrorKind::Conflict,
             "transfer-authority-downgrade",
-            "the incoming transfer weakens direct or witnessed authority",
+            "the incoming transfer introduces unilateral direct access or weakens witnessed authority",
         ),
         _ => invalid_vault(),
     }

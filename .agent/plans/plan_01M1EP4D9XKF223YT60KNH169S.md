@@ -39,7 +39,7 @@ code may depend on this plan.
 - [x] Bind portable role metadata to policy-authenticated registration proofs.
 - [x] Make first-install import deterministic, recoverable, and shared-artifact-last.
 - [x] Separate bounded public export from protected-memory publication and contain destinations.
-- [ ] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
+- [x] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
 - [ ] Run the full repository gates, review the commit series, close J16, and finish this plan.
 
 ## Surprises & Discoveries
@@ -87,6 +87,9 @@ code may depend on this plan.
 - Use the signed transfer creation timestamp for deterministic first-install local
   bytes. Exact partial files from the same transfer are repairable; conflicting or
   unauthenticated retained files fail before the shared artifact becomes visible.
+- Treat public artifact publication as the export commit point. A later receipt
+  failure is a successful export with an explicit false receipt field, not an
+  ordinary error that invites blind overwrite/retry.
 
 ## Outcomes & Retrospective
 
