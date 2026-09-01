@@ -20,5 +20,6 @@ rust-version = "1.90"
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
+cognitive_complexity = "warn"
 expect_used = "deny"
 unwrap_used = "deny"
