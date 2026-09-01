@@ -313,6 +313,7 @@ fn import_existing(
     )
     .map_err(map_transfer_import_error)?;
     let Some(plan) = plan.take() else {
+        reconcile_transfer_catalog(&context.state, transfer.catalog(), protection)?;
         return transfer_import_output(&context.policy, transfer.policy(), true, false, false);
     };
     context.catalog.merge_transfer(transfer.catalog())?;
@@ -450,7 +451,7 @@ fn import_absent(
     )
     .map_err(|_| filesystem_error())?;
     validate_detached_separation(&state_root, &unlocked.home)?;
-    let retained_state = {
+    if arguments.dry_run {
         let repositories = repository_refs(&unlocked.home);
         match probe_principal_state(
             &state_root,
@@ -458,12 +459,12 @@ fn import_absent(
             &identity.principal_id(),
             &repositories,
         )? {
-            PrincipalStateProbe::Absent => None,
+            PrincipalStateProbe::Absent => {}
             PrincipalStateProbe::Existing {
-                state,
                 audit,
                 checkpoint,
                 receipts,
+                ..
             } => {
                 let verified = local
                     .verify_files(Some(&audit), Some(&checkpoint), Some(&receipts))
@@ -475,11 +476,8 @@ fn import_absent(
                 {
                     return Err(checkpoint_conflict());
                 }
-                Some(state)
             }
         }
-    };
-    if arguments.dry_run {
         return absent_import_output(&transfer, &names, true, false, "not-written");
     }
 
@@ -489,85 +487,17 @@ fn import_absent(
         .to_json_bytes()
         .map_err(|_| invalid_vault())?;
     let protected = protect(&vault_bytes, protection)?;
-    let shared_publication = prepare_new_vault(&mut home, &protected)?
-        .publish()
-        .map_err(map_filesystem_error)?;
-
-    let repositories = repository_refs(&home);
-    let (catalog_state, retained) = match retained_state {
-        Some(state) => (state, true),
-        None => (
-            VaultStateDirectory::open_or_create(
-                &state_root,
-                transfer.vault().header.vault_id.as_bytes(),
-                transfer.vault().header.genesis_fingerprint.as_bytes(),
-                &repositories,
-                &detached_paths(&home),
-            )
-            .map_err(map_filesystem_error)?,
-            false,
-        ),
-    };
-    let catalog = PolicyCatalogV1::from_transfer(transfer.catalog())?;
-    let catalog_bytes = policy_catalog_json_bytes(&catalog)?;
-    {
-        let locked = catalog_state.try_lock().map_err(|_| local_state_error())?;
-        let protected_catalog = protect(&catalog_bytes, protection)?;
-        let publication = locked
-            .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected_catalog)
-            .map_err(map_filesystem_error)?
-            .publish()
-            .map_err(map_filesystem_error)?;
-        if publication != PublicationOutcome::PublishedAndSynced {
-            return Err(local_state_error());
-        }
-    }
-    let state = if retained {
-        advance_principal_checkpoint(
-            &catalog_state,
-            &local,
-            &candidate,
-            &identity.principal_id(),
-            timestamp_ms()?,
-            protection,
-        )?;
-        catalog_state
-    } else {
-        initialize_principal_state(PrincipalStateInitialization {
-            state_root: &state_root,
-            home: &home,
-            vault: transfer.vault(),
-            local: &local,
-            candidate: &candidate,
-            principal_id: &identity.principal_id(),
-            timestamp: timestamp_ms()?,
-            protection,
-        })?
-    };
-    let context = VaultPrincipalContext {
-        home,
-        vault: transfer.vault().clone(),
-        policy: replay_policy_with_witness_policies(
-            &transfer.vault().policy,
-            &catalog.witness_policies,
-        )
-        .map_err(|_| invalid_vault())?,
-        catalog_before: catalog.clone(),
-        catalog_before_bytes: Some(catalog_bytes),
-        catalog,
-        identity,
-        state,
-        local,
-        protection_degraded: unlocked.protection_degraded,
-    };
-    append_operational_audit_outcome(
-        &context,
-        AuditAction::Transfer,
-        &[],
-        transfer.envelope().transfer_id.clone(),
-        AuditOutcome::Success,
+    let prepared_shared = prepare_new_vault(&mut home, &protected)?;
+    reconcile_first_install_local_state(
+        &state_root,
+        &home,
+        &transfer,
+        &local,
+        &candidate,
+        &identity.principal_id(),
         protection,
     )?;
+    let shared_publication = prepared_shared.publish().map_err(map_filesystem_error)?;
     absent_import_output(
         &transfer,
         &names,
@@ -575,6 +505,151 @@ fn import_absent(
         true,
         durability(shared_publication),
     )
+}
+
+fn reconcile_first_install_local_state(
+    state_root: &Path,
+    home: &VaultHomeLocation,
+    transfer: &ValidatedTransfer,
+    local: &PrincipalLocalState,
+    candidate: &CheckpointCandidate,
+    principal_id: &PrincipalId,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    let repositories = repository_refs(home);
+    let state = VaultStateDirectory::open_or_create(
+        state_root,
+        transfer.vault().header.vault_id.as_bytes(),
+        transfer.vault().header.genesis_fingerprint.as_bytes(),
+        &repositories,
+        &detached_paths(home),
+    )
+    .map_err(map_filesystem_error)?;
+    let locked = state.try_lock().map_err(|_| local_state_error())?;
+    let existing = [
+        read_optional_principal_state(&locked, principal_id, PrincipalStateFile::Audit)?,
+        read_optional_principal_state(&locked, principal_id, PrincipalStateFile::Checkpoint)?,
+        read_optional_principal_state(&locked, principal_id, PrincipalStateFile::Receipts)?,
+    ];
+
+    if let [Some(audit), Some(checkpoint), Some(receipts)] = &existing {
+        let verified = local
+            .verify_files(Some(audit), Some(checkpoint), Some(receipts))
+            .map_err(|_| local_state_error())?;
+        if candidate
+            .relation_to(verified.checkpoint())
+            .map_err(|_| checkpoint_conflict())?
+            == CheckpointRelation::Divergent
+        {
+            return Err(checkpoint_conflict());
+        }
+        reconcile_transfer_catalog_locked(&locked, transfer.catalog(), protection)?;
+        drop(locked);
+        return advance_principal_checkpoint(
+            &state,
+            local,
+            candidate,
+            principal_id,
+            transfer.envelope().created_at_ms,
+            protection,
+        );
+    }
+
+    let initialized = local
+        .initialize(candidate, transfer.envelope().created_at_ms)
+        .map_err(|_| local_state_error())?;
+    let files = local
+        .serialize(&initialized)
+        .map_err(|_| local_state_error())?;
+    let targets = [files.audit(), files.checkpoint(), files.receipts()];
+    if existing
+        .iter()
+        .zip(targets)
+        .any(|(current, target)| current.as_deref().is_some_and(|bytes| bytes != target))
+    {
+        return Err(local_state_error());
+    }
+
+    reconcile_transfer_catalog_locked(&locked, transfer.catalog(), protection)?;
+    let protected = [
+        protect(files.audit(), protection)?,
+        protect(files.checkpoint(), protection)?,
+        protect(files.receipts(), protection)?,
+    ];
+    let kinds = [
+        PrincipalStateFile::Audit,
+        PrincipalStateFile::Checkpoint,
+        PrincipalStateFile::Receipts,
+    ];
+    let mut prepared = Vec::new();
+    for ((current, contents), kind) in existing.iter().zip(&protected).zip(kinds) {
+        if current.is_none() {
+            prepared.push(
+                locked
+                    .prepare(principal_id.as_bytes(), kind, contents)
+                    .map_err(map_filesystem_error)?,
+            );
+        }
+    }
+    for file in prepared {
+        if file.publish().map_err(map_filesystem_error)? != PublicationOutcome::PublishedAndSynced {
+            return Err(local_state_error());
+        }
+    }
+    Ok(())
+}
+
+fn read_optional_principal_state(
+    locked: &LockedVaultState<'_>,
+    principal_id: &PrincipalId,
+    file: PrincipalStateFile,
+) -> Result<Option<Vec<u8>>, CliError> {
+    match locked.read(principal_id.as_bytes(), file) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(None),
+        Err(error) => Err(map_filesystem_error(error)),
+    }
+}
+
+fn reconcile_transfer_catalog(
+    state: &VaultStateDirectory,
+    transfer: &TransferPublicCatalogV1,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    let locked = state.try_lock().map_err(|_| local_state_error())?;
+    reconcile_transfer_catalog_locked(&locked, transfer, protection)
+}
+
+fn reconcile_transfer_catalog_locked(
+    locked: &LockedVaultState<'_>,
+    transfer: &TransferPublicCatalogV1,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    let prior = match locked.read_vault_state(VaultStateFile::PolicyCatalog) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == FilesystemErrorKind::NotFound => None,
+        Err(error) => return Err(map_filesystem_error(error)),
+    };
+    let mut catalog = match prior.as_deref() {
+        Some(bytes) => PolicyCatalogV1::parse_local_compatible(bytes)?,
+        None => PolicyCatalogV1::empty(),
+    };
+    catalog.merge_transfer(transfer)?;
+    let target = policy_catalog_json_bytes(&catalog)?;
+    if prior.as_deref() == Some(target.as_slice()) {
+        return Ok(());
+    }
+    let protected = protect(&target, protection)?;
+    let outcome = locked
+        .prepare_vault_state(VaultStateFile::PolicyCatalog, &protected)
+        .map_err(map_filesystem_error)?
+        .publish()
+        .map_err(map_filesystem_error)?;
+    if outcome == PublicationOutcome::PublishedAndSynced {
+        Ok(())
+    } else {
+        Err(local_state_error())
+    }
 }
 
 fn accessible_name_map(

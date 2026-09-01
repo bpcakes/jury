@@ -221,6 +221,62 @@ fn install_first(
     Ok(())
 }
 
+fn assert_first_install_retry_recovers_exact_partial_state(
+    source: NativePaths<'_>,
+    target: NativePaths<'_>,
+    transfer: &Path,
+    vault: &serde_json::Value,
+    principal_id: &str,
+    genesis: &str,
+) -> TestResult {
+    let principal_state = target
+        .state
+        .join("jury/vaults")
+        .join(
+            vault["vault_id"]
+                .as_str()
+                .ok_or("vault output lacks an ID")?,
+        )
+        .join(genesis)
+        .join(principal_id);
+    let audit = principal_state.join("audit.jsonl");
+    let checkpoint = principal_state.join("checkpoint.json");
+    let receipts = principal_state.join("receipts.json");
+    let audit_before = fs::read(&audit)?;
+    let checkpoint_before = fs::read(&checkpoint)?;
+    let receipts_before = fs::read(&receipts)?;
+
+    fs::remove_file(target.repository.join(".jury/vault.json"))?;
+    fs::remove_file(&receipts)?;
+    install_first(source, target, transfer, genesis)?;
+    assert_eq!(fs::read(&audit)?, audit_before);
+    assert_eq!(fs::read(&checkpoint)?, checkpoint_before);
+    assert_eq!(fs::read(&receipts)?, receipts_before);
+
+    fs::remove_file(target.repository.join(".jury/vault.json"))?;
+    fs::write(&receipts, b"invalid retained state")?;
+    let rejected = run(
+        target.repository,
+        target.data,
+        target.state,
+        &import_arguments(
+            genesis,
+            transfer.to_str().ok_or("non-UTF-8 transfer path")?,
+            false,
+        ),
+        b"ExamplePass1234\n",
+    )?;
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    let error = serde_json::from_slice::<serde_json::Value>(&rejected.stderr)?;
+    assert_eq!(error["error"]["code"], "local-state-error");
+    assert!(!target.repository.join(".jury/vault.json").exists());
+
+    fs::write(&receipts, receipts_before)?;
+    install_first(source, target, transfer, genesis)?;
+    Ok(())
+}
+
 fn import_descendant(
     source: NativePaths<'_>,
     target: NativePaths<'_>,
@@ -359,6 +415,14 @@ fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestRe
     assert_portable_export(&base, &vault, &base_path)?;
     inspect_and_preview_first_install(target, &base_path, genesis)?;
     install_first(source, target, &base_path, genesis)?;
+    assert_first_install_retry_recovers_exact_partial_state(
+        source,
+        target,
+        &base_path,
+        &vault,
+        principal_id,
+        genesis,
+    )?;
 
     let descendant_path = temporary.path().join("descendant.jury-transfer.json");
     import_descendant(source, target, principal_id, genesis, &descendant_path)?;

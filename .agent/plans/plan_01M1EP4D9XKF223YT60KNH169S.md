@@ -37,7 +37,7 @@ code may depend on this plan.
 - [x] Commit the previously staged J16 transfer baseline independently.
 - [x] Commit DU-001 through DU-014 as one behavior-preserving refactor slice.
 - [x] Bind portable role metadata to policy-authenticated registration proofs.
-- [ ] Make first-install import deterministic, recoverable, and shared-artifact-last.
+- [x] Make first-install import deterministic, recoverable, and shared-artifact-last.
 - [ ] Separate bounded public export from protected-memory publication and contain destinations.
 - [ ] Make post-publication receipt failure explicit, remove repeated parsing, and correct diagnostics/display/docs.
 - [ ] Run the full repository gates, review the commit series, close J16, and finish this plan.
@@ -81,6 +81,9 @@ code may depend on this plan.
   deterministic, retry-compatible local installation first and reconcile exact
   partial local files; once the shared artifact exists, report local follow-up
   failures as committed recovery states rather than ordinary failures.
+- Use the signed transfer creation timestamp for deterministic first-install local
+  bytes. Exact partial files from the same transfer are repairable; conflicting or
+  unauthenticated retained files fail before the shared artifact becomes visible.
 
 ## Outcomes & Retrospective
 

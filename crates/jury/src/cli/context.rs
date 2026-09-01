@@ -163,12 +163,6 @@ impl PolicyCatalogV1 {
         });
         self.validate()
     }
-
-    pub(super) fn from_transfer(transfer: &TransferPublicCatalogV1) -> Result<Self, CliError> {
-        let mut catalog = Self::empty();
-        catalog.merge_transfer(transfer)?;
-        Ok(catalog)
-    }
 }
 
 pub(super) fn policy_catalog_json_bytes(catalog: &PolicyCatalogV1) -> Result<Vec<u8>, CliError> {
