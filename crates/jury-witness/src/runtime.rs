@@ -74,8 +74,12 @@ impl OperationDeadline {
         Self(Instant::now() + duration)
     }
 
-    fn instant(self) -> Instant {
+    pub(crate) fn instant(self) -> Instant {
         self.0
+    }
+
+    pub(crate) fn remaining(self) -> Option<Duration> {
+        self.0.checked_duration_since(Instant::now())
     }
 
     fn ensure_remaining(self) -> Result<(), RuntimeError> {
@@ -200,8 +204,12 @@ impl WitnessRuntime {
         ) -> Result<T, WitnessEngineError>,
     ) -> Result<T, RuntimeError> {
         deadline.ensure_remaining()?;
-        let mut store = SqliteWitnessStore::open(&self.database_path, self.identity.principal_id())
-            .map_err(map_adapter_error)?;
+        let mut store = SqliteWitnessStore::open_until(
+            &self.database_path,
+            self.identity.principal_id(),
+            deadline.instant(),
+        )
+        .map_err(map_adapter_error)?;
         deadline.ensure_remaining()?;
         let mut anchor = self
             .external_anchor
@@ -235,8 +243,12 @@ impl WitnessRuntime {
         ) -> Result<T, WitnessEngineError>,
     ) -> Result<T, RuntimeError> {
         deadline.ensure_remaining()?;
-        let mut store = SqliteWitnessStore::open(&self.database_path, self.identity.principal_id())
-            .map_err(map_adapter_error)?;
+        let mut store = SqliteWitnessStore::open_until(
+            &self.database_path,
+            self.identity.principal_id(),
+            deadline.instant(),
+        )
+        .map_err(map_adapter_error)?;
         deadline.ensure_remaining()?;
         let mut anchor = self
             .external_anchor

@@ -106,10 +106,12 @@ never enqueue duplicate database/anchor checks.
 
 The request timeout is one end-to-end operation budget: it is attached before
 handler extraction, retained while work waits in the serialized witness queue,
-and shared by every external-anchor attempt. Work whose caller has gone away is
-discarded before execution. `shutdown_grace_ms` must be at least
-`request_timeout_ms`, so accepted work cannot extend shutdown by a fresh series
-of per-step timeouts.
+consumed by SQLite lock acquisition and pre-commit checks, and shared by every
+external-anchor attempt. Work whose caller has gone away is discarded before
+execution. The anchor database also has one serialized owner thread; public
+readiness performs a real bounded repository read without blocking a Tokio
+worker. `shutdown_grace_ms` must be at least `request_timeout_ms`, so accepted
+work cannot extend shutdown by a fresh series of per-step timeouts.
 
 Witness endpoints are:
 

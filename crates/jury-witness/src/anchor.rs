@@ -17,8 +17,9 @@ use crate::{
     AdapterError, AdapterErrorKind,
     credentials::{BearerCredential, authorization_header, load_bearer},
     persistence::{
-        ANCHOR_DATABASE_KIND, backup_managed_database, initialize_managed_database,
-        open_managed_database, restore_managed_database,
+        ANCHOR_DATABASE_KIND, backup_managed_database, ensure_adapter_deadline,
+        initialize_managed_database, open_managed_database, remaining_busy_timeout,
+        restore_managed_database, set_busy_timeout,
     },
 };
 
@@ -48,7 +49,24 @@ impl SqliteAnchorRepository {
     }
 
     pub fn read(&self) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
-        load_anchor(&self.connection, &self.witness_id)
+        self.read_with_deadline(None)
+    }
+
+    pub(crate) fn read_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
+        self.read_with_deadline(Some(deadline))
+    }
+
+    fn read_with_deadline(
+        &self,
+        deadline: Option<Instant>,
+    ) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
+        prepare_anchor_deadline(&self.connection, deadline)?;
+        let anchor = load_anchor(&self.connection, &self.witness_id)?;
+        ensure_anchor_deadline(deadline)?;
+        Ok(anchor)
     }
 
     pub fn compare_and_swap(
@@ -56,12 +74,32 @@ impl SqliteAnchorRepository {
         expected_digest: Option<&Digest32>,
         candidate: &WitnessStateAnchorV1,
     ) -> Result<AnchorCasResult, AdapterError> {
+        self.compare_and_swap_with_deadline(expected_digest, candidate, None)
+    }
+
+    pub(crate) fn compare_and_swap_until(
+        &mut self,
+        expected_digest: Option<&Digest32>,
+        candidate: &WitnessStateAnchorV1,
+        deadline: Instant,
+    ) -> Result<AnchorCasResult, AdapterError> {
+        self.compare_and_swap_with_deadline(expected_digest, candidate, Some(deadline))
+    }
+
+    fn compare_and_swap_with_deadline(
+        &mut self,
+        expected_digest: Option<&Digest32>,
+        candidate: &WitnessStateAnchorV1,
+        deadline: Option<Instant>,
+    ) -> Result<AnchorCasResult, AdapterError> {
+        prepare_anchor_deadline(&self.connection, deadline)?;
         validate_candidate(&self.witness_id, candidate)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(anchor_unavailable)?;
         let current = load_anchor(&transaction, &self.witness_id)?;
+        ensure_anchor_deadline(deadline)?;
         if current.as_ref().is_some_and(|current| current == candidate) {
             transaction.commit().map_err(anchor_unavailable)?;
             return Ok(AnchorCasResult::Applied(candidate.clone()));
@@ -87,6 +125,7 @@ impl SqliteAnchorRepository {
             .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
         let encoded = serde_json::to_vec(candidate)
             .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+        ensure_anchor_deadline(deadline)?;
         let generation = i64::try_from(candidate.state_generation)
             .map_err(|_| AdapterError::new(AdapterErrorKind::CapacityExhausted))?;
         transaction
@@ -105,15 +144,32 @@ impl SqliteAnchorRepository {
                 ],
             )
             .map_err(anchor_unavailable)?;
+        ensure_anchor_deadline(deadline)?;
         transaction.commit().map_err(anchor_unavailable)?;
         let readback = self
-            .read()?
+            .read_with_deadline(deadline)?
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?;
         if readback != *candidate {
             return Err(AdapterError::new(AdapterErrorKind::Conflict));
         }
         Ok(AnchorCasResult::Applied(readback))
     }
+}
+
+fn prepare_anchor_deadline(
+    connection: &Connection,
+    deadline: Option<Instant>,
+) -> Result<(), AdapterError> {
+    let timeout = remaining_busy_timeout(deadline).map_err(|_| anchor_deadline_exceeded())?;
+    set_busy_timeout(connection, timeout).map_err(|_| anchor_deadline_exceeded())
+}
+
+fn ensure_anchor_deadline(deadline: Option<Instant>) -> Result<(), AdapterError> {
+    ensure_adapter_deadline(deadline).map_err(|_| anchor_deadline_exceeded())
+}
+
+fn anchor_deadline_exceeded() -> AdapterError {
+    AdapterError::new(AdapterErrorKind::AnchorUnavailable)
 }
 
 pub fn backup_anchor_database(source: &Path, destination: &Path) -> Result<(), AdapterError> {

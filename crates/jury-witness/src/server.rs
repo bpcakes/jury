@@ -4,8 +4,9 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender, SyncSender, TryRecvError, TrySendError},
     },
-    thread,
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -25,6 +26,7 @@ use jury_protocol::{
     witness_v1::{
         ActionManifestV1, ApprovalDecisionV1, RegistrationBytes, RequestCancellationV1,
         VaultPolicyCheckpointV1, WitnessReasonV1, WitnessRequestV1, WitnessResponseV1,
+        WitnessStateAnchorV1,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -127,13 +129,19 @@ enum RefusalReason {
 struct WitnessApiState {
     runtime: WitnessRuntimeHandle,
     readiness: Arc<ReadinessProbe>,
-    operation_timeout: Duration,
 }
 
 #[derive(Clone)]
 struct AnchorApiState {
-    repository: Arc<Mutex<SqliteAnchorRepository>>,
+    repository: AnchorRepositoryHandle,
+    readiness: Arc<ReadinessProbe>,
     witness_id: PrincipalId,
+}
+
+#[derive(Clone)]
+struct PublicGateState {
+    gate: GateState,
+    operation_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -167,6 +175,32 @@ struct ReadinessProbe {
 }
 
 struct ReadinessLease(Arc<ReadinessProbe>);
+
+#[derive(Clone)]
+struct AnchorRepositoryHandle {
+    sender: SyncSender<QueuedAnchorCommand>,
+}
+
+struct AnchorRepositoryWorker {
+    handle: AnchorRepositoryHandle,
+    shutdown: Sender<()>,
+    thread: Option<JoinHandle<()>>,
+}
+
+struct QueuedAnchorCommand {
+    deadline: OperationDeadline,
+    command: AnchorCommand,
+}
+
+enum AnchorCommand {
+    CheckReady(tokio::sync::oneshot::Sender<Result<(), AdapterError>>),
+    Read(tokio::sync::oneshot::Sender<Result<Option<WitnessStateAnchorV1>, AdapterError>>),
+    CompareAndSwap {
+        expected_digest: Option<jury_protocol::vault_v1::Digest32>,
+        candidate: Box<WitnessStateAnchorV1>,
+        response: tokio::sync::oneshot::Sender<Result<AnchorCasResult, AdapterError>>,
+    },
+}
 
 pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), AdapterError> {
     config.validate()?;
@@ -203,14 +237,16 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
     let state = WitnessApiState {
         runtime: worker.handle(),
         readiness: Arc::new(ReadinessProbe::new()),
-        operation_timeout: anchor_timeout,
     };
     let gate = GateState::new(&config.limits);
     let public = Router::new()
         .route("/livez", get(live))
         .route("/readyz", get(witness_ready))
         .route_layer(middleware::from_fn_with_state(
-            gate.clone(),
+            PublicGateState {
+                gate: gate.clone(),
+                operation_timeout: anchor_timeout,
+            },
             public_gate_request,
         ));
     let operator = Router::new()
@@ -249,11 +285,15 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
 
 pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), AdapterError> {
     config.validate()?;
+    let operation_timeout = Duration::from_millis(config.limits.request_timeout_ms);
+    let write_credential = load_digest(&config.write_credential_file)?;
+    let worker = AnchorRepositoryWorker::spawn(
+        SqliteAnchorRepository::open(&config.database.path, config.witness_id)?,
+        config.limits.maximum_concurrency,
+    )?;
     let state = AnchorApiState {
-        repository: Arc::new(Mutex::new(SqliteAnchorRepository::open(
-            &config.database.path,
-            config.witness_id,
-        )?)),
+        repository: worker.handle(),
+        readiness: Arc::new(ReadinessProbe::new()),
         witness_id: config.witness_id,
     };
     let gate = GateState::new(&config.limits);
@@ -262,7 +302,10 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
         .route("/readyz", get(anchor_ready))
         .route("/v1/anchors/{witness_id}", get(read_anchor))
         .route_layer(middleware::from_fn_with_state(
-            gate.clone(),
+            PublicGateState {
+                gate: gate.clone(),
+                operation_timeout,
+            },
             public_gate_request,
         ));
     let protected = Router::new()
@@ -270,8 +313,8 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
         .route_layer(middleware::from_fn_with_state(
             ProtectedGateState {
                 gate,
-                credential: load_digest(&config.write_credential_file)?,
-                operation_timeout: Duration::from_millis(config.limits.request_timeout_ms),
+                credential: write_credential,
+                operation_timeout,
             },
             protected_gate_request,
         ));
@@ -279,7 +322,9 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
         .merge(public)
         .merge(protected)
         .with_state(state);
-    serve(app, config.listen, &config.tls, &config.limits).await
+    let result = serve(app, config.listen, &config.tls, &config.limits).await;
+    let shutdown = worker.shutdown();
+    result.and(shutdown)
 }
 
 async fn serve(
@@ -410,13 +455,158 @@ impl Drop for ReadinessLease {
     }
 }
 
+impl AnchorCommand {
+    fn response_is_closed(&self) -> bool {
+        match self {
+            Self::CheckReady(response) => response.is_closed(),
+            Self::Read(response) => response.is_closed(),
+            Self::CompareAndSwap { response, .. } => response.is_closed(),
+        }
+    }
+}
+
+impl AnchorRepositoryWorker {
+    fn spawn(
+        mut repository: SqliteAnchorRepository,
+        queue_capacity: usize,
+    ) -> Result<Self, AdapterError> {
+        let (sender, receiver) = mpsc::sync_channel::<QueuedAnchorCommand>(queue_capacity.max(1));
+        let (shutdown, shutdown_receiver) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("juryd-anchor-state".to_owned())
+            .spawn(move || {
+                loop {
+                    match shutdown_receiver.try_recv() {
+                        Ok(()) | Err(TryRecvError::Disconnected) => break,
+                        Err(TryRecvError::Empty) => {}
+                    }
+                    let queued = match receiver.recv_timeout(Duration::from_millis(50)) {
+                        Ok(command) => command,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    match shutdown_receiver.try_recv() {
+                        Ok(()) | Err(TryRecvError::Disconnected) => break,
+                        Err(TryRecvError::Empty) => {}
+                    }
+                    if queued.command.response_is_closed() {
+                        continue;
+                    }
+                    let deadline = queued.deadline.instant();
+                    match queued.command {
+                        AnchorCommand::CheckReady(response) => {
+                            let result = repository.read_until(deadline).map(|_| ());
+                            let _ = response.send(result);
+                        }
+                        AnchorCommand::Read(response) => {
+                            let _ = response.send(repository.read_until(deadline));
+                        }
+                        AnchorCommand::CompareAndSwap {
+                            expected_digest,
+                            candidate,
+                            response,
+                        } => {
+                            let _ = response.send(repository.compare_and_swap_until(
+                                expected_digest.as_ref(),
+                                &candidate,
+                                deadline,
+                            ));
+                        }
+                    }
+                }
+            })
+            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))?;
+        Ok(Self {
+            handle: AnchorRepositoryHandle { sender },
+            shutdown,
+            thread: Some(thread),
+        })
+    }
+
+    fn handle(&self) -> AnchorRepositoryHandle {
+        self.handle.clone()
+    }
+
+    fn shutdown(mut self) -> Result<(), AdapterError> {
+        let _ = self.shutdown.send(());
+        self.thread
+            .take()
+            .ok_or_else(|| AdapterError::new(AdapterErrorKind::Io))?
+            .join()
+            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))
+    }
+}
+
+impl AnchorRepositoryHandle {
+    async fn check_ready(&self, deadline: OperationDeadline) -> Result<(), AdapterError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.submit(deadline, AnchorCommand::CheckReady(response))?;
+        receive_anchor(receiver).await
+    }
+
+    async fn read(
+        &self,
+        deadline: OperationDeadline,
+    ) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.submit(deadline, AnchorCommand::Read(response))?;
+        receive_anchor(receiver).await
+    }
+
+    async fn compare_and_swap(
+        &self,
+        deadline: OperationDeadline,
+        expected_digest: Option<jury_protocol::vault_v1::Digest32>,
+        candidate: WitnessStateAnchorV1,
+    ) -> Result<AnchorCasResult, AdapterError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.submit(
+            deadline,
+            AnchorCommand::CompareAndSwap {
+                expected_digest,
+                candidate: Box::new(candidate),
+                response,
+            },
+        )?;
+        receive_anchor(receiver).await
+    }
+
+    fn submit(
+        &self,
+        deadline: OperationDeadline,
+        command: AnchorCommand,
+    ) -> Result<(), AdapterError> {
+        if deadline.remaining().is_none() {
+            return Err(AdapterError::new(AdapterErrorKind::AnchorUnavailable));
+        }
+        self.sender
+            .try_send(QueuedAnchorCommand { deadline, command })
+            .map_err(|error| match error {
+                TrySendError::Full(_) | TrySendError::Disconnected(_) => {
+                    AdapterError::new(AdapterErrorKind::AnchorUnavailable)
+                }
+            })
+    }
+}
+
+async fn receive_anchor<T>(
+    receiver: tokio::sync::oneshot::Receiver<Result<T, AdapterError>>,
+) -> Result<T, AdapterError> {
+    receiver
+        .await
+        .unwrap_or(Err(AdapterError::new(AdapterErrorKind::AnchorUnavailable)))
+}
+
 async fn public_gate_request(
-    State(gate): State<GateState>,
+    State(state): State<PublicGateState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    admit(&gate, peer.ip(), request, next).await
+    request
+        .extensions_mut()
+        .insert(OperationDeadline::after(state.operation_timeout));
+    admit(&state.gate, peer.ip(), request, next).await
 }
 
 async fn protected_gate_request(
@@ -461,21 +651,28 @@ async fn live() -> impl IntoResponse {
     )
 }
 
-async fn witness_ready(State(state): State<WitnessApiState>) -> Response {
+async fn witness_ready(
+    State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
+) -> Response {
     let Some(lease) = state.readiness.acquire() else {
         return readiness_response(state.readiness.last_ready());
     };
-    let deadline = OperationDeadline::after(state.operation_timeout);
     let is_ready = state.runtime.check_ready(deadline).await.is_ok();
     lease.finish(is_ready);
     readiness_response(is_ready)
 }
 
-async fn anchor_ready(State(state): State<AnchorApiState>) -> Response {
-    match state.repository.lock() {
-        Ok(_) => ready(),
-        Err(_) => not_ready(),
-    }
+async fn anchor_ready(
+    State(state): State<AnchorApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
+) -> Response {
+    let Some(lease) = state.readiness.acquire() else {
+        return readiness_response(state.readiness.last_ready());
+    };
+    let is_ready = state.repository.check_ready(deadline).await.is_ok();
+    lease.finish(is_ready);
+    readiness_response(is_ready)
 }
 
 async fn register(
@@ -597,6 +794,7 @@ async fn cancel(
 
 async fn read_anchor(
     State(state): State<AnchorApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     Path(witness_id): Path<String>,
 ) -> Response {
     let Ok(witness_id) = parse_principal_id(&witness_id) else {
@@ -605,23 +803,16 @@ async fn read_anchor(
     if witness_id != state.witness_id {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let repository = state.repository;
-    match tokio::task::spawn_blocking(move || {
-        repository
-            .lock()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?
-            .read()
-    })
-    .await
-    {
-        Ok(Ok(Some(anchor))) => (StatusCode::OK, Json(anchor)).into_response(),
-        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(_)) | Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, RefusalReason::Unavailable),
+    match state.repository.read(deadline).await {
+        Ok(Some(anchor)) => (StatusCode::OK, Json(anchor)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, RefusalReason::Unavailable),
     }
 }
 
 async fn compare_and_swap_anchor(
     State(state): State<AnchorApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     Path(witness_id): Path<String>,
     payload: Result<Json<AnchorCasRequest>, JsonRejection>,
 ) -> Response {
@@ -634,19 +825,16 @@ async fn compare_and_swap_anchor(
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
-    let repository = state.repository;
-    match tokio::task::spawn_blocking(move || {
-        repository
-            .lock()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?
-            .compare_and_swap(
-                payload.expected_anchor_digest.as_ref(),
-                &payload.next_exact_anchor,
-            )
-    })
-    .await
+    match state
+        .repository
+        .compare_and_swap(
+            deadline,
+            payload.expected_anchor_digest,
+            payload.next_exact_anchor,
+        )
+        .await
     {
-        Ok(Ok(AnchorCasResult::Applied(anchor))) => (
+        Ok(AnchorCasResult::Applied(anchor)) => (
             StatusCode::OK,
             Json(AnchorCasResponse {
                 outcome: AnchorCasOutcome::Applied,
@@ -654,7 +842,7 @@ async fn compare_and_swap_anchor(
             }),
         )
             .into_response(),
-        Ok(Ok(AnchorCasResult::Conflict(anchor))) => (
+        Ok(AnchorCasResult::Conflict(anchor)) => (
             StatusCode::OK,
             Json(AnchorCasResponse {
                 outcome: AnchorCasOutcome::Conflict,
@@ -662,8 +850,8 @@ async fn compare_and_swap_anchor(
             }),
         )
             .into_response(),
-        Ok(Err(error)) if error.kind() == AdapterErrorKind::InvalidState => invalid_request(),
-        Ok(Err(_)) | Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, RefusalReason::Unavailable),
+        Err(error) if error.kind() == AdapterErrorKind::InvalidState => invalid_request(),
+        Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, RefusalReason::Unavailable),
     }
 }
 
@@ -817,6 +1005,8 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    use std::{error::Error, os::unix::fs::PermissionsExt as _};
+
     use super::*;
 
     #[test]
@@ -859,5 +1049,58 @@ mod tests {
         drop(first);
         assert!(probe.last_ready());
         assert!(probe.acquire().is_some());
+    }
+
+    #[tokio::test]
+    async fn anchor_work_runs_on_the_deadline_aware_owner_thread() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("anchor.sqlite3");
+        let witness_id = PrincipalId::from_bytes([11; 32])?;
+        SqliteAnchorRepository::initialize(&path)?;
+        let repository = SqliteAnchorRepository::open(&path, witness_id)?;
+        let worker = AnchorRepositoryWorker::spawn(repository, 1)?;
+        let handle = worker.handle();
+        let blocker = rusqlite::Connection::open(&path)?;
+        blocker.execute_batch("BEGIN IMMEDIATE")?;
+        let candidate = WitnessStateAnchorV1 {
+            schema: 1,
+            witness_id,
+            witness_signing_key_fingerprint: jury_protocol::vault_v1::Digest32::new([2; 32]),
+            witness_signing_key_epoch: 1,
+            state_generation: 1,
+            database_state_digest: jury_protocol::vault_v1::Digest32::new([3; 32]),
+            vault_high_watermarks: Vec::new(),
+            replay_retain_through_ms: 0,
+            last_accepted_wall_time_ms: 1,
+            predecessor_anchor_digest: jury_protocol::vault_v1::Digest32::new([0; 32]),
+            issued_at_ms: 1,
+            signature: jury_protocol::vault_v1::Signature64::new([4; 64]),
+        };
+
+        let started = Instant::now();
+        assert!(
+            handle
+                .compare_and_swap(
+                    OperationDeadline::after(Duration::from_millis(100)),
+                    None,
+                    candidate,
+                )
+                .await
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        blocker.execute_batch("ROLLBACK")?;
+        assert_eq!(
+            handle
+                .read(OperationDeadline::after(Duration::from_secs(1)))
+                .await?,
+            None
+        );
+        handle
+            .check_ready(OperationDeadline::after(Duration::from_secs(1)))
+            .await?;
+        worker.shutdown()?;
+        Ok(())
     }
 }

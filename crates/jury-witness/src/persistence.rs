@@ -2,7 +2,7 @@ use std::{
     fs, io,
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Component, Path},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use jury_core::witness_engine::{PersistedWitnessState, WitnessStateStore, WitnessStoreError};
@@ -19,12 +19,14 @@ use crate::{AdapterError, AdapterErrorKind};
 const SCHEMA_VERSION: i64 = 1;
 const MAX_PERSISTED_WITNESS_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SQLITE_ROW_BYTES: i32 = 65 * 1024 * 1024;
+const MAXIMUM_SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const WITNESS_DATABASE_KIND: &str = "jury-witness-state-v1";
 pub(crate) const ANCHOR_DATABASE_KIND: &str = "jury-external-anchor-v1";
 
 pub struct SqliteWitnessStore {
     connection: Connection,
     witness_id: PrincipalId,
+    deadline: Option<Instant>,
 }
 
 impl SqliteWitnessStore {
@@ -44,19 +46,40 @@ impl SqliteWitnessStore {
     }
 
     pub fn open(path: &Path, witness_id: PrincipalId) -> Result<Self, AdapterError> {
-        let connection = open_managed_database(path, WITNESS_DATABASE_KIND)?;
+        Self::open_with_deadline(path, witness_id, None)
+    }
+
+    pub(crate) fn open_until(
+        path: &Path,
+        witness_id: PrincipalId,
+        deadline: Instant,
+    ) -> Result<Self, AdapterError> {
+        Self::open_with_deadline(path, witness_id, Some(deadline))
+    }
+
+    fn open_with_deadline(
+        path: &Path,
+        witness_id: PrincipalId,
+        deadline: Option<Instant>,
+    ) -> Result<Self, AdapterError> {
+        let busy_timeout = remaining_busy_timeout(deadline)?;
+        let connection =
+            open_managed_database_with_timeout(path, WITNESS_DATABASE_KIND, busy_timeout)?;
         let store = Self {
             connection,
             witness_id,
+            deadline,
         };
-        store
-            .load_validated()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+        ensure_adapter_deadline(deadline)?;
+        store.load_validated()?;
         Ok(store)
     }
 
     pub fn load_validated(&self) -> Result<PersistedWitnessState, AdapterError> {
-        load_witness_state(&self.connection, self.witness_id)
+        ensure_adapter_deadline(self.deadline)?;
+        let state = load_witness_state(&self.connection, self.witness_id)?;
+        ensure_adapter_deadline(self.deadline)?;
+        Ok(state)
     }
 }
 
@@ -70,6 +93,12 @@ impl WitnessStateStore for SqliteWitnessStore {
         expected_generation: u64,
         replacement: PersistedWitnessState,
     ) -> Result<(), WitnessStoreError> {
+        ensure_store_deadline(self.deadline)?;
+        set_busy_timeout(
+            &self.connection,
+            remaining_busy_timeout(self.deadline).map_err(map_adapter_store_error)?,
+        )
+        .map_err(map_adapter_store_error)?;
         if replacement.logical.witness_id != self.witness_id
             || replacement.logical.state_generation != expected_generation.saturating_add(1)
             || replacement.pending_anchor.is_none()
@@ -82,12 +111,14 @@ impl WitnessStateStore for SqliteWitnessStore {
             .map_err(|_| WitnessStoreError::unavailable())?;
         let current =
             load_witness_state(&transaction, self.witness_id).map_err(map_adapter_store_error)?;
+        ensure_store_deadline(self.deadline)?;
         if current.logical.state_generation != expected_generation
             || current.pending_anchor.is_some()
         {
             return Err(WitnessStoreError::unavailable());
         }
         let state_json = encode_persisted_state(&replacement).map_err(map_codec_store_error)?;
+        ensure_store_deadline(self.deadline)?;
         let replacement_generation = i64::try_from(replacement.logical.state_generation)
             .map_err(|_| WitnessStoreError::unavailable())?;
         let expected_generation =
@@ -102,6 +133,7 @@ impl WitnessStateStore for SqliteWitnessStore {
         if changed != 1 {
             return Err(WitnessStoreError::unavailable());
         }
+        ensure_store_deadline(self.deadline)?;
         transaction
             .commit()
             .map_err(|_| WitnessStoreError::unavailable())
@@ -111,12 +143,19 @@ impl WitnessStateStore for SqliteWitnessStore {
         &mut self,
         candidate_digest: &Digest32,
     ) -> Result<(), WitnessStoreError> {
+        ensure_store_deadline(self.deadline)?;
+        set_busy_timeout(
+            &self.connection,
+            remaining_busy_timeout(self.deadline).map_err(map_adapter_store_error)?,
+        )
+        .map_err(map_adapter_store_error)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| WitnessStoreError::unavailable())?;
         let mut current =
             load_witness_state(&transaction, self.witness_id).map_err(map_adapter_store_error)?;
+        ensure_store_deadline(self.deadline)?;
         let candidate = current
             .pending_anchor
             .take()
@@ -130,6 +169,7 @@ impl WitnessStateStore for SqliteWitnessStore {
         }
         current.published_anchor = Some(candidate);
         let state_json = encode_persisted_state(&current).map_err(map_codec_store_error)?;
+        ensure_store_deadline(self.deadline)?;
         let generation = i64::try_from(current.logical.state_generation)
             .map_err(|_| WitnessStoreError::unavailable())?;
         let changed = transaction
@@ -142,6 +182,7 @@ impl WitnessStateStore for SqliteWitnessStore {
         if changed != 1 {
             return Err(WitnessStoreError::unavailable());
         }
+        ensure_store_deadline(self.deadline)?;
         transaction
             .commit()
             .map_err(|_| WitnessStoreError::unavailable())
@@ -160,6 +201,14 @@ pub(crate) fn open_managed_database(
     path: &Path,
     expected_kind: &str,
 ) -> Result<Connection, AdapterError> {
+    open_managed_database_with_timeout(path, expected_kind, MAXIMUM_SQLITE_BUSY_TIMEOUT)
+}
+
+fn open_managed_database_with_timeout(
+    path: &Path,
+    expected_kind: &str,
+    busy_timeout: Duration,
+) -> Result<Connection, AdapterError> {
     validate_destination_path(path, false)?;
     let connection = Connection::open_with_flags(
         path,
@@ -168,7 +217,7 @@ pub(crate) fn open_managed_database(
     .map_err(database_unavailable)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
         .map_err(|_| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))?;
-    configure_connection(&connection, "WAL")?;
+    configure_connection(&connection, "WAL", busy_timeout)?;
     validate_database(&connection, expected_kind)?;
     Ok(connection)
 }
@@ -194,7 +243,7 @@ pub(crate) fn initialize_managed_database(
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(database_unavailable)?;
-    configure_connection(&connection, "DELETE")?;
+    configure_connection(&connection, "DELETE", MAXIMUM_SQLITE_BUSY_TIMEOUT)?;
     initialize_schema(&mut connection, expected_kind)?;
     seed(&connection)?;
     validate_database(&connection, expected_kind)?;
@@ -207,13 +256,15 @@ pub(crate) fn initialize_managed_database(
     sync_parent(path)
 }
 
-fn configure_connection(connection: &Connection, journal_mode: &str) -> Result<(), AdapterError> {
+fn configure_connection(
+    connection: &Connection,
+    journal_mode: &str,
+    busy_timeout: Duration,
+) -> Result<(), AdapterError> {
     connection
         .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQLITE_ROW_BYTES)
         .map_err(database_unavailable)?;
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(database_unavailable)?;
+    set_busy_timeout(connection, busy_timeout)?;
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(database_unavailable)?;
@@ -557,6 +608,34 @@ const fn map_adapter_store_error(error: AdapterError) -> WitnessStoreError {
     }
 }
 
+pub(crate) fn remaining_busy_timeout(deadline: Option<Instant>) -> Result<Duration, AdapterError> {
+    let Some(deadline) = deadline else {
+        return Ok(MAXIMUM_SQLITE_BUSY_TIMEOUT);
+    };
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| remaining.min(MAXIMUM_SQLITE_BUSY_TIMEOUT))
+        .ok_or_else(|| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))
+}
+
+pub(crate) fn ensure_adapter_deadline(deadline: Option<Instant>) -> Result<(), AdapterError> {
+    remaining_busy_timeout(deadline).map(|_| ())
+}
+
+fn ensure_store_deadline(deadline: Option<Instant>) -> Result<(), WitnessStoreError> {
+    ensure_adapter_deadline(deadline).map_err(map_adapter_store_error)
+}
+
+pub(crate) fn set_busy_timeout(
+    connection: &Connection,
+    timeout: Duration,
+) -> Result<(), AdapterError> {
+    connection
+        .busy_timeout(timeout)
+        .map_err(database_unavailable)
+}
+
 fn database_unavailable(_: rusqlite::Error) -> AdapterError {
     AdapterError::new(AdapterErrorKind::DatabaseUnavailable)
 }
@@ -704,6 +783,35 @@ mod tests {
                 .ok_or("oversized persisted state should fail before loading")?
                 .kind(),
             AdapterErrorKind::CapacityExhausted
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn database_lock_wait_cannot_outlive_the_operation_deadline() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("witness.sqlite3");
+        let witness_id = PrincipalId::from_bytes([10; 32])?;
+        SqliteWitnessStore::initialize(&path, witness_id)?;
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let mut store = SqliteWitnessStore::open_until(&path, witness_id, deadline)?;
+        let blocker = Connection::open(&path)?;
+        blocker.execute_batch("BEGIN IMMEDIATE")?;
+        let mut replacement = PersistedWitnessState::empty(witness_id);
+        replacement.logical.state_generation = 1;
+        replacement.pending_anchor = Some(anchor(witness_id, 1));
+
+        let started = Instant::now();
+        assert!(store.commit(0, replacement).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        blocker.execute_batch("ROLLBACK")?;
+        assert_eq!(
+            SqliteWitnessStore::open(&path, witness_id)?
+                .load_validated()?
+                .logical
+                .state_generation,
+            0
         );
         Ok(())
     }
