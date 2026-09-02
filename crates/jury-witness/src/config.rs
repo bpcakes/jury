@@ -360,7 +360,7 @@ fn invalid<T>() -> Result<T, AdapterError> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::{error::Error, os::unix::fs::PermissionsExt as _};
 
     use super::*;
 
@@ -373,10 +373,12 @@ mod tests {
         }
     }
 
-    fn config() -> WitnessServiceConfig {
-        WitnessServiceConfig {
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    fn config() -> TestResult<WitnessServiceConfig> {
+        Ok(WitnessServiceConfig {
             schema: 1,
-            witness_id: PrincipalId::from_bytes([7; 32]).expect("nonzero fixture id"),
+            witness_id: PrincipalId::from_bytes([7; 32])?,
             listen: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls: TlsConfig {
                 certificate_file: None,
@@ -409,12 +411,12 @@ mod tests {
                 request_timeout_ms: 100,
                 shutdown_grace_ms: 100,
             },
-        }
+        })
     }
 
     #[test]
-    fn database_and_anchor_authorities_must_be_independent() {
-        let baseline = config();
+    fn database_and_anchor_authorities_must_be_independent() -> TestResult {
+        let baseline = config()?;
         assert_eq!(validate_separation(&baseline), Ok(()));
 
         let mut shared_admin = baseline.clone();
@@ -443,34 +445,31 @@ mod tests {
         shared_writer.external_anchor.write_authority =
             shared_writer.database.authority.backup_authority.clone();
         assert!(validate_separation(&shared_writer).is_err());
+        Ok(())
     }
 
     #[test]
-    fn shutdown_grace_covers_the_request_deadline() {
-        let mut limits = config().limits;
+    fn shutdown_grace_covers_the_request_deadline() -> TestResult {
+        let mut limits = config()?.limits;
         assert_eq!(validate_limits(&limits), Ok(()));
         limits.request_timeout_ms = 101;
         assert!(validate_limits(&limits).is_err());
+        Ok(())
     }
 
     #[test]
-    fn database_commands_do_not_require_service_private_material() {
-        let fixture = tempfile::tempdir().expect("fixture");
-        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o700))
-            .expect("private fixture");
-        let mut config = config();
+    fn database_commands_do_not_require_service_private_material() -> TestResult {
+        let fixture = tempfile::tempdir()?;
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o700))?;
+        let mut config = config()?;
         config.database.path = fixture.path().join("witness.sqlite3");
         let config_path = fixture.path().join("witness.json");
-        fs::write(
-            &config_path,
-            serde_json::to_vec(&config).expect("serialize config"),
-        )
-        .expect("write config");
+        fs::write(&config_path, serde_json::to_vec(&config)?)?;
 
-        let command = WitnessServiceConfig::load_database_command(&config_path)
-            .expect("database projection does not touch private files");
+        let command = WitnessServiceConfig::load_database_command(&config_path)?;
         assert_eq!(command.witness_id, config.witness_id);
         assert_eq!(command.database, config.database);
         assert!(WitnessServiceConfig::load(&config_path).is_err());
+        Ok(())
     }
 }

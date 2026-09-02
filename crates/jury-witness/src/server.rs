@@ -1040,15 +1040,16 @@ mod tests {
     }
 
     #[test]
-    fn readiness_probe_allows_only_one_in_flight_check() {
+    fn readiness_probe_allows_only_one_in_flight_check() -> Result<(), Box<dyn Error>> {
         let probe = Arc::new(ReadinessProbe::new());
-        let first = probe.acquire().expect("first probe owns refresh");
+        let first = probe.acquire().ok_or("first probe should own refresh")?;
         assert!(probe.acquire().is_none());
         assert!(!probe.last_ready());
         first.finish(true);
         drop(first);
         assert!(probe.last_ready());
         assert!(probe.acquire().is_some());
+        Ok(())
     }
 
     #[tokio::test]
