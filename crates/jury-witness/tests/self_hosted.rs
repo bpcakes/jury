@@ -92,6 +92,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         &witness_config,
         &json!({
             "schema": 1,
+            "witness_id": witness_id,
             "listen": format!("127.0.0.1:{witness_port}"),
             "tls": {
                 "certificate_file": certificate,

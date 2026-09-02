@@ -1,5 +1,6 @@
 {
   "schema": 1,
+  "witness_id": "1111111111111111111111111111111111111111111111111111111111111111",
   "listen": "0.0.0.0:8443",
   "tls": {
     "certificate_file": "/etc/juryd/tls/witness.crt",

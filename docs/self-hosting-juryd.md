@@ -63,7 +63,8 @@ the repository.
 Start from the checked-in [witness configuration](../deploy/juryd/witness.example.json)
 and [anchor configuration](../deploy/juryd/anchor.example.json). Replace every
 `Example...` authority/failure-domain label with a truthful, non-sensitive
-deployment label and install the files at the absolute paths they name.
+deployment label, set the public `witness_id` to the identity's exact ID, and
+install the files at the absolute paths they name.
 
 On the anchor host:
 
@@ -137,7 +138,9 @@ $ juryd anchor backup --config /etc/juryd-anchor/anchor.json \
 Backups use SQLite's consistent backup API, validate their kind/schema and
 integrity, fsync the completed file, and refuse to overwrite a destination.
 Do not give either backup authority the other service's backup or restore
-credentials.
+credentials. Offline database commands project only the public database fields
+from the JSON configuration: they do not open or validate the service identity,
+identity passphrase, TLS private key, or bearer-credential files.
 
 Restore with the corresponding service stopped and only to the configured
 absent database path:

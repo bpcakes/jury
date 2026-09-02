@@ -159,6 +159,9 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
         } => SoftwareFileIdentityProvider::new(identity_file.clone(), passphrase_file.clone())
             .load()?,
     };
+    if identity.principal_id() != config.witness_id {
+        return Err(AdapterError::new(AdapterErrorKind::InvalidConfiguration));
+    }
     let anchor_config = config.external_anchor.clone();
     let anchor_timeout = Duration::from_millis(config.limits.request_timeout_ms);
     let witness_id = identity.principal_id();

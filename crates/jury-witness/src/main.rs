@@ -4,8 +4,7 @@ use clap::{Parser, Subcommand};
 use jury_witness::{
     AdapterError,
     anchor::{SqliteAnchorRepository, backup_anchor_database, restore_anchor_database},
-    config::{AnchorServiceConfig, IdentityProviderConfig, WitnessServiceConfig},
-    identity_provider::{SoftwareFileIdentityProvider, WitnessIdentityProvider as _},
+    config::{AnchorServiceConfig, WitnessServiceConfig},
     persistence::{SqliteWitnessStore, backup_witness_database, restore_witness_database},
     server::{run_anchor_service, run_witness_service},
 };
@@ -117,22 +116,21 @@ async fn run(cli: Cli) -> Result<(), AdapterError> {
 fn run_database(command: DatabaseCommand) -> Result<(), AdapterError> {
     match command {
         DatabaseCommand::Init { config } => {
-            let config = WitnessServiceConfig::load(&config)?;
-            let identity = load_identity(&config.identity)?;
-            SqliteWitnessStore::open(&config.database.path, identity.principal_id())?;
+            let config = WitnessServiceConfig::load_database_command(&config)?;
+            SqliteWitnessStore::open(&config.database.path, config.witness_id)?;
             println!(
                 "juryd database initialized; contribution readiness still requires the exact external anchor"
             );
             Ok(())
         }
         DatabaseCommand::Backup { config, output } => {
-            let config = WitnessServiceConfig::load(&config)?;
+            let config = WitnessServiceConfig::load_database_command(&config)?;
             backup_witness_database(&config.database.path, &output)?;
             println!("juryd database backup completed");
             Ok(())
         }
         DatabaseCommand::Restore { config, backup } => {
-            let config = WitnessServiceConfig::load(&config)?;
+            let config = WitnessServiceConfig::load_database_command(&config)?;
             restore_witness_database(&backup, &config.database.path)?;
             println!(
                 "juryd database restored; contribution readiness remains disabled until exact external-anchor reconciliation"
@@ -148,37 +146,24 @@ async fn run_anchor(command: AnchorCommand) -> Result<(), AdapterError> {
             run_anchor_service(AnchorServiceConfig::load(&config)?).await
         }
         AnchorCommand::Init { config } => {
-            let config = AnchorServiceConfig::load(&config)?;
+            let config = AnchorServiceConfig::load_database_command(&config)?;
             SqliteAnchorRepository::open(&config.database.path)?;
             println!("juryd external-anchor database initialized");
             Ok(())
         }
         AnchorCommand::Backup { config, output } => {
-            let config = AnchorServiceConfig::load(&config)?;
+            let config = AnchorServiceConfig::load_database_command(&config)?;
             backup_anchor_database(&config.database.path, &output)?;
             println!("juryd external-anchor backup completed");
             Ok(())
         }
         AnchorCommand::Restore { config, backup } => {
-            let config = AnchorServiceConfig::load(&config)?;
+            let config = AnchorServiceConfig::load_database_command(&config)?;
             restore_anchor_database(&backup, &config.database.path)?;
             println!(
                 "juryd external-anchor database restored; witnesses independently verify exact state before contributing"
             );
             Ok(())
-        }
-    }
-}
-
-fn load_identity(
-    config: &IdentityProviderConfig,
-) -> Result<Box<dyn jury_core::witness_engine::WitnessEngineIdentity>, AdapterError> {
-    match config {
-        IdentityProviderConfig::SoftwareFile {
-            identity_file,
-            passphrase_file,
-        } => {
-            SoftwareFileIdentityProvider::new(identity_file.clone(), passphrase_file.clone()).load()
         }
     }
 }

@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use jury_protocol::vault_v1::PrincipalId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -76,6 +77,7 @@ pub struct TransportLimits {
 #[serde(deny_unknown_fields)]
 pub struct WitnessServiceConfig {
     pub schema: u16,
+    pub witness_id: PrincipalId,
     pub listen: SocketAddr,
     pub tls: TlsConfig,
     pub identity: IdentityProviderConfig,
@@ -96,6 +98,17 @@ pub struct AnchorServiceConfig {
     pub write_credential_file: PathBuf,
     pub write_authority: String,
     pub limits: TransportLimits,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WitnessDatabaseCommandConfig {
+    pub witness_id: PrincipalId,
+    pub database: DatabaseConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnchorDatabaseCommandConfig {
+    pub database: DatabaseConfig,
 }
 
 impl WitnessServiceConfig {
@@ -145,6 +158,21 @@ impl WitnessServiceConfig {
         validate_separation(self)?;
         Ok(())
     }
+
+    pub fn load_database_command(
+        path: &Path,
+    ) -> Result<WitnessDatabaseCommandConfig, AdapterError> {
+        let config: Self = load_json(path)?;
+        if config.schema != 1 {
+            return invalid();
+        }
+        validate_database_path(&config.database.path)?;
+        validate_boundary(&config.database.authority)?;
+        Ok(WitnessDatabaseCommandConfig {
+            witness_id: config.witness_id,
+            database: config.database,
+        })
+    }
 }
 
 impl AnchorServiceConfig {
@@ -171,6 +199,18 @@ impl AnchorServiceConfig {
             return invalid();
         }
         Ok(())
+    }
+
+    pub fn load_database_command(path: &Path) -> Result<AnchorDatabaseCommandConfig, AdapterError> {
+        let config: Self = load_json(path)?;
+        if config.schema != 1 {
+            return invalid();
+        }
+        validate_database_path(&config.database.path)?;
+        validate_boundary(&config.database.authority)?;
+        Ok(AnchorDatabaseCommandConfig {
+            database: config.database,
+        })
     }
 }
 
@@ -312,6 +352,8 @@ fn invalid<T>() -> Result<T, AdapterError> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     use super::*;
 
     fn boundary(prefix: &str, failure_domain: &str) -> AuthorityBoundary {
@@ -326,6 +368,7 @@ mod tests {
     fn config() -> WitnessServiceConfig {
         WitnessServiceConfig {
             schema: 1,
+            witness_id: PrincipalId::from_bytes([7; 32]).expect("nonzero fixture id"),
             listen: SocketAddr::from(([127, 0, 0, 1], 8443)),
             tls: TlsConfig {
                 certificate_file: None,
@@ -392,5 +435,26 @@ mod tests {
         shared_writer.external_anchor.write_authority =
             shared_writer.database.authority.backup_authority.clone();
         assert!(validate_separation(&shared_writer).is_err());
+    }
+
+    #[test]
+    fn database_commands_do_not_require_service_private_material() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o700))
+            .expect("private fixture");
+        let mut config = config();
+        config.database.path = fixture.path().join("witness.sqlite3");
+        let config_path = fixture.path().join("witness.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec(&config).expect("serialize config"),
+        )
+        .expect("write config");
+
+        let command = WitnessServiceConfig::load_database_command(&config_path)
+            .expect("database projection does not touch private files");
+        assert_eq!(command.witness_id, config.witness_id);
+        assert_eq!(command.database, config.database);
+        assert!(WitnessServiceConfig::load(&config_path).is_err());
     }
 }
