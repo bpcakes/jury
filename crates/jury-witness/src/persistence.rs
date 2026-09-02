@@ -8,13 +8,17 @@ use std::{
 use jury_core::witness_engine::{PersistedWitnessState, WitnessStateStore, WitnessStoreError};
 use jury_protocol::vault_v1::{Digest32, PrincipalId};
 use rusqlite::{
-    Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup, params,
+    Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup,
+    limits::Limit, params,
 };
+use serde::Serialize;
 use tempfile::NamedTempFile;
 
 use crate::{AdapterError, AdapterErrorKind};
 
 const SCHEMA_VERSION: i64 = 1;
+const MAX_PERSISTED_WITNESS_STATE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SQLITE_ROW_BYTES: i32 = 65 * 1024 * 1024;
 pub(crate) const WITNESS_DATABASE_KIND: &str = "jury-witness-state-v1";
 pub(crate) const ANCHOR_DATABASE_KIND: &str = "jury-external-anchor-v1";
 
@@ -26,8 +30,7 @@ pub struct SqliteWitnessStore {
 impl SqliteWitnessStore {
     pub fn initialize(path: &Path, witness_id: PrincipalId) -> Result<(), AdapterError> {
         let initial = PersistedWitnessState::empty(witness_id);
-        let initial_json = serde_json::to_vec(&initial)
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+        let initial_json = encode_persisted_state(&initial).map_err(map_codec_adapter_error)?;
         initialize_managed_database(path, WITNESS_DATABASE_KIND, move |connection| {
             connection
                 .execute(
@@ -59,7 +62,7 @@ impl SqliteWitnessStore {
 
 impl WitnessStateStore for SqliteWitnessStore {
     fn load(&mut self) -> Result<PersistedWitnessState, WitnessStoreError> {
-        self.load_validated().map_err(|_| WitnessStoreError)
+        self.load_validated().map_err(map_adapter_store_error)
     }
 
     fn commit(
@@ -71,35 +74,37 @@ impl WitnessStateStore for SqliteWitnessStore {
             || replacement.logical.state_generation != expected_generation.saturating_add(1)
             || replacement.pending_anchor.is_none()
         {
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| WitnessStoreError)?;
+            .map_err(|_| WitnessStoreError::unavailable())?;
         let current =
-            load_witness_state(&transaction, self.witness_id).map_err(|_| WitnessStoreError)?;
+            load_witness_state(&transaction, self.witness_id).map_err(map_adapter_store_error)?;
         if current.logical.state_generation != expected_generation
             || current.pending_anchor.is_some()
         {
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
-        let state_json = serde_json::to_vec(&replacement).map_err(|_| WitnessStoreError)?;
-        let replacement_generation =
-            i64::try_from(replacement.logical.state_generation).map_err(|_| WitnessStoreError)?;
+        let state_json = encode_persisted_state(&replacement).map_err(map_codec_store_error)?;
+        let replacement_generation = i64::try_from(replacement.logical.state_generation)
+            .map_err(|_| WitnessStoreError::unavailable())?;
         let expected_generation =
-            i64::try_from(expected_generation).map_err(|_| WitnessStoreError)?;
+            i64::try_from(expected_generation).map_err(|_| WitnessStoreError::unavailable())?;
         let changed = transaction
             .execute(
                 "UPDATE witness_state SET generation = ?1, state_json = ?2 \
                  WHERE singleton = 1 AND generation = ?3",
                 params![replacement_generation, state_json, expected_generation],
             )
-            .map_err(|_| WitnessStoreError)?;
+            .map_err(|_| WitnessStoreError::unavailable())?;
         if changed != 1 {
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
-        transaction.commit().map_err(|_| WitnessStoreError)
+        transaction
+            .commit()
+            .map_err(|_| WitnessStoreError::unavailable())
     }
 
     fn mark_anchor_published(
@@ -109,28 +114,37 @@ impl WitnessStateStore for SqliteWitnessStore {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| WitnessStoreError)?;
+            .map_err(|_| WitnessStoreError::unavailable())?;
         let mut current =
-            load_witness_state(&transaction, self.witness_id).map_err(|_| WitnessStoreError)?;
-        let candidate = current.pending_anchor.take().ok_or(WitnessStoreError)?;
-        if candidate.digest().map_err(|_| WitnessStoreError)? != *candidate_digest {
-            return Err(WitnessStoreError);
+            load_witness_state(&transaction, self.witness_id).map_err(map_adapter_store_error)?;
+        let candidate = current
+            .pending_anchor
+            .take()
+            .ok_or_else(WitnessStoreError::unavailable)?;
+        if candidate
+            .digest()
+            .map_err(|_| WitnessStoreError::unavailable())?
+            != *candidate_digest
+        {
+            return Err(WitnessStoreError::unavailable());
         }
         current.published_anchor = Some(candidate);
-        let state_json = serde_json::to_vec(&current).map_err(|_| WitnessStoreError)?;
-        let generation =
-            i64::try_from(current.logical.state_generation).map_err(|_| WitnessStoreError)?;
+        let state_json = encode_persisted_state(&current).map_err(map_codec_store_error)?;
+        let generation = i64::try_from(current.logical.state_generation)
+            .map_err(|_| WitnessStoreError::unavailable())?;
         let changed = transaction
             .execute(
                 "UPDATE witness_state SET state_json = ?1 \
                  WHERE singleton = 1 AND generation = ?2",
                 params![state_json, generation],
             )
-            .map_err(|_| WitnessStoreError)?;
+            .map_err(|_| WitnessStoreError::unavailable())?;
         if changed != 1 {
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
-        transaction.commit().map_err(|_| WitnessStoreError)
+        transaction
+            .commit()
+            .map_err(|_| WitnessStoreError::unavailable())
     }
 }
 
@@ -194,6 +208,9 @@ pub(crate) fn initialize_managed_database(
 }
 
 fn configure_connection(connection: &Connection, journal_mode: &str) -> Result<(), AdapterError> {
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQLITE_ROW_BYTES)
+        .map_err(database_unavailable)?;
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(database_unavailable)?;
@@ -280,10 +297,19 @@ fn load_witness_state(
     connection: &Connection,
     witness_id: PrincipalId,
 ) -> Result<PersistedWitnessState, AdapterError> {
+    let serialized_length: i64 = connection
+        .query_row(
+            "SELECT length(state_json) FROM witness_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(database_unavailable)?;
+    validate_state_length(serialized_length)?;
     let (generation, state_json): (i64, Vec<u8>) = connection
         .query_row(
-            "SELECT generation, state_json FROM witness_state WHERE singleton = 1",
-            [],
+            "SELECT generation, state_json FROM witness_state \
+             WHERE singleton = 1 AND length(state_json) <= ?1",
+            params![MAX_PERSISTED_WITNESS_STATE_BYTES as i64],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(database_unavailable)?;
@@ -299,6 +325,15 @@ fn load_witness_state(
         .canonical_database_state()
         .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
     Ok(state)
+}
+
+fn validate_state_length(serialized_length: i64) -> Result<(), AdapterError> {
+    let serialized_length = usize::try_from(serialized_length)
+        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+    if serialized_length > MAX_PERSISTED_WITNESS_STATE_BYTES {
+        return Err(AdapterError::new(AdapterErrorKind::CapacityExhausted));
+    }
+    Ok(())
 }
 
 pub(crate) fn backup_managed_database(
@@ -443,6 +478,85 @@ fn validate_existing_private_file(path: &Path) -> Result<(), AdapterError> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StateCodecError {
+    Invalid,
+    CapacityExhausted,
+}
+
+struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    maximum_bytes: usize,
+    capacity_exhausted: bool,
+}
+
+impl BoundedJsonWriter {
+    fn new(maximum_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            maximum_bytes,
+            capacity_exhausted: false,
+        }
+    }
+}
+
+impl io::Write for BoundedJsonWriter {
+    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+        let remaining = self.maximum_bytes.saturating_sub(self.bytes.len());
+        if input.len() > remaining {
+            self.capacity_exhausted = true;
+            return Err(io::Error::other(
+                "serialized witness state exceeds capacity",
+            ));
+        }
+        self.bytes.extend_from_slice(input);
+        Ok(input.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encode_persisted_state(state: &PersistedWitnessState) -> Result<Vec<u8>, StateCodecError> {
+    encode_json_bounded(state, MAX_PERSISTED_WITNESS_STATE_BYTES)
+}
+
+fn encode_json_bounded(
+    value: &impl Serialize,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, StateCodecError> {
+    let mut writer = BoundedJsonWriter::new(maximum_bytes);
+    match serde_json::to_writer(&mut writer, value) {
+        Ok(()) => Ok(writer.bytes),
+        Err(_) if writer.capacity_exhausted => Err(StateCodecError::CapacityExhausted),
+        Err(_) => Err(StateCodecError::Invalid),
+    }
+}
+
+const fn map_codec_adapter_error(error: StateCodecError) -> AdapterError {
+    match error {
+        StateCodecError::Invalid => AdapterError::new(AdapterErrorKind::InvalidState),
+        StateCodecError::CapacityExhausted => {
+            AdapterError::new(AdapterErrorKind::CapacityExhausted)
+        }
+    }
+}
+
+const fn map_codec_store_error(error: StateCodecError) -> WitnessStoreError {
+    match error {
+        StateCodecError::Invalid => WitnessStoreError::unavailable(),
+        StateCodecError::CapacityExhausted => WitnessStoreError::capacity_exhausted(),
+    }
+}
+
+const fn map_adapter_store_error(error: AdapterError) -> WitnessStoreError {
+    match error.kind() {
+        AdapterErrorKind::CapacityExhausted => WitnessStoreError::capacity_exhausted(),
+        _ => WitnessStoreError::unavailable(),
+    }
+}
+
 fn database_unavailable(_: rusqlite::Error) -> AdapterError {
     AdapterError::new(AdapterErrorKind::DatabaseUnavailable)
 }
@@ -571,6 +685,25 @@ mod tests {
                 .logical
                 .state_generation,
             0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_state_encoding_and_loading_have_hard_byte_caps() -> TestResult {
+        let compact =
+            encode_json_bounded(&vec!["abcd"], 16).map_err(|_| "small state should serialize")?;
+        assert_eq!(compact, br#"["abcd"]"#);
+        assert_eq!(
+            encode_json_bounded(&vec!["abcd"], 7),
+            Err(StateCodecError::CapacityExhausted)
+        );
+        assert_eq!(
+            validate_state_length((MAX_PERSISTED_WITNESS_STATE_BYTES + 1) as i64)
+                .err()
+                .ok_or("oversized persisted state should fail before loading")?
+                .kind(),
+            AdapterErrorKind::CapacityExhausted
         );
         Ok(())
     }

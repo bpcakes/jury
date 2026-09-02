@@ -138,6 +138,12 @@ not enumerate principals, policies, vaults, items, requests, generations, or
 anchor contents. Readiness may return `503` while liveness remains `200`; do not
 replace that distinction with a restart loop.
 
+The SQLite adapter caps the complete serialized witness snapshot at 64 MiB.
+It rejects an operation that would cross the cap as protocol capacity
+exhaustion and refuses to load an oversized snapshot before materializing its
+blob. Operators must compact eligible replay records before reaching this
+deployment limit; compaction never shortens the protocol retention horizon.
+
 ## Backup, restore, and rollback behavior
 
 Back up each database to a new, absent destination under its own authority:

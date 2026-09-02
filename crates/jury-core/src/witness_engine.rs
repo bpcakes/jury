@@ -188,7 +188,36 @@ pub enum AnchorCompareAndSwap {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WitnessStoreError;
+pub enum WitnessStoreErrorKind {
+    Unavailable,
+    CapacityExhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WitnessStoreError {
+    kind: WitnessStoreErrorKind,
+}
+
+impl WitnessStoreError {
+    #[must_use]
+    pub const fn unavailable() -> Self {
+        Self {
+            kind: WitnessStoreErrorKind::Unavailable,
+        }
+    }
+
+    #[must_use]
+    pub const fn capacity_exhausted() -> Self {
+        Self {
+            kind: WitnessStoreErrorKind::CapacityExhausted,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> WitnessStoreErrorKind {
+        self.kind
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WitnessAnchorError;
@@ -885,20 +914,14 @@ where
     }
 
     fn ready_state(&mut self) -> Result<PersistedWitnessState, WitnessEngineError> {
-        let state = self
-            .store
-            .load()
-            .map_err(|_| WitnessEngineError::store_unavailable())?;
+        let state = self.store.load().map_err(map_store_error)?;
         self.validate_stored_identity(&state)?;
         if state.pending_anchor.is_some() {
             self.publish_pending(state)?;
         } else {
             self.require_published_equality(&state)?;
         }
-        let ready = self
-            .store
-            .load()
-            .map_err(|_| WitnessEngineError::store_unavailable())?;
+        let ready = self.store.load().map_err(map_store_error)?;
         self.validate_stored_identity(&ready)?;
         if ready.pending_anchor.is_some() {
             return Err(refused(WitnessReasonV1::AnchorConflict));
@@ -1034,7 +1057,7 @@ where
             .map_err(|_| refused(WitnessReasonV1::Invalid))?;
         self.store
             .mark_anchor_published(&digest)
-            .map_err(|_| WitnessEngineError::store_unavailable())
+            .map_err(map_store_error)
     }
 
     fn commit_and_publish(
@@ -1052,7 +1075,7 @@ where
         state.pending_anchor = Some(candidate);
         self.store
             .commit(expected_generation, state)
-            .map_err(|_| WitnessEngineError::store_unavailable())?;
+            .map_err(map_store_error)?;
         self.ready_state()
     }
 
@@ -2260,6 +2283,13 @@ fn map_witness_rule_error(error: PolicyError) -> WitnessEngineError {
         PolicyErrorKind::Unauthorized => refused(WitnessReasonV1::WrongOperation),
         PolicyErrorKind::MissingWitnessPolicy => refused(WitnessReasonV1::StalePolicy),
         _ => refused(WitnessReasonV1::PolicyDenied),
+    }
+}
+
+const fn map_store_error(error: WitnessStoreError) -> WitnessEngineError {
+    match error.kind() {
+        WitnessStoreErrorKind::Unavailable => WitnessEngineError::store_unavailable(),
+        WitnessStoreErrorKind::CapacityExhausted => refused(WitnessReasonV1::CapacityExhausted),
     }
 }
 

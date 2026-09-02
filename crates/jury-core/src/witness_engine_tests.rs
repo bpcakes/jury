@@ -93,19 +93,19 @@ impl WitnessStateStore for MemoryStore {
     ) -> Result<(), WitnessStoreError> {
         if self.fail_before_commit_once {
             self.fail_before_commit_once = false;
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
         if self.state.logical.state_generation != expected_generation
             || self.state.pending_anchor.is_some()
             || replacement.logical.state_generation != expected_generation + 1
             || replacement.pending_anchor.is_none()
         {
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
         self.state = replacement;
         if self.fail_after_commit_once {
             self.fail_after_commit_once = false;
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
         Ok(())
     }
@@ -116,11 +116,19 @@ impl WitnessStateStore for MemoryStore {
     ) -> Result<(), WitnessStoreError> {
         if self.fail_mark_once {
             self.fail_mark_once = false;
-            return Err(WitnessStoreError);
+            return Err(WitnessStoreError::unavailable());
         }
-        let candidate = self.state.pending_anchor.take().ok_or(WitnessStoreError)?;
-        if candidate.digest().map_err(|_| WitnessStoreError)? != *candidate_digest {
-            return Err(WitnessStoreError);
+        let candidate = self
+            .state
+            .pending_anchor
+            .take()
+            .ok_or_else(WitnessStoreError::unavailable)?;
+        if candidate
+            .digest()
+            .map_err(|_| WitnessStoreError::unavailable())?
+            != *candidate_digest
+        {
+            return Err(WitnessStoreError::unavailable());
         }
         self.state.published_anchor = Some(candidate);
         Ok(())
@@ -2691,4 +2699,13 @@ fn a_policy_ahead_of_the_registered_checkpoint_is_witness_behind_not_a_fork() ->
         Err(WitnessReasonV1::WitnessBehind)
     );
     Ok(())
+}
+
+#[test]
+fn store_capacity_is_preserved_as_a_protocol_refusal() {
+    let error = map_store_error(WitnessStoreError::capacity_exhausted());
+    assert_eq!(
+        error.kind(),
+        WitnessEngineErrorKind::Refused(WitnessReasonV1::CapacityExhausted)
+    );
 }
