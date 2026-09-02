@@ -41,7 +41,9 @@ impl DirectAnchor {
 
 impl ExternalWitnessAnchor for DirectAnchor {
     fn read(&mut self) -> Result<Option<WitnessStateAnchorV1>, WitnessAnchorError> {
-        self.repository.read().map_err(|_| WitnessAnchorError)
+        self.repository
+            .read()
+            .map_err(|_| WitnessAnchorError::unavailable())
     }
 
     fn compare_and_swap(
@@ -52,14 +54,14 @@ impl ExternalWitnessAnchor for DirectAnchor {
         let expected_digest = expected
             .map(WitnessStateAnchorV1::digest)
             .transpose()
-            .map_err(|_| WitnessAnchorError)?;
+            .map_err(|_| WitnessAnchorError::unavailable())?;
         self.repository
             .compare_and_swap(expected_digest.as_ref(), candidate)
             .map(|result| match result {
                 AnchorCasResult::Applied(_) => AnchorCompareAndSwap::Published,
                 AnchorCasResult::Conflict(_) => AnchorCompareAndSwap::Conflict,
             })
-            .map_err(|_| WitnessAnchorError)
+            .map_err(|_| WitnessAnchorError::unavailable())
     }
 }
 

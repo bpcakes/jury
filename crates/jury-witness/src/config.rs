@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     AdapterError, AdapterErrorKind,
+    anchor::MAX_ANCHOR_HTTP_BYTES,
     credentials::{load_digest, validate_private_regular_file},
 };
 
@@ -190,6 +191,9 @@ impl AnchorServiceConfig {
         }
         validate_tls(&self.tls, self.listen)?;
         validate_limits(&self.limits)?;
+        if self.limits.maximum_request_bytes != MAX_ANCHOR_HTTP_BYTES {
+            return invalid();
+        }
         validate_database_path(&self.database.path)?;
         validate_boundary(&self.database.authority)?;
         validate_label(&self.write_authority)?;

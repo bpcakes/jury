@@ -141,13 +141,25 @@ struct MemoryAnchor {
     publishes: usize,
     fail_readback_once: bool,
     pending_read_failure: bool,
+    reject_candidate_capacity: bool,
 }
 
 impl ExternalWitnessAnchor for MemoryAnchor {
+    fn ensure_publishable(
+        &mut self,
+        _candidate: &WitnessStateAnchorV1,
+    ) -> Result<(), WitnessAnchorError> {
+        if self.reject_candidate_capacity {
+            Err(WitnessAnchorError::capacity_exhausted())
+        } else {
+            Ok(())
+        }
+    }
+
     fn read(&mut self) -> Result<Option<WitnessStateAnchorV1>, WitnessAnchorError> {
         if self.pending_read_failure {
             self.pending_read_failure = false;
-            return Err(WitnessAnchorError);
+            return Err(WitnessAnchorError::unavailable());
         }
         Ok(self.value.clone())
     }
@@ -2708,4 +2720,43 @@ fn store_capacity_is_preserved_as_a_protocol_refusal() {
         error.kind(),
         WitnessEngineErrorKind::Refused(WitnessReasonV1::CapacityExhausted)
     );
+}
+
+#[test]
+fn unpublishable_anchor_is_refused_before_local_state_commit() -> TestResult {
+    let fixture = fixture()?;
+    let mut store = empty_store(&fixture);
+    let mut anchor = MemoryAnchor {
+        reject_candidate_capacity: true,
+        ..MemoryAnchor::default()
+    };
+    let clock = FixedClock {
+        wall_ms: NOW_MS,
+        monotonic_ms: 50,
+    };
+    let mut random = TestRandom::new(0x1234_5678_9abc_def0);
+    let mut engine = WitnessEngine::new(
+        &fixture.actors.witnesses[0],
+        &mut store,
+        &mut anchor,
+        &clock,
+        &mut random,
+    );
+
+    assert_eq!(
+        engine
+            .register_vault(
+                &fixture.policy,
+                RegistrationBytes::new(vec![1, 2, 3])?,
+                fixture.checkpoint.clone(),
+                PolicyMaterialBytes::new(vec![4, 5, 6])?,
+            )
+            .map_err(WitnessEngineError::reason),
+        Err(WitnessReasonV1::CapacityExhausted)
+    );
+    assert_eq!(store.state.logical.state_generation, 0);
+    assert!(store.state.logical.vaults.is_empty());
+    assert!(store.state.pending_anchor.is_none());
+    assert!(anchor.value.is_none());
+    Ok(())
 }

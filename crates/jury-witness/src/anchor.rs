@@ -1,5 +1,5 @@
 use std::{
-    io::Read as _,
+    io::{self, Read as _},
     path::Path,
     time::{Duration, Instant},
 };
@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-const MAX_ANCHOR_HTTP_BYTES: usize = 1024 * 1024;
+pub const MAX_ANCHOR_HTTP_BYTES: usize = 1024 * 1024;
 
 pub struct SqliteAnchorRepository {
     connection: Connection,
@@ -246,8 +246,25 @@ fn remaining_timeout(
 }
 
 impl ExternalWitnessAnchor for HttpExternalAnchor {
+    fn ensure_publishable(
+        &mut self,
+        candidate: &WitnessStateAnchorV1,
+    ) -> Result<(), WitnessAnchorError> {
+        validate_candidate(&self.witness_id, candidate)
+            .map_err(|_| WitnessAnchorError::unavailable())?;
+        ensure_bounded_json(&AnchorCasRequest {
+            expected_anchor_digest: Some(zero_digest()),
+            next_exact_anchor: candidate.clone(),
+        })?;
+        ensure_bounded_json(&AnchorCasResponse {
+            outcome: AnchorCasOutcome::Applied,
+            exact_anchor: Some(candidate.clone()),
+        })
+    }
+
     fn read(&mut self) -> Result<Option<WitnessStateAnchorV1>, WitnessAnchorError> {
-        self.read_remote().map_err(|_| WitnessAnchorError)
+        self.read_remote()
+            .map_err(|_| WitnessAnchorError::unavailable())
     }
 
     fn compare_and_swap(
@@ -255,15 +272,19 @@ impl ExternalWitnessAnchor for HttpExternalAnchor {
         expected: Option<&WitnessStateAnchorV1>,
         candidate: &WitnessStateAnchorV1,
     ) -> Result<AnchorCompareAndSwap, WitnessAnchorError> {
-        validate_candidate(&self.witness_id, candidate).map_err(|_| WitnessAnchorError)?;
+        validate_candidate(&self.witness_id, candidate)
+            .map_err(|_| WitnessAnchorError::unavailable())?;
         let request = AnchorCasRequest {
             expected_anchor_digest: expected
                 .map(WitnessStateAnchorV1::digest)
                 .transpose()
-                .map_err(|_| WitnessAnchorError)?,
+                .map_err(|_| WitnessAnchorError::unavailable())?,
             next_exact_anchor: candidate.clone(),
         };
-        let timeout = self.remaining_timeout().map_err(|_| WitnessAnchorError)?;
+        ensure_bounded_json(&request)?;
+        let timeout = self
+            .remaining_timeout()
+            .map_err(|_| WitnessAnchorError::unavailable())?;
         let response = self
             .client
             .post(self.endpoint.clone())
@@ -271,18 +292,55 @@ impl ExternalWitnessAnchor for HttpExternalAnchor {
             .header(authorization_header(), self.credential.authorization())
             .json(&request)
             .send()
-            .map_err(|_| WitnessAnchorError)?;
+            .map_err(|_| WitnessAnchorError::unavailable())?;
         if response.status() != StatusCode::OK {
-            return Err(WitnessAnchorError);
+            return Err(WitnessAnchorError::unavailable());
         }
-        let response: AnchorCasResponse = bounded_json(response).map_err(|_| WitnessAnchorError)?;
+        let response: AnchorCasResponse =
+            bounded_json(response).map_err(|_| WitnessAnchorError::unavailable())?;
         match response.outcome {
             AnchorCasOutcome::Applied if response.exact_anchor.as_ref() == Some(candidate) => {
                 Ok(AnchorCompareAndSwap::Published)
             }
             AnchorCasOutcome::Conflict => Ok(AnchorCompareAndSwap::Conflict),
-            AnchorCasOutcome::Applied => Err(WitnessAnchorError),
+            AnchorCasOutcome::Applied => Err(WitnessAnchorError::unavailable()),
         }
+    }
+}
+
+struct JsonSizeWriter {
+    written: usize,
+    capacity_exhausted: bool,
+}
+
+impl io::Write for JsonSizeWriter {
+    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+        let Some(written) = self.written.checked_add(input.len()) else {
+            self.capacity_exhausted = true;
+            return Err(io::Error::other("anchor JSON exceeds capacity"));
+        };
+        if written > MAX_ANCHOR_HTTP_BYTES {
+            self.capacity_exhausted = true;
+            return Err(io::Error::other("anchor JSON exceeds capacity"));
+        }
+        self.written = written;
+        Ok(input.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn ensure_bounded_json(value: &impl Serialize) -> Result<(), WitnessAnchorError> {
+    let mut writer = JsonSizeWriter {
+        written: 0,
+        capacity_exhausted: false,
+    };
+    match serde_json::to_writer(&mut writer, value) {
+        Ok(()) => Ok(()),
+        Err(_) if writer.capacity_exhausted => Err(WitnessAnchorError::capacity_exhausted()),
+        Err(_) => Err(WitnessAnchorError::unavailable()),
     }
 }
 
@@ -389,11 +447,14 @@ fn anchor_unavailable(_: rusqlite::Error) -> AdapterError {
 mod tests {
     use std::{error::Error, fs, os::unix::fs::PermissionsExt as _};
 
-    use jury_protocol::vault_v1::Signature64;
+    use jury_protocol::{
+        vault_v1::{Signature64, VaultId},
+        witness_v1::VaultHighWatermarkV1,
+    };
 
     use super::*;
 
-    type TestResult = Result<(), Box<dyn Error>>;
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
     fn candidate(
         witness_id: PrincipalId,
@@ -506,6 +567,43 @@ mod tests {
                 .ok_or("expired operation should not issue another request")?
                 .kind(),
             AdapterErrorKind::AnchorUnavailable
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn anchor_wire_artifacts_are_bounded_before_http() -> TestResult {
+        let witness_id = PrincipalId::from_bytes([5; 32])?;
+        let small = candidate(witness_id, 1, zero_digest(), 7);
+        ensure_bounded_json(&AnchorCasRequest {
+            expected_anchor_digest: Some(zero_digest()),
+            next_exact_anchor: small,
+        })
+        .map_err(|_| "small anchor should fit")?;
+
+        let mut large = candidate(witness_id, 1, zero_digest(), 8);
+        large.vault_high_watermarks = (1_u64..=10_000)
+            .map(|index| -> TestResult<VaultHighWatermarkV1> {
+                let mut id = [0_u8; 32];
+                id[24..].copy_from_slice(&index.to_be_bytes());
+                Ok(VaultHighWatermarkV1 {
+                    vault_id: VaultId::from_bytes(id)?,
+                    genesis_fingerprint: Digest32::new([1; 32]),
+                    policy_sequence: index,
+                    checkpoint_digest: Digest32::new([2; 32]),
+                    highest_retained_request_expiry_ms: index,
+                })
+            })
+            .collect::<TestResult<Vec<_>>>()?;
+        assert_eq!(
+            ensure_bounded_json(&AnchorCasRequest {
+                expected_anchor_digest: Some(zero_digest()),
+                next_exact_anchor: large,
+            })
+            .err()
+            .ok_or("large anchor should be rejected")?
+            .kind(),
+            jury_core::witness_engine::WitnessAnchorErrorKind::CapacityExhausted
         );
         Ok(())
     }

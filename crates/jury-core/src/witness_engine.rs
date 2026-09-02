@@ -220,7 +220,36 @@ impl WitnessStoreError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WitnessAnchorError;
+pub enum WitnessAnchorErrorKind {
+    Unavailable,
+    CapacityExhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WitnessAnchorError {
+    kind: WitnessAnchorErrorKind,
+}
+
+impl WitnessAnchorError {
+    #[must_use]
+    pub const fn unavailable() -> Self {
+        Self {
+            kind: WitnessAnchorErrorKind::Unavailable,
+        }
+    }
+
+    #[must_use]
+    pub const fn capacity_exhausted() -> Self {
+        Self {
+            kind: WitnessAnchorErrorKind::CapacityExhausted,
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> WitnessAnchorErrorKind {
+        self.kind
+    }
+}
 
 pub trait WitnessClock {
     fn wall_time_ms(&self) -> u64;
@@ -243,6 +272,13 @@ pub trait WitnessStateStore {
 }
 
 pub trait ExternalWitnessAnchor {
+    fn ensure_publishable(
+        &mut self,
+        _candidate: &WitnessStateAnchorV1,
+    ) -> Result<(), WitnessAnchorError> {
+        Ok(())
+    }
+
     fn read(&mut self) -> Result<Option<WitnessStateAnchorV1>, WitnessAnchorError>;
 
     fn compare_and_swap(
@@ -953,10 +989,7 @@ where
         &mut self,
         state: &PersistedWitnessState,
     ) -> Result<(), WitnessEngineError> {
-        let external = self
-            .external_anchor
-            .read()
-            .map_err(|_| WitnessEngineError::anchor_unavailable())?;
+        let external = self.external_anchor.read().map_err(map_anchor_error)?;
         match (&state.published_anchor, &external) {
             (None, None) if state.logical.state_generation == 0 => Ok(()),
             (Some(local), Some(external))
@@ -1000,10 +1033,7 @@ where
             return Err(refused(WitnessReasonV1::AnchorConflict));
         }
 
-        let external = self
-            .external_anchor
-            .read()
-            .map_err(|_| WitnessEngineError::anchor_unavailable())?;
+        let external = self.external_anchor.read().map_err(map_anchor_error)?;
         if external
             .as_ref()
             .is_some_and(|external| exact_anchor_eq(external, candidate).unwrap_or(false))
@@ -1021,14 +1051,11 @@ where
         match self
             .external_anchor
             .compare_and_swap(state.published_anchor.as_ref(), candidate)
-            .map_err(|_| WitnessEngineError::anchor_unavailable())?
+            .map_err(map_anchor_error)?
         {
             AnchorCompareAndSwap::Published => {}
             AnchorCompareAndSwap::Conflict => {
-                let observed = self
-                    .external_anchor
-                    .read()
-                    .map_err(|_| WitnessEngineError::anchor_unavailable())?;
+                let observed = self.external_anchor.read().map_err(map_anchor_error)?;
                 if !observed
                     .as_ref()
                     .is_some_and(|observed| exact_anchor_eq(observed, candidate).unwrap_or(false))
@@ -1040,7 +1067,7 @@ where
         let readback = self
             .external_anchor
             .read()
-            .map_err(|_| WitnessEngineError::anchor_unavailable())?
+            .map_err(map_anchor_error)?
             .ok_or_else(|| refused(WitnessReasonV1::AnchorConflict))?;
         if !exact_anchor_eq(&readback, candidate)? {
             return Err(refused(WitnessReasonV1::AnchorConflict));
@@ -1072,6 +1099,9 @@ where
         state.logical.last_accepted_wall_time_ms =
             state.logical.last_accepted_wall_time_ms.max(now_ms);
         let candidate = self.build_anchor(&state, now_ms)?;
+        self.external_anchor
+            .ensure_publishable(&candidate)
+            .map_err(map_anchor_error)?;
         state.pending_anchor = Some(candidate);
         self.store
             .commit(expected_generation, state)
@@ -2290,6 +2320,13 @@ const fn map_store_error(error: WitnessStoreError) -> WitnessEngineError {
     match error.kind() {
         WitnessStoreErrorKind::Unavailable => WitnessEngineError::store_unavailable(),
         WitnessStoreErrorKind::CapacityExhausted => refused(WitnessReasonV1::CapacityExhausted),
+    }
+}
+
+const fn map_anchor_error(error: WitnessAnchorError) -> WitnessEngineError {
+    match error.kind() {
+        WitnessAnchorErrorKind::Unavailable => WitnessEngineError::anchor_unavailable(),
+        WitnessAnchorErrorKind::CapacityExhausted => refused(WitnessReasonV1::CapacityExhausted),
     }
 }
 

@@ -19,7 +19,7 @@
   "write_credential_file": "/etc/juryd-anchor/private/anchor-write.token",
   "write_authority": "ExampleAnchorWriter",
   "limits": {
-    "maximum_request_bytes": 65536,
+    "maximum_request_bytes": 1048576,
     "maximum_concurrency": 32,
     "requests_per_second": 100,
     "burst_requests": 200,

@@ -133,6 +133,12 @@ compare-and-swap. The witness reads the stored value back byte-for-byte before
 acknowledging a mutation. The witness client trusts only the configured anchor
 CA and does not merge it with the host's platform trust roots.
 
+Anchor request and response artifacts have one fixed 1 MiB wire cap. The
+witness checks both compact CAS directions before committing a new local
+candidate, and the anchor service requires that exact request-body limit. An
+oversized next anchor is refused as capacity exhaustion without changing local
+state, so operators cannot repair it by widening only one transport setting.
+
 Health bodies contain only `status` and the pre-alpha maturity warning. They do
 not enumerate principals, policies, vaults, items, requests, generations, or
 anchor contents. Readiness may return `503` while liveness remains `200`; do not

@@ -86,7 +86,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
             },
             "write_credential_file": anchor_token,
             "write_authority": "anchor-writer",
-            "limits": limits()
+            "limits": anchor_limits()
         }),
     )?;
     write_json(
@@ -302,7 +302,7 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
             "write_credential_file": token,
             "write_authority": "anchor-writer",
             "limits": {
-                "maximum_request_bytes": 1024,
+                "maximum_request_bytes": 1048576,
                 "maximum_concurrency": 2,
                 "requests_per_second": 100,
                 "burst_requests": 200,
@@ -350,6 +350,17 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
 fn limits() -> serde_json::Value {
     json!({
         "maximum_request_bytes": 1024,
+        "maximum_concurrency": 4,
+        "requests_per_second": 100,
+        "burst_requests": 200,
+        "request_timeout_ms": 5000,
+        "shutdown_grace_ms": 5000
+    })
+}
+
+fn anchor_limits() -> serde_json::Value {
+    json!({
+        "maximum_request_bytes": 1048576,
         "maximum_concurrency": 4,
         "requests_per_second": 100,
         "burst_requests": 200,
