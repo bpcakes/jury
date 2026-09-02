@@ -26,3 +26,13 @@ fn checked_in_linux_configs_match_the_strict_schema_and_separation_contract()
     );
     Ok(())
 }
+
+#[test]
+fn checked_in_systemd_units_create_owner_only_state_directories() {
+    for unit in [
+        include_str!("../../../deploy/juryd/juryd.service"),
+        include_str!("../../../deploy/juryd/juryd-anchor.service"),
+    ] {
+        assert!(unit.lines().any(|line| line == "StateDirectoryMode=0700"));
+    }
+}

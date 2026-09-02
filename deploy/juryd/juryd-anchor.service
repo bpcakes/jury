@@ -13,6 +13,7 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=15s
 StateDirectory=juryd-anchor
+StateDirectoryMode=0700
 NoNewPrivileges=yes
 PrivateDevices=yes
 PrivateTmp=yes

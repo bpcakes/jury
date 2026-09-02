@@ -69,15 +69,15 @@ install the files at the absolute paths they name.
 On the anchor host:
 
 ```console
-$ juryd anchor init --config /etc/juryd-anchor/anchor.json
-$ juryd anchor serve --config /etc/juryd-anchor/anchor.json
+$ sudo -u juryd-anchor -- juryd anchor init --config /etc/juryd-anchor/anchor.json
+$ sudo -u juryd-anchor -- juryd anchor serve --config /etc/juryd-anchor/anchor.json
 ```
 
 After the anchor is ready, on the witness host:
 
 ```console
-$ juryd database init --config /etc/juryd/witness.json
-$ juryd serve --config /etc/juryd/witness.json
+$ sudo -u juryd -- juryd database init --config /etc/juryd/witness.json
+$ sudo -u juryd -- juryd serve --config /etc/juryd/witness.json
 ```
 
 Initialization creates an absent database atomically; it never opens an
@@ -88,7 +88,9 @@ and unsafe database/anchor combinations fail startup.
 
 The service-manager examples are [juryd.service](../deploy/juryd/juryd.service)
 and [juryd-anchor.service](../deploy/juryd/juryd-anchor.service). Install each
-unit only on its corresponding independent host. The container example in
+unit only on its corresponding independent host. Their `StateDirectoryMode`
+is `0700`, matching the database parent's owner-only invariant; run each init
+command as the same service account named by its unit. The container example in
 [deploy/juryd](../deploy/juryd/README.md) builds the same binary; a container is
 not a failure-domain or administrative boundary by itself.
 
