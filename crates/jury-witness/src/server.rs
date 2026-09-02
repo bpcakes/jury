@@ -1,7 +1,10 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -122,15 +125,19 @@ enum RefusalReason {
 #[derive(Clone)]
 struct WitnessApiState {
     runtime: WitnessRuntimeHandle,
-    client_credential: CredentialDigest,
-    operator_credential: CredentialDigest,
+    readiness: Arc<ReadinessProbe>,
 }
 
 #[derive(Clone)]
 struct AnchorApiState {
     repository: Arc<Mutex<SqliteAnchorRepository>>,
     witness_id: PrincipalId,
-    write_credential: CredentialDigest,
+}
+
+#[derive(Clone)]
+struct ProtectedGateState {
+    gate: GateState,
+    credential: CredentialDigest,
 }
 
 #[derive(Clone)]
@@ -150,6 +157,13 @@ struct RateBucket {
     tokens: f64,
     updated: Instant,
 }
+
+struct ReadinessProbe {
+    in_flight: AtomicBool,
+    last_ready: AtomicBool,
+}
+
+struct ReadinessLease(Arc<ReadinessProbe>);
 
 pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), AdapterError> {
     config.validate()?;
@@ -185,18 +199,42 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
     let worker = WitnessRuntimeWorker::spawn(runtime, config.limits.maximum_concurrency)?;
     let state = WitnessApiState {
         runtime: worker.handle(),
-        client_credential: load_digest(&config.client_credential_file)?,
-        operator_credential: load_digest(&config.operator_credential_file)?,
+        readiness: Arc::new(ReadinessProbe::new()),
     };
-    let app = Router::new()
+    let gate = GateState::new(&config.limits);
+    let public = Router::new()
         .route("/livez", get(live))
         .route("/readyz", get(witness_ready))
+        .route_layer(middleware::from_fn_with_state(
+            gate.clone(),
+            public_gate_request,
+        ));
+    let operator = Router::new()
         .route("/v1/operator/register", post(register))
         .route("/v1/operator/checkpoint", post(checkpoint))
         .route("/v1/operator/replay/compact", post(compact))
+        .route_layer(middleware::from_fn_with_state(
+            ProtectedGateState {
+                gate: gate.clone(),
+                credential: load_digest(&config.operator_credential_file)?,
+            },
+            protected_gate_request,
+        ));
+    let client = Router::new()
         .route("/v1/requests/reserve", post(reserve))
         .route("/v1/requests/decide", post(decide))
         .route("/v1/requests/cancel", post(cancel))
+        .route_layer(middleware::from_fn_with_state(
+            ProtectedGateState {
+                gate,
+                credential: load_digest(&config.client_credential_file)?,
+            },
+            protected_gate_request,
+        ));
+    let app = Router::new()
+        .merge(public)
+        .merge(operator)
+        .merge(client)
         .with_state(state);
     let result = serve(app, config.listen, &config.tls, &config.limits).await;
     let shutdown = worker.shutdown();
@@ -211,15 +249,28 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
             config.witness_id,
         )?)),
         witness_id: config.witness_id,
-        write_credential: load_digest(&config.write_credential_file)?,
     };
-    let app = Router::new()
+    let gate = GateState::new(&config.limits);
+    let public = Router::new()
         .route("/livez", get(live))
         .route("/readyz", get(anchor_ready))
-        .route(
-            "/v1/anchors/{witness_id}",
-            get(read_anchor).post(compare_and_swap_anchor),
-        )
+        .route("/v1/anchors/{witness_id}", get(read_anchor))
+        .route_layer(middleware::from_fn_with_state(
+            gate.clone(),
+            public_gate_request,
+        ));
+    let protected = Router::new()
+        .route("/v1/anchors/{witness_id}", post(compare_and_swap_anchor))
+        .route_layer(middleware::from_fn_with_state(
+            ProtectedGateState {
+                gate,
+                credential: load_digest(&config.write_credential_file)?,
+            },
+            protected_gate_request,
+        ));
+    let app = Router::new()
+        .merge(public)
+        .merge(protected)
         .with_state(state);
     serve(app, config.listen, &config.tls, &config.limits).await
 }
@@ -230,15 +281,13 @@ async fn serve(
     tls: &TlsConfig,
     limits: &TransportLimits,
 ) -> Result<(), AdapterError> {
-    let gate = GateState::new(limits);
     let app = app
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_millis(limits.request_timeout_ms),
         ))
         .layer(RequestBodyLimitLayer::new(limits.maximum_request_bytes))
-        .layer(CatchPanicLayer::custom(|_| internal_failure()))
-        .layer(middleware::from_fn_with_state(gate, gate_request));
+        .layer(CatchPanicLayer::custom(|_| internal_failure()));
     let handle = Handle::new();
     let shutdown_handle = handle.clone();
     let grace = Duration::from_millis(limits.shutdown_grace_ms);
@@ -322,13 +371,66 @@ impl GateState {
     }
 }
 
-async fn gate_request(
+impl ReadinessProbe {
+    fn new() -> Self {
+        Self {
+            in_flight: AtomicBool::new(false),
+            last_ready: AtomicBool::new(false),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> Option<ReadinessLease> {
+        self.in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| ReadinessLease(Arc::clone(self)))
+    }
+
+    fn last_ready(&self) -> bool {
+        self.last_ready.load(Ordering::Acquire)
+    }
+}
+
+impl ReadinessLease {
+    fn finish(&self, ready: bool) {
+        self.0.last_ready.store(ready, Ordering::Release);
+    }
+}
+
+impl Drop for ReadinessLease {
+    fn drop(&mut self) {
+        self.0.in_flight.store(false, Ordering::Release);
+    }
+}
+
+async fn public_gate_request(
     State(gate): State<GateState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    if !gate.allow(peer.ip()) {
+    admit(&gate, peer.ip(), request, next).await
+}
+
+async fn protected_gate_request(
+    State(state): State<ProtectedGateState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !authorized(request.headers(), &state.credential) {
+        return unauthorized();
+    }
+    admit(&state.gate, peer.ip(), request, next).await
+}
+
+async fn admit(
+    gate: &GateState,
+    peer: IpAddr,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !gate.allow(peer) {
         return refusal(StatusCode::TOO_MANY_REQUESTS, RefusalReason::RateLimited);
     }
     let Ok(permit) = gate.concurrency.clone().try_acquire_owned() else {
@@ -350,10 +452,12 @@ async fn live() -> impl IntoResponse {
 }
 
 async fn witness_ready(State(state): State<WitnessApiState>) -> Response {
-    match state.runtime.check_ready().await {
-        Ok(()) => ready(),
-        Err(_) => not_ready(),
-    }
+    let Some(lease) = state.readiness.acquire() else {
+        return readiness_response(state.readiness.last_ready());
+    };
+    let is_ready = state.runtime.check_ready().await.is_ok();
+    lease.finish(is_ready);
+    readiness_response(is_ready)
 }
 
 async fn anchor_ready(State(state): State<AnchorApiState>) -> Response {
@@ -365,12 +469,8 @@ async fn anchor_ready(State(state): State<AnchorApiState>) -> Response {
 
 async fn register(
     State(state): State<WitnessApiState>,
-    headers: HeaderMap,
     payload: Result<Json<RegisterRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.operator_credential) {
-        return unauthorized();
-    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -392,12 +492,8 @@ async fn register(
 
 async fn checkpoint(
     State(state): State<WitnessApiState>,
-    headers: HeaderMap,
     payload: Result<Json<CheckpointRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.operator_credential) {
-        return unauthorized();
-    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -413,10 +509,7 @@ async fn checkpoint(
     )
 }
 
-async fn compact(State(state): State<WitnessApiState>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &state.operator_credential) {
-        return unauthorized();
-    }
+async fn compact(State(state): State<WitnessApiState>) -> Response {
     operation_result(
         state
             .runtime
@@ -431,12 +524,8 @@ async fn compact(State(state): State<WitnessApiState>, headers: HeaderMap) -> Re
 
 async fn reserve(
     State(state): State<WitnessApiState>,
-    headers: HeaderMap,
     payload: Result<Json<ReserveRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.client_credential) {
-        return unauthorized();
-    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -451,12 +540,8 @@ async fn reserve(
 
 async fn decide(
     State(state): State<WitnessApiState>,
-    headers: HeaderMap,
     payload: Result<Json<DecideRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.client_credential) {
-        return unauthorized();
-    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -471,12 +556,8 @@ async fn decide(
 
 async fn cancel(
     State(state): State<WitnessApiState>,
-    headers: HeaderMap,
     payload: Result<Json<CancelRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.client_credential) {
-        return unauthorized();
-    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -517,12 +598,8 @@ async fn read_anchor(
 async fn compare_and_swap_anchor(
     State(state): State<AnchorApiState>,
     Path(witness_id): Path<String>,
-    headers: HeaderMap,
     payload: Result<Json<AnchorCasRequest>, JsonRejection>,
 ) -> Response {
-    if !authorized(&headers, &state.write_credential) {
-        return unauthorized();
-    }
     let Ok(witness_id) = parse_principal_id(&witness_id) else {
         return invalid_request();
     };
@@ -632,6 +709,10 @@ fn ready() -> Response {
         .into_response()
 }
 
+fn readiness_response(is_ready: bool) -> Response {
+    if is_ready { ready() } else { not_ready() }
+}
+
 fn not_ready() -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -738,5 +819,17 @@ mod tests {
         );
         assert!(parse_principal_id(&canonical.to_uppercase()).is_err());
         assert!(parse_principal_id(&canonical[..62]).is_err());
+    }
+
+    #[test]
+    fn readiness_probe_allows_only_one_in_flight_check() {
+        let probe = Arc::new(ReadinessProbe::new());
+        let first = probe.acquire().expect("first probe owns refresh");
+        assert!(probe.acquire().is_none());
+        assert!(!probe.last_ready());
+        first.finish(true);
+        drop(first);
+        assert!(probe.last_ready());
+        assert!(probe.acquire().is_some());
     }
 }

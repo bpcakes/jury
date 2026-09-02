@@ -97,7 +97,10 @@ listener is loopback. Production configurations should leave it false. The
 server bounds request bodies, header-read and handler time, concurrent
 requests, per-source token buckets, and the number of retained rate keys.
 Malformed bodies receive a generic response that does not reflect input.
-Missing and wrong credentials are indistinguishable.
+Missing and wrong credentials are indistinguishable. Protected routes verify
+the bearer credential before body deserialization or admission to the shared
+rate/concurrency budget. Concurrent readiness probes are single-flighted and
+never enqueue duplicate database/anchor checks.
 
 Witness endpoints are:
 

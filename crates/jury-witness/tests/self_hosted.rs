@@ -317,6 +317,7 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
         &format!("http://127.0.0.1:{port}/readyz"),
         &mut anchor,
     )?;
+    assert_unauthenticated_body_is_rejected_before_read(port, &witness_id)?;
 
     let mut timed_out = slow_header_connection(port)?;
     thread::sleep(Duration::from_millis(350));
@@ -397,6 +398,27 @@ fn slow_header_connection(port: u16) -> Result<TcpStream, Box<dyn Error>> {
     connection.write_all(b"GET /readyz HTTP/1.1\r\nHost:")?;
     connection.flush()?;
     Ok(connection)
+}
+
+fn assert_unauthenticated_body_is_rejected_before_read(
+    port: u16,
+    witness_id: &PrincipalId,
+) -> Result<(), Box<dyn Error>> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    write!(
+        stream,
+        "POST /v1/anchors/{} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n",
+        hex_id(witness_id)
+    )?;
+    stream.flush()?;
+    let mut response = [0_u8; 4096];
+    let read = stream.read(&mut response)?;
+    let response = std::str::from_utf8(&response[..read])?;
+    if !response.starts_with("HTTP/1.1 401") {
+        return Err(format!("server awaited an unauthenticated body: {response:?}").into());
+    }
+    Ok(())
 }
 
 fn write_json(path: &Path, value: &serde_json::Value) -> TestResult {
