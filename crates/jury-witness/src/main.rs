@@ -117,7 +117,7 @@ fn run_database(command: DatabaseCommand) -> Result<(), AdapterError> {
     match command {
         DatabaseCommand::Init { config } => {
             let config = WitnessServiceConfig::load_database_command(&config)?;
-            SqliteWitnessStore::open(&config.database.path, config.witness_id)?;
+            SqliteWitnessStore::initialize(&config.database.path, config.witness_id)?;
             println!(
                 "juryd database initialized; contribution readiness still requires the exact external anchor"
             );
@@ -147,7 +147,7 @@ async fn run_anchor(command: AnchorCommand) -> Result<(), AdapterError> {
         }
         AnchorCommand::Init { config } => {
             let config = AnchorServiceConfig::load_database_command(&config)?;
-            SqliteAnchorRepository::open(&config.database.path, config.witness_id)?;
+            SqliteAnchorRepository::initialize(&config.database.path)?;
             println!("juryd external-anchor database initialized");
             Ok(())
         }

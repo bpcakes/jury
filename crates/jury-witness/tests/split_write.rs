@@ -84,6 +84,8 @@ fn real_sqlite_split_writes_reconcile_and_one_sided_rollbacks_fail_closed() -> T
     let witness_database = directory.path().join("witness.sqlite3");
     let anchor_database = directory.path().join("anchor.sqlite3");
 
+    SqliteWitnessStore::initialize(&witness_database, witness_id)?;
+    SqliteAnchorRepository::initialize(&anchor_database)?;
     let mut store = SqliteWitnessStore::open(&witness_database, witness_id)?;
     let first = commit_pending(&mut store, &identity, 1)?;
     drop(store);

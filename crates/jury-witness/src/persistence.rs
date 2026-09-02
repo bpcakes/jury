@@ -24,18 +24,24 @@ pub struct SqliteWitnessStore {
 }
 
 impl SqliteWitnessStore {
-    pub fn open(path: &Path, witness_id: PrincipalId) -> Result<Self, AdapterError> {
-        let connection = open_managed_database(path, WITNESS_DATABASE_KIND, true)?;
+    pub fn initialize(path: &Path, witness_id: PrincipalId) -> Result<(), AdapterError> {
         let initial = PersistedWitnessState::empty(witness_id);
         let initial_json = serde_json::to_vec(&initial)
             .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
-        connection
-            .execute(
-                "INSERT INTO witness_state(singleton, generation, state_json) \
-                 VALUES (1, 0, ?1) ON CONFLICT(singleton) DO NOTHING",
-                params![initial_json],
-            )
-            .map_err(database_unavailable)?;
+        initialize_managed_database(path, WITNESS_DATABASE_KIND, move |connection| {
+            connection
+                .execute(
+                    "INSERT INTO witness_state(singleton, generation, state_json) \
+                     VALUES (1, 0, ?1)",
+                    params![initial_json],
+                )
+                .map_err(database_unavailable)?;
+            Ok(())
+        })
+    }
+
+    pub fn open(path: &Path, witness_id: PrincipalId) -> Result<Self, AdapterError> {
+        let connection = open_managed_database(path, WITNESS_DATABASE_KIND)?;
         let store = Self {
             connection,
             witness_id,
@@ -139,16 +145,55 @@ pub fn restore_witness_database(backup: &Path, destination: &Path) -> Result<(),
 pub(crate) fn open_managed_database(
     path: &Path,
     expected_kind: &str,
-    create: bool,
 ) -> Result<Connection, AdapterError> {
-    validate_destination_path(path, create)?;
-    let mut flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW;
-    if create {
-        flags |= OpenFlags::SQLITE_OPEN_CREATE;
-    }
-    let mut connection = Connection::open_with_flags(path, flags).map_err(database_unavailable)?;
+    validate_destination_path(path, false)?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(database_unavailable)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
         .map_err(|_| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))?;
+    configure_connection(&connection, "WAL")?;
+    validate_database(&connection, expected_kind)?;
+    Ok(connection)
+}
+
+pub(crate) fn initialize_managed_database(
+    path: &Path,
+    expected_kind: &str,
+    seed: impl FnOnce(&Connection) -> Result<(), AdapterError>,
+) -> Result<(), AdapterError> {
+    validate_destination_path(path, true)?;
+    if path.exists() {
+        return Err(AdapterError::new(AdapterErrorKind::TargetExists));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+    let temporary = NamedTempFile::new_in(parent)
+        .map_err(|_| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))?;
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o600))
+        .map_err(|_| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))?;
+    let mut connection = Connection::open_with_flags(
+        temporary.path(),
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(database_unavailable)?;
+    configure_connection(&connection, "DELETE")?;
+    initialize_schema(&mut connection, expected_kind)?;
+    seed(&connection)?;
+    validate_database(&connection, expected_kind)?;
+    drop(connection);
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| AdapterError::new(AdapterErrorKind::DatabaseUnavailable))?;
+    persist_without_overwrite(temporary, path)?;
+    sync_parent(path)
+}
+
+fn configure_connection(connection: &Connection, journal_mode: &str) -> Result<(), AdapterError> {
     connection
         .busy_timeout(Duration::from_secs(5))
         .map_err(database_unavailable)?;
@@ -159,19 +204,16 @@ pub(crate) fn open_managed_database(
         .pragma_update(None, "synchronous", "FULL")
         .map_err(database_unavailable)?;
     connection
-        .pragma_update(None, "journal_mode", "WAL")
+        .pragma_update(None, "journal_mode", journal_mode)
         .map_err(database_unavailable)?;
-    migrate(&mut connection, expected_kind)?;
-    validate_database(&connection, expected_kind)?;
-    Ok(connection)
+    Ok(())
 }
 
-fn migrate(connection: &mut Connection, expected_kind: &str) -> Result<(), AdapterError> {
+fn initialize_schema(connection: &mut Connection, expected_kind: &str) -> Result<(), AdapterError> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(database_unavailable)?;
     match version {
-        SCHEMA_VERSION => Ok(()),
         0 => {
             let transaction = connection
                 .transaction_with_behavior(TransactionBehavior::Exclusive)
@@ -442,6 +484,7 @@ mod tests {
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
         let path = directory.path().join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([1; 32])?;
+        SqliteWitnessStore::initialize(&path, witness_id)?;
         let mut store = SqliteWitnessStore::open(&path, witness_id)?;
         let mut replacement = PersistedWitnessState::empty(witness_id);
         replacement.logical.state_generation = 1;
@@ -477,7 +520,7 @@ mod tests {
         let backup = directory.path().join("backup.sqlite3");
         let restored = directory.path().join("restored.sqlite3");
         let witness_id = PrincipalId::from_bytes([5; 32])?;
-        SqliteWitnessStore::open(&source, witness_id)?;
+        SqliteWitnessStore::initialize(&source, witness_id)?;
 
         backup_witness_database(&source, &backup)?;
         assert_eq!(
@@ -501,6 +544,33 @@ mod tests {
                 .ok_or("restore overwrite should fail")?
                 .kind(),
             AdapterErrorKind::TargetExists
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn initialization_and_open_are_distinct_lifecycle_operations() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("witness.sqlite3");
+        let witness_id = PrincipalId::from_bytes([9; 32])?;
+
+        assert!(SqliteWitnessStore::open(&path, witness_id).is_err());
+        assert!(!path.exists());
+        SqliteWitnessStore::initialize(&path, witness_id)?;
+        assert_eq!(
+            SqliteWitnessStore::initialize(&path, witness_id)
+                .err()
+                .ok_or("reinitialization should fail")?
+                .kind(),
+            AdapterErrorKind::TargetExists
+        );
+        assert_eq!(
+            SqliteWitnessStore::open(&path, witness_id)?
+                .load_validated()?
+                .logical
+                .state_generation,
+            0
         );
         Ok(())
     }

@@ -17,8 +17,8 @@ use crate::{
     AdapterError, AdapterErrorKind,
     credentials::{BearerCredential, authorization_header, load_bearer},
     persistence::{
-        ANCHOR_DATABASE_KIND, backup_managed_database, open_managed_database,
-        restore_managed_database,
+        ANCHOR_DATABASE_KIND, backup_managed_database, initialize_managed_database,
+        open_managed_database, restore_managed_database,
     },
 };
 
@@ -36,9 +36,13 @@ pub enum AnchorCasResult {
 }
 
 impl SqliteAnchorRepository {
+    pub fn initialize(path: &Path) -> Result<(), AdapterError> {
+        initialize_managed_database(path, ANCHOR_DATABASE_KIND, |_| Ok(()))
+    }
+
     pub fn open(path: &Path, witness_id: PrincipalId) -> Result<Self, AdapterError> {
         Ok(Self {
-            connection: open_managed_database(path, ANCHOR_DATABASE_KIND, true)?,
+            connection: open_managed_database(path, ANCHOR_DATABASE_KIND)?,
             witness_id,
         })
     }
@@ -419,6 +423,7 @@ mod tests {
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
         let path = directory.path().join("anchors.sqlite3");
         let witness_id = PrincipalId::from_bytes([1; 32])?;
+        SqliteAnchorRepository::initialize(&path)?;
         let mut repository = SqliteAnchorRepository::open(&path, witness_id)?;
         let foreign = candidate(PrincipalId::from_bytes([8; 32])?, 1, zero_digest(), 8);
         assert_eq!(
@@ -462,6 +467,7 @@ mod tests {
         let backup = directory.path().join("backup.sqlite3");
         let restored = directory.path().join("restored.sqlite3");
         let witness_id = PrincipalId::from_bytes([6; 32])?;
+        SqliteAnchorRepository::initialize(&source)?;
         let mut repository = SqliteAnchorRepository::open(&source, witness_id)?;
         let first = candidate(witness_id, 1, zero_digest(), 7);
         repository.compare_and_swap(None, &first)?;

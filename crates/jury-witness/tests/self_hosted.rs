@@ -134,6 +134,12 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
     )?;
 
     let executable = env!("CARGO_BIN_EXE_juryd");
+    run_success(executable, &["anchor", "init", "--config"], &anchor_config)?;
+    run_success(
+        executable,
+        &["database", "init", "--config"],
+        &witness_config,
+    )?;
     let mut anchor =
         ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &anchor_config)?;
     let certificate_bytes = fs::read(&certificate)?;
@@ -307,6 +313,7 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
     )?;
 
     let executable = env!("CARGO_BIN_EXE_juryd");
+    run_success(executable, &["anchor", "init", "--config"], &config)?;
     let mut anchor = ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &config)?;
     let client = Client::builder()
         .no_proxy()
@@ -469,6 +476,18 @@ fn wait_not_ready(client: &Client, url: &str, process: &mut ProcessGuard) -> Tes
 
 struct ProcessGuard {
     child: Child,
+}
+
+fn run_success(executable: &str, arguments: &[&str], config: &Path) -> TestResult {
+    let status = Command::new(executable)
+        .args(arguments)
+        .arg(config)
+        .stdin(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(format!("juryd administration command failed with {status}").into());
+    }
+    Ok(())
 }
 
 impl ProcessGuard {

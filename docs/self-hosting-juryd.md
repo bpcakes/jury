@@ -80,7 +80,9 @@ $ juryd database init --config /etc/juryd/witness.json
 $ juryd serve --config /etc/juryd/witness.json
 ```
 
-Schema creation and migration are transactional. Unknown/newer schemas,
+Initialization creates an absent database atomically; it never opens an
+existing target. Serving opens only an already initialized or restored
+database and never creates or migrates one as a side effect. Unknown schemas,
 wrong database kinds, failed SQLite integrity checks, invalid identity roles,
 and unsafe database/anchor combinations fail startup.
 
