@@ -11,10 +11,12 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup,
     limits::Limit, params,
 };
-use serde::Serialize;
 use tempfile::NamedTempFile;
 
+use self::state_codec::{encode_persisted_state, map_codec_adapter_error, map_codec_store_error};
 use crate::{AdapterError, AdapterErrorKind};
+
+mod state_codec;
 
 const SCHEMA_VERSION: i64 = 1;
 const MAX_PERSISTED_WITNESS_STATE_BYTES: usize = 64 * 1024 * 1024;
@@ -529,78 +531,6 @@ fn validate_existing_private_file(path: &Path) -> Result<(), AdapterError> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StateCodecError {
-    Invalid,
-    CapacityExhausted,
-}
-
-struct BoundedJsonWriter {
-    bytes: Vec<u8>,
-    maximum_bytes: usize,
-    capacity_exhausted: bool,
-}
-
-impl BoundedJsonWriter {
-    fn new(maximum_bytes: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            maximum_bytes,
-            capacity_exhausted: false,
-        }
-    }
-}
-
-impl io::Write for BoundedJsonWriter {
-    fn write(&mut self, input: &[u8]) -> io::Result<usize> {
-        let remaining = self.maximum_bytes.saturating_sub(self.bytes.len());
-        if input.len() > remaining {
-            self.capacity_exhausted = true;
-            return Err(io::Error::other(
-                "serialized witness state exceeds capacity",
-            ));
-        }
-        self.bytes.extend_from_slice(input);
-        Ok(input.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn encode_persisted_state(state: &PersistedWitnessState) -> Result<Vec<u8>, StateCodecError> {
-    encode_json_bounded(state, MAX_PERSISTED_WITNESS_STATE_BYTES)
-}
-
-fn encode_json_bounded(
-    value: &impl Serialize,
-    maximum_bytes: usize,
-) -> Result<Vec<u8>, StateCodecError> {
-    let mut writer = BoundedJsonWriter::new(maximum_bytes);
-    match serde_json::to_writer(&mut writer, value) {
-        Ok(()) => Ok(writer.bytes),
-        Err(_) if writer.capacity_exhausted => Err(StateCodecError::CapacityExhausted),
-        Err(_) => Err(StateCodecError::Invalid),
-    }
-}
-
-const fn map_codec_adapter_error(error: StateCodecError) -> AdapterError {
-    match error {
-        StateCodecError::Invalid => AdapterError::new(AdapterErrorKind::InvalidState),
-        StateCodecError::CapacityExhausted => {
-            AdapterError::new(AdapterErrorKind::CapacityExhausted)
-        }
-    }
-}
-
-const fn map_codec_store_error(error: StateCodecError) -> WitnessStoreError {
-    match error {
-        StateCodecError::Invalid => WitnessStoreError::unavailable(),
-        StateCodecError::CapacityExhausted => WitnessStoreError::capacity_exhausted(),
-    }
-}
-
 const fn map_adapter_store_error(error: AdapterError) -> WitnessStoreError {
     match error.kind() {
         AdapterErrorKind::CapacityExhausted => WitnessStoreError::capacity_exhausted(),
@@ -650,6 +580,7 @@ mod tests {
         witness_v1::WitnessStateAnchorV1,
     };
 
+    use super::state_codec::{StateCodecError, encode_json_bounded};
     use super::*;
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -794,14 +725,14 @@ mod tests {
         let path = directory.path().join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([10; 32])?;
         SqliteWitnessStore::initialize(&path, witness_id)?;
-        let deadline = Instant::now() + Duration::from_millis(100);
-        let mut store = SqliteWitnessStore::open_until(&path, witness_id, deadline)?;
+        let mut store = SqliteWitnessStore::open(&path, witness_id)?;
         let blocker = Connection::open(&path)?;
         blocker.execute_batch("BEGIN IMMEDIATE")?;
         let mut replacement = PersistedWitnessState::empty(witness_id);
         replacement.logical.state_generation = 1;
         replacement.pending_anchor = Some(anchor(witness_id, 1));
 
+        store.deadline = Some(Instant::now() + Duration::from_millis(100));
         let started = Instant::now();
         assert!(store.commit(0, replacement).is_err());
         assert!(started.elapsed() < Duration::from_secs(1));

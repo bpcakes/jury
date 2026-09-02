@@ -1,20 +1,10 @@
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Sender, SyncSender, TryRecvError, TrySendError},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, sync::Arc, thread, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Extension, Path, State, rejection::JsonRejection},
-    http::{HeaderMap, StatusCode},
-    middleware::{self, Next},
+    extract::{Extension, Path, State, rejection::JsonRejection},
+    http::StatusCode,
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -26,15 +16,18 @@ use jury_protocol::{
     witness_v1::{
         ActionManifestV1, ApprovalDecisionV1, RegistrationBytes, RequestCancellationV1,
         VaultPolicyCheckpointV1, WitnessReasonV1, WitnessRequestV1, WitnessResponseV1,
-        WitnessStateAnchorV1,
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::Semaphore;
 use tower_http::{
     catch_panic::CatchPanicLayer, limit::RequestBodyLimitLayer, timeout::TimeoutLayer,
 };
 
+use self::anchor_worker::{AnchorRepositoryHandle, AnchorRepositoryWorker};
+use self::request_control::{
+    GateState, ProtectedGateState, PublicGateState, ReadinessProbe, protected_gate_request,
+    public_gate_request,
+};
 use crate::{
     AdapterError, AdapterErrorKind,
     anchor::{
@@ -45,7 +38,7 @@ use crate::{
         AnchorServiceConfig, IdentityProviderConfig, TlsConfig, TransportLimits,
         WitnessServiceConfig,
     },
-    credentials::{CredentialDigest, load_digest},
+    credentials::load_digest,
     identity_provider::{SoftwareFileIdentityProvider, WitnessIdentityProvider as _},
     policy_material::PublicPolicyMaterialV1,
     runtime::{
@@ -54,7 +47,8 @@ use crate::{
     },
 };
 
-const MAX_RATE_KEYS: usize = 4096;
+mod anchor_worker;
+mod request_control;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,70 +130,6 @@ struct AnchorApiState {
     repository: AnchorRepositoryHandle,
     readiness: Arc<ReadinessProbe>,
     witness_id: PrincipalId,
-}
-
-#[derive(Clone)]
-struct PublicGateState {
-    gate: GateState,
-    operation_timeout: Duration,
-}
-
-#[derive(Clone)]
-struct ProtectedGateState {
-    gate: GateState,
-    credential: CredentialDigest,
-    operation_timeout: Duration,
-}
-
-#[derive(Clone)]
-struct GateState {
-    rate: Arc<Mutex<RateState>>,
-    concurrency: Arc<Semaphore>,
-    requests_per_second: f64,
-    burst: f64,
-}
-
-#[derive(Default)]
-struct RateState {
-    buckets: HashMap<IpAddr, RateBucket>,
-}
-
-struct RateBucket {
-    tokens: f64,
-    updated: Instant,
-}
-
-struct ReadinessProbe {
-    in_flight: AtomicBool,
-    last_ready: AtomicBool,
-}
-
-struct ReadinessLease(Arc<ReadinessProbe>);
-
-#[derive(Clone)]
-struct AnchorRepositoryHandle {
-    sender: SyncSender<QueuedAnchorCommand>,
-}
-
-struct AnchorRepositoryWorker {
-    handle: AnchorRepositoryHandle,
-    shutdown: Sender<()>,
-    thread: Option<JoinHandle<()>>,
-}
-
-struct QueuedAnchorCommand {
-    deadline: OperationDeadline,
-    command: AnchorCommand,
-}
-
-enum AnchorCommand {
-    CheckReady(tokio::sync::oneshot::Sender<Result<(), AdapterError>>),
-    Read(tokio::sync::oneshot::Sender<Result<Option<WitnessStateAnchorV1>, AdapterError>>),
-    CompareAndSwap {
-        expected_digest: Option<jury_protocol::vault_v1::Digest32>,
-        candidate: Box<WitnessStateAnchorV1>,
-        response: tokio::sync::oneshot::Sender<Result<AnchorCasResult, AdapterError>>,
-    },
 }
 
 pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), AdapterError> {
@@ -382,263 +312,6 @@ async fn serve(
         }
         _ => Err(AdapterError::new(AdapterErrorKind::InvalidConfiguration)),
     }
-}
-
-impl GateState {
-    fn new(limits: &TransportLimits) -> Self {
-        Self {
-            rate: Arc::new(Mutex::new(RateState::default())),
-            concurrency: Arc::new(Semaphore::new(limits.maximum_concurrency)),
-            requests_per_second: f64::from(limits.requests_per_second),
-            burst: f64::from(limits.burst_requests),
-        }
-    }
-
-    fn allow(&self, address: IpAddr) -> bool {
-        let Ok(mut state) = self.rate.lock() else {
-            return false;
-        };
-        let now = Instant::now();
-        if !state.buckets.contains_key(&address) && state.buckets.len() >= MAX_RATE_KEYS {
-            state
-                .buckets
-                .retain(|_, bucket| now.duration_since(bucket.updated) < Duration::from_secs(60));
-            if state.buckets.len() >= MAX_RATE_KEYS {
-                return false;
-            }
-        }
-        let bucket = state.buckets.entry(address).or_insert(RateBucket {
-            tokens: self.burst,
-            updated: now,
-        });
-        let elapsed = now.duration_since(bucket.updated).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * self.requests_per_second).min(self.burst);
-        bucket.updated = now;
-        if bucket.tokens < 1.0 {
-            false
-        } else {
-            bucket.tokens -= 1.0;
-            true
-        }
-    }
-}
-
-impl ReadinessProbe {
-    fn new() -> Self {
-        Self {
-            in_flight: AtomicBool::new(false),
-            last_ready: AtomicBool::new(false),
-        }
-    }
-
-    fn acquire(self: &Arc<Self>) -> Option<ReadinessLease> {
-        self.in_flight
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .ok()
-            .map(|_| ReadinessLease(Arc::clone(self)))
-    }
-
-    fn last_ready(&self) -> bool {
-        self.last_ready.load(Ordering::Acquire)
-    }
-}
-
-impl ReadinessLease {
-    fn finish(&self, ready: bool) {
-        self.0.last_ready.store(ready, Ordering::Release);
-    }
-}
-
-impl Drop for ReadinessLease {
-    fn drop(&mut self) {
-        self.0.in_flight.store(false, Ordering::Release);
-    }
-}
-
-impl AnchorCommand {
-    fn response_is_closed(&self) -> bool {
-        match self {
-            Self::CheckReady(response) => response.is_closed(),
-            Self::Read(response) => response.is_closed(),
-            Self::CompareAndSwap { response, .. } => response.is_closed(),
-        }
-    }
-}
-
-impl AnchorRepositoryWorker {
-    fn spawn(
-        mut repository: SqliteAnchorRepository,
-        queue_capacity: usize,
-    ) -> Result<Self, AdapterError> {
-        let (sender, receiver) = mpsc::sync_channel::<QueuedAnchorCommand>(queue_capacity.max(1));
-        let (shutdown, shutdown_receiver) = mpsc::channel();
-        let thread = thread::Builder::new()
-            .name("juryd-anchor-state".to_owned())
-            .spawn(move || {
-                loop {
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
-                    }
-                    let queued = match receiver.recv_timeout(Duration::from_millis(50)) {
-                        Ok(command) => command,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
-                    }
-                    if queued.command.response_is_closed() {
-                        continue;
-                    }
-                    let deadline = queued.deadline.instant();
-                    match queued.command {
-                        AnchorCommand::CheckReady(response) => {
-                            let result = repository.read_until(deadline).map(|_| ());
-                            let _ = response.send(result);
-                        }
-                        AnchorCommand::Read(response) => {
-                            let _ = response.send(repository.read_until(deadline));
-                        }
-                        AnchorCommand::CompareAndSwap {
-                            expected_digest,
-                            candidate,
-                            response,
-                        } => {
-                            let _ = response.send(repository.compare_and_swap_until(
-                                expected_digest.as_ref(),
-                                &candidate,
-                                deadline,
-                            ));
-                        }
-                    }
-                }
-            })
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))?;
-        Ok(Self {
-            handle: AnchorRepositoryHandle { sender },
-            shutdown,
-            thread: Some(thread),
-        })
-    }
-
-    fn handle(&self) -> AnchorRepositoryHandle {
-        self.handle.clone()
-    }
-
-    fn shutdown(mut self) -> Result<(), AdapterError> {
-        let _ = self.shutdown.send(());
-        self.thread
-            .take()
-            .ok_or_else(|| AdapterError::new(AdapterErrorKind::Io))?
-            .join()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))
-    }
-}
-
-impl AnchorRepositoryHandle {
-    async fn check_ready(&self, deadline: OperationDeadline) -> Result<(), AdapterError> {
-        let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(deadline, AnchorCommand::CheckReady(response))?;
-        receive_anchor(receiver).await
-    }
-
-    async fn read(
-        &self,
-        deadline: OperationDeadline,
-    ) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
-        let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(deadline, AnchorCommand::Read(response))?;
-        receive_anchor(receiver).await
-    }
-
-    async fn compare_and_swap(
-        &self,
-        deadline: OperationDeadline,
-        expected_digest: Option<jury_protocol::vault_v1::Digest32>,
-        candidate: WitnessStateAnchorV1,
-    ) -> Result<AnchorCasResult, AdapterError> {
-        let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(
-            deadline,
-            AnchorCommand::CompareAndSwap {
-                expected_digest,
-                candidate: Box::new(candidate),
-                response,
-            },
-        )?;
-        receive_anchor(receiver).await
-    }
-
-    fn submit(
-        &self,
-        deadline: OperationDeadline,
-        command: AnchorCommand,
-    ) -> Result<(), AdapterError> {
-        if deadline.remaining().is_none() {
-            return Err(AdapterError::new(AdapterErrorKind::AnchorUnavailable));
-        }
-        self.sender
-            .try_send(QueuedAnchorCommand { deadline, command })
-            .map_err(|error| match error {
-                TrySendError::Full(_) | TrySendError::Disconnected(_) => {
-                    AdapterError::new(AdapterErrorKind::AnchorUnavailable)
-                }
-            })
-    }
-}
-
-async fn receive_anchor<T>(
-    receiver: tokio::sync::oneshot::Receiver<Result<T, AdapterError>>,
-) -> Result<T, AdapterError> {
-    receiver
-        .await
-        .unwrap_or(Err(AdapterError::new(AdapterErrorKind::AnchorUnavailable)))
-}
-
-async fn public_gate_request(
-    State(state): State<PublicGateState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    mut request: axum::extract::Request,
-    next: Next,
-) -> Response {
-    request
-        .extensions_mut()
-        .insert(OperationDeadline::after(state.operation_timeout));
-    admit(&state.gate, peer.ip(), request, next).await
-}
-
-async fn protected_gate_request(
-    State(state): State<ProtectedGateState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    mut request: axum::extract::Request,
-    next: Next,
-) -> Response {
-    if !authorized(request.headers(), &state.credential) {
-        return unauthorized();
-    }
-    request
-        .extensions_mut()
-        .insert(OperationDeadline::after(state.operation_timeout));
-    admit(&state.gate, peer.ip(), request, next).await
-}
-
-async fn admit(
-    gate: &GateState,
-    peer: IpAddr,
-    request: axum::extract::Request,
-    next: Next,
-) -> Response {
-    if !gate.allow(peer) {
-        return refusal(StatusCode::TOO_MANY_REQUESTS, RefusalReason::RateLimited);
-    }
-    let Ok(permit) = gate.concurrency.clone().try_acquire_owned() else {
-        return refusal(StatusCode::TOO_MANY_REQUESTS, RefusalReason::RateLimited);
-    };
-    let response = next.run(request).await;
-    drop(permit);
-    response
 }
 
 async fn live() -> impl IntoResponse {
@@ -910,10 +583,6 @@ fn runtime_error(error: RuntimeError) -> Response {
     }
 }
 
-fn authorized(headers: &HeaderMap, credential: &CredentialDigest) -> bool {
-    credential.matches_bearer(headers.get(axum::http::header::AUTHORIZATION))
-}
-
 fn ready() -> Response {
     (
         StatusCode::OK,
@@ -1005,7 +674,9 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, os::unix::fs::PermissionsExt as _};
+    use std::{error::Error, net::IpAddr, os::unix::fs::PermissionsExt as _, time::Instant};
+
+    use jury_protocol::witness_v1::WitnessStateAnchorV1;
 
     use super::*;
 
