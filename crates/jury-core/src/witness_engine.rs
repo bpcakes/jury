@@ -10,8 +10,8 @@ use std::{collections::BTreeMap, fmt};
 
 use jury_protocol::{
     vault_v1::{
-        BoundedBytes, Digest32, PrincipalId, PrincipalKind, RequestId, ResponseId, Signature64,
-        VaultId,
+        BoundedBytes, Digest32, PrincipalDescriptorV1, PrincipalId, PrincipalKind, RequestId,
+        ResponseId, Signature64, VaultId, WitnessShareCapsuleV1,
     },
     witness_v1::{
         ACCEPTED_CLOCK_SKEW_MS, ActionManifestV1, ApprovalBytes, ApprovalDecisionKindV1,
@@ -19,9 +19,10 @@ use jury_protocol::{
         MAX_RECORDED_APPROVALS, MAX_REPLAY_RECORDS_PER_SERVICE, MAX_REPLAY_RECORDS_PER_VAULT,
         PolicyMaterialBytes, REPLAY_RETENTION_MS, RegistrationBytes, ReplayStateV1,
         RequestCancellationV1, VaultHighWatermarkV1, VaultPolicyCheckpointV1,
-        WitnessDatabaseStateV1, WitnessDecisionKindV1, WitnessDecisionV1, WitnessOperationV1,
-        WitnessReasonV1, WitnessReceiptMaterialV1, WitnessReplayRecordV1, WitnessResponseV1,
-        WitnessStateAnchorV1, WitnessVaultStateV1, signing_key_fingerprint,
+        WitnessContributionEnvelopeV1, WitnessDatabaseStateV1, WitnessDecisionKindV1,
+        WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1, WitnessReceiptMaterialV1,
+        WitnessReplayRecordV1, WitnessResponseV1, WitnessStateAnchorV1, WitnessVaultStateV1,
+        signing_key_fingerprint,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,80 @@ use crate::{
 };
 
 const ZERO_DIGEST: Digest32 = Digest32::new([0; 32]);
+
+/// Value-free failure from a software or hardware-backed witness identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WitnessIdentityOperationError;
+
+impl WitnessIdentityOperationError {
+    /// Creates the only public provider failure value. Provider-specific errors
+    /// must remain behind the adapter boundary and must not expose key details.
+    #[must_use]
+    pub const fn provider_failure() -> Self {
+        Self
+    }
+}
+
+impl fmt::Display for WitnessIdentityOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("witness identity provider operation failed")
+    }
+}
+
+impl std::error::Error for WitnessIdentityOperationError {}
+
+/// The complete private-operation boundary consumed by the witness engine.
+///
+/// A hardware provider can implement this trait without exporting signing
+/// keys, contribution private keys, or plaintext witness shares. The returned
+/// contribution is already encrypted to the request session.
+pub trait WitnessEngineIdentity: Send {
+    fn principal_id(&self) -> PrincipalId;
+
+    fn public_descriptor(&self) -> Result<PrincipalDescriptorV1, WitnessIdentityOperationError>;
+
+    fn sign_witness_statement(
+        &self,
+        preimage: &[u8],
+    ) -> Result<Signature64, WitnessIdentityOperationError>;
+
+    fn seal_witness_contribution(
+        &self,
+        capsule: &WitnessShareCapsuleV1,
+        target: &WitnessContributionTarget,
+        random: &mut dyn RandomSource,
+    ) -> Result<WitnessContributionEnvelopeV1, WitnessIdentityOperationError>;
+}
+
+impl WitnessEngineIdentity for WitnessIdentity {
+    fn principal_id(&self) -> PrincipalId {
+        WitnessIdentity::principal_id(self)
+    }
+
+    fn public_descriptor(&self) -> Result<PrincipalDescriptorV1, WitnessIdentityOperationError> {
+        WitnessIdentity::public_descriptor(self).map_err(|_| WitnessIdentityOperationError)
+    }
+
+    fn sign_witness_statement(
+        &self,
+        preimage: &[u8],
+    ) -> Result<Signature64, WitnessIdentityOperationError> {
+        self.sign_validated_decision(preimage)
+            .map_err(|_| WitnessIdentityOperationError)
+    }
+
+    fn seal_witness_contribution(
+        &self,
+        capsule: &WitnessShareCapsuleV1,
+        target: &WitnessContributionTarget,
+        random: &mut dyn RandomSource,
+    ) -> Result<WitnessContributionEnvelopeV1, WitnessIdentityOperationError> {
+        self.open_contribution_share(capsule)
+            .and_then(|share| share.seal_for_request_with_source(target, random))
+            .map(|contribution| contribution.into_protocol())
+            .map_err(|_| WitnessIdentityOperationError)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WitnessEngineErrorKind {
@@ -337,23 +412,24 @@ struct ValidatedPublicRequest {
     slot: jury_protocol::vault_v1::WitnessedSlotV1,
 }
 
-pub struct WitnessEngine<'a, S, A, C, R> {
-    identity: &'a WitnessIdentity,
+pub struct WitnessEngine<'a, S, A, C, R, I: ?Sized = WitnessIdentity> {
+    identity: &'a I,
     store: &'a mut S,
     external_anchor: &'a mut A,
     clock: &'a C,
     random: &'a mut R,
 }
 
-impl<'a, S, A, C, R> WitnessEngine<'a, S, A, C, R>
+impl<'a, S, A, C, R, I> WitnessEngine<'a, S, A, C, R, I>
 where
     S: WitnessStateStore,
     A: ExternalWitnessAnchor,
     C: WitnessClock,
     R: RandomSource,
+    I: WitnessEngineIdentity + ?Sized,
 {
     pub fn new(
-        identity: &'a WitnessIdentity,
+        identity: &'a I,
         store: &'a mut S,
         external_anchor: &'a mut A,
         clock: &'a C,
@@ -366,6 +442,16 @@ where
             clock,
             random,
         }
+    }
+
+    /// Reconciles the sole permitted pending-anchor crash state and verifies
+    /// that durable database state, the published local marker, the external
+    /// anchor, witness identity, and wall clock are safe to serve.
+    ///
+    /// This releases no contribution and exposes no registered identifiers.
+    pub fn check_ready(&mut self) -> Result<(), WitnessEngineError> {
+        let state = self.ready_state()?;
+        self.require_safe_clock(&state, self.clock.wall_time_ms())
     }
 
     pub fn register_vault(
@@ -1045,7 +1131,7 @@ where
         };
         anchor.signature = self
             .identity
-            .sign_validated_decision(
+            .sign_witness_statement(
                 &anchor
                     .signature_preimage()
                     .map_err(|_| refused(WitnessReasonV1::Invalid))?,
@@ -1371,7 +1457,7 @@ where
         };
         decision.signature = self
             .identity
-            .sign_validated_decision(
+            .sign_witness_statement(
                 &decision
                     .signature_preimage()
                     .map_err(|_| refused(WitnessReasonV1::Invalid))?,
@@ -1398,12 +1484,10 @@ where
         let action_manifest_digest = manifest
             .digest()
             .map_err(|_| refused(WitnessReasonV1::Invalid))?;
-        let share = self
+        let contribution = self
             .identity
-            .open_contribution_share(&validated.capsule)
-            .map_err(|_| refused(WitnessReasonV1::InvalidContribution))?;
-        let contribution = share
-            .seal_for_request_with_source(
+            .seal_witness_contribution(
+                &validated.capsule,
                 &WitnessContributionTarget {
                     request_digest: request_digest.clone(),
                     action_manifest_digest: action_manifest_digest.clone(),
@@ -1416,8 +1500,7 @@ where
                 },
                 self.random,
             )
-            .map_err(|_| refused(WitnessReasonV1::InvalidContribution))?
-            .into_protocol();
+            .map_err(|_| refused(WitnessReasonV1::InvalidContribution))?;
         let contribution_digest = contribution
             .digest()
             .map_err(|_| refused(WitnessReasonV1::InvalidContribution))?;
@@ -1455,7 +1538,7 @@ where
         };
         decision.signature = self
             .identity
-            .sign_validated_decision(
+            .sign_witness_statement(
                 &decision
                     .signature_preimage()
                     .map_err(|_| refused(WitnessReasonV1::Invalid))?,
@@ -1468,10 +1551,10 @@ where
     }
 }
 
-fn validate_checkpoint(
+fn validate_checkpoint<I: WitnessEngineIdentity + ?Sized>(
     policy: &PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
-    identity: &WitnessIdentity,
+    identity: &I,
 ) -> Result<(), WitnessEngineError> {
     let witness_policy = validate_checkpoint_public(policy, checkpoint)?;
     let own_descriptor = identity
@@ -1488,10 +1571,10 @@ fn validate_checkpoint(
     Ok(())
 }
 
-fn validate_registered_checkpoint(
+fn validate_registered_checkpoint<I: WitnessEngineIdentity + ?Sized>(
     policy: &PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
-    identity: &WitnessIdentity,
+    identity: &I,
 ) -> Result<(), WitnessEngineError> {
     if checkpoint.vault_policy_sequence < policy.sequence() {
         return Err(refused(WitnessReasonV1::WitnessBehind));

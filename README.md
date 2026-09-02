@@ -150,6 +150,8 @@ policy configuration commands shown earlier.
 
 See [docs/architecture.md](docs/architecture.md) for the initial boundaries and
 [docs/naming.md](docs/naming.md) for the deliberately limited product metaphor.
+The standalone witness and independent external-anchor deployment are documented
+in [docs/self-hosting-juryd.md](docs/self-hosting-juryd.md).
 The implementation sequence and security decisions live in
 [docs/jury-v1-master-plan.md](docs/jury-v1-master-plan.md). The downstream Jig
 integration remains separate in

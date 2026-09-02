@@ -294,7 +294,7 @@ pub(crate) struct ProtectedWitnessShare {
 
 /// Request-bound context for releasing one encrypted witness share.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WitnessContributionTarget {
+pub struct WitnessContributionTarget {
     pub request_digest: Digest32,
     pub action_manifest_digest: Digest32,
     pub response_id: ResponseId,
@@ -340,7 +340,7 @@ impl ProtectedWitnessShare {
     pub(crate) fn seal_for_request_with_source(
         self,
         target: &WitnessContributionTarget,
-        source: &mut impl RandomSource,
+        source: &mut (impl RandomSource + ?Sized),
     ) -> Result<EncryptedWitnessContribution, IdentityError> {
         if target.expires_at_ms == 0
             || target.session_fingerprint
@@ -382,10 +382,6 @@ impl ProtectedWitnessShare {
 
 impl EncryptedWitnessContribution {
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "covered by the public envelope")
-    )]
     pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
         let mut output = Vec::with_capacity(1_332);
         output.extend_from_slice(&1_u16.to_be_bytes());

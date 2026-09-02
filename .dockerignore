@@ -1,0 +1,16 @@
+.git
+.agent
+.beads
+.doctor
+.jury
+target
+conformance
+node_modules
+coverage
+dist
+build
+.env
+.env.*
+*.log
+tmp
+temp

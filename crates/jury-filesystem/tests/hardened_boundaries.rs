@@ -9,7 +9,7 @@ use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
     IdentitySelector, PreparedPrivateFile, PreparedPublicFile, PublicationOutcome,
     PublicationPolicy, RepositoryLocation, list_named_identities, preview_public_file,
-    read_public_file,
+    read_private_file, read_public_file,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -633,5 +633,37 @@ fn bounded_public_file_read_accepts_read_only_leaf_and_rejects_links() -> Result
         .err()
         .ok_or("linked public input should fail")?;
     assert_eq!(error.kind(), FilesystemErrorKind::HardLinkOrSize);
+    Ok(())
+}
+
+#[test]
+fn bounded_private_file_read_requires_owner_only_unaliased_leaf() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let credential = temp.path().join("ExampleCredential");
+    fs::write(&credential, b"ExampleCredentialValue")?;
+    fs::set_permissions(&credential, fs::Permissions::from_mode(0o600))?;
+    assert_eq!(
+        read_private_file(&credential, 1024)?,
+        b"ExampleCredentialValue"
+    );
+
+    fs::set_permissions(&credential, fs::Permissions::from_mode(0o640))?;
+    assert_eq!(
+        read_private_file(&credential, 1024)
+            .err()
+            .ok_or("group-readable private input should fail")?
+            .kind(),
+        FilesystemErrorKind::Permission
+    );
+    fs::set_permissions(&credential, fs::Permissions::from_mode(0o600))?;
+    let linked = temp.path().join("linked-credential");
+    symlink(&credential, &linked)?;
+    assert_eq!(
+        read_private_file(&linked, 1024)
+            .err()
+            .ok_or("linked private input should fail")?
+            .kind(),
+        FilesystemErrorKind::HardLinkOrSize
+    );
     Ok(())
 }

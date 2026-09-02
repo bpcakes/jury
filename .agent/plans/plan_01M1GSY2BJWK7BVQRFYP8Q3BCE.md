@@ -1,0 +1,1 @@
+Remediate J21 review findings with direct pre-alpha cutovers: capability-shaped offline administration, single-witness anchor authority and exclusive CA roots, pre-extraction authentication/admission, coalesced readiness, end-to-end operation deadlines, and explicitly bounded typed snapshot persistence without changing the J19-frozen database-state digest.

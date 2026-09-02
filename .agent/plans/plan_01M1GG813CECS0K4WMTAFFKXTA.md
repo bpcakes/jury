@@ -1,0 +1,1 @@
+Implement durable local persistence, independent file-backed external anchor, authenticated bounded HTTP transport, lifecycle operations, safe health, limits, graceful shutdown, deployment examples, and Linux integration tests around the existing J20 witness engine. Verify restore/anchor reconciliation and no managed-service dependency.

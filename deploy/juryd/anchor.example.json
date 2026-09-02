@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "listen": "0.0.0.0:8444",
+  "tls": {
+    "certificate_file": "/etc/juryd-anchor/tls/anchor.crt",
+    "private_key_file": "/etc/juryd-anchor/private/anchor.key",
+    "allow_insecure_loopback": false
+  },
+  "database": {
+    "path": "/var/lib/juryd-anchor/anchor.sqlite3",
+    "authority": {
+      "administration_authority": "ExampleAnchorDbAdmin",
+      "backup_authority": "ExampleAnchorDbBackup",
+      "restore_authority": "ExampleAnchorDbRestore",
+      "failure_domain": "ExampleAnchorHost"
+    }
+  },
+  "write_credential_file": "/etc/juryd-anchor/private/anchor-write.token",
+  "write_authority": "ExampleAnchorWriter",
+  "limits": {
+    "maximum_request_bytes": 65536,
+    "maximum_concurrency": 32,
+    "requests_per_second": 100,
+    "burst_requests": 200,
+    "request_timeout_ms": 5000,
+    "shutdown_grace_ms": 10000
+  }
+}

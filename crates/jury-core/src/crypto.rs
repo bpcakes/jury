@@ -342,7 +342,7 @@ pub(crate) fn seal_hpke(
     plaintext: &ProtectedMemory,
     info: &[u8],
     aad: &[u8],
-    source: &mut impl RandomSource,
+    source: &mut (impl RandomSource + ?Sized),
 ) -> Result<(Encapsulation1120, Vec<u8>), CryptoError> {
     let public = <<XWing as Kem>::PublicKey as Deserializable>::from_bytes(public_key.as_bytes())
         .map_err(|_| CryptoError::ProviderFailure)?;

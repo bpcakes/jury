@@ -7,8 +7,28 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+axum = { version = "=0.8.9", features = ["http1", "json", "tokio"] }
+axum-server = { version = "=0.8.0", features = ["tls-rustls"] }
+clap = { version = "=4.5.50", features = ["derive"] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
 jury-core = { path = "../jury-core" }
+jury-filesystem = { path = "../jury-filesystem" }
+jury-protected = { path = "../jury-protected" }
 jury-protocol = { path = "../jury-protocol" }
+reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
+rusqlite = { version = "=0.40.2", features = ["backup", "bundled"] }
+rustix = { version = "=1.1.4", features = ["process"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.145"
+sha2 = { version = "=0.11.0", default-features = false }
+subtle = "=2.6.1"
+tempfile = "=3.23.0"
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tower-http = { version = "=0.7.1", features = ["catch-panic", "limit", "timeout"] }
+zeroize = { version = "=1.9.0", default-features = false }
+
+[dev-dependencies]
+rcgen = "=0.14.5"
 
 [lints]
 workspace = true
@@ -16,4 +36,3 @@ workspace = true
 [[bin]]
 name = "juryd"
 path = "src/main.rs"
-

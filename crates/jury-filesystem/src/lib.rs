@@ -26,7 +26,7 @@ pub use local_state::{
     resolve_state_root_from_environment,
 };
 pub use lock::{ExclusiveStateLock, LockError};
-pub use private_input::read_public_file;
+pub use private_input::{read_private_file, read_public_file};
 pub use private_output::{
     PreparedPrivateFile, PreparedPublicFile, PrivateFilePrecondition, PublicFilePrecondition,
     PublicationOutcome, PublicationPolicy, preview_public_file,

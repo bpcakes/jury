@@ -1,0 +1,37 @@
+[Unit]
+Description=Jury pre-alpha witness service (never use with real secrets)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=juryd
+Group=juryd
+UMask=0077
+ExecStart=/usr/local/bin/juryd serve --config /etc/juryd/witness.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+StateDirectory=juryd
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/juryd
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

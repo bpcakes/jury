@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "listen": "0.0.0.0:8443",
+  "tls": {
+    "certificate_file": "/etc/juryd/tls/witness.crt",
+    "private_key_file": "/etc/juryd/private/witness.key",
+    "allow_insecure_loopback": false
+  },
+  "identity": {
+    "provider": "software-file",
+    "identity_file": "/var/lib/juryd/ExampleWitness.identity.json",
+    "passphrase_file": "/etc/juryd/private/identity.passphrase"
+  },
+  "database": {
+    "path": "/var/lib/juryd/witness.sqlite3",
+    "authority": {
+      "administration_authority": "ExampleWitnessDbAdmin",
+      "backup_authority": "ExampleWitnessDbBackup",
+      "restore_authority": "ExampleWitnessDbRestore",
+      "failure_domain": "ExampleWitnessHost"
+    }
+  },
+  "external_anchor": {
+    "base_url": "https://anchor.example.invalid:8444/",
+    "ca_certificate_file": "/etc/juryd/tls/anchor-ca.crt",
+    "write_credential_file": "/etc/juryd/private/anchor-write.token",
+    "write_authority": "ExampleAnchorWriter",
+    "authority": {
+      "administration_authority": "ExampleAnchorDbAdmin",
+      "backup_authority": "ExampleAnchorDbBackup",
+      "restore_authority": "ExampleAnchorDbRestore",
+      "failure_domain": "ExampleAnchorHost"
+    },
+    "allow_insecure_loopback": false
+  },
+  "client_credential_file": "/etc/juryd/private/client.token",
+  "operator_credential_file": "/etc/juryd/private/operator.token",
+  "limits": {
+    "maximum_request_bytes": 18874368,
+    "maximum_concurrency": 64,
+    "requests_per_second": 50,
+    "burst_requests": 100,
+    "request_timeout_ms": 15000,
+    "shutdown_grace_ms": 15000
+  }
+}
