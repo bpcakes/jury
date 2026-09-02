@@ -11,7 +11,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, State, rejection::JsonRejection},
+    extract::{ConnectInfo, Extension, Path, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -47,7 +47,8 @@ use crate::{
     identity_provider::{SoftwareFileIdentityProvider, WitnessIdentityProvider as _},
     policy_material::PublicPolicyMaterialV1,
     runtime::{
-        RuntimeError, RuntimeErrorKind, WitnessRuntime, WitnessRuntimeHandle, WitnessRuntimeWorker,
+        OperationDeadline, RuntimeError, RuntimeErrorKind, WitnessRuntime, WitnessRuntimeHandle,
+        WitnessRuntimeWorker,
     },
 };
 
@@ -126,6 +127,7 @@ enum RefusalReason {
 struct WitnessApiState {
     runtime: WitnessRuntimeHandle,
     readiness: Arc<ReadinessProbe>,
+    operation_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -138,6 +140,7 @@ struct AnchorApiState {
 struct ProtectedGateState {
     gate: GateState,
     credential: CredentialDigest,
+    operation_timeout: Duration,
 }
 
 #[derive(Clone)]
@@ -200,6 +203,7 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
     let state = WitnessApiState {
         runtime: worker.handle(),
         readiness: Arc::new(ReadinessProbe::new()),
+        operation_timeout: anchor_timeout,
     };
     let gate = GateState::new(&config.limits);
     let public = Router::new()
@@ -217,6 +221,7 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
             ProtectedGateState {
                 gate: gate.clone(),
                 credential: load_digest(&config.operator_credential_file)?,
+                operation_timeout: anchor_timeout,
             },
             protected_gate_request,
         ));
@@ -228,6 +233,7 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
             ProtectedGateState {
                 gate,
                 credential: load_digest(&config.client_credential_file)?,
+                operation_timeout: anchor_timeout,
             },
             protected_gate_request,
         ));
@@ -265,6 +271,7 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
             ProtectedGateState {
                 gate,
                 credential: load_digest(&config.write_credential_file)?,
+                operation_timeout: Duration::from_millis(config.limits.request_timeout_ms),
             },
             protected_gate_request,
         ));
@@ -415,12 +422,15 @@ async fn public_gate_request(
 async fn protected_gate_request(
     State(state): State<ProtectedGateState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: Next,
 ) -> Response {
     if !authorized(request.headers(), &state.credential) {
         return unauthorized();
     }
+    request
+        .extensions_mut()
+        .insert(OperationDeadline::after(state.operation_timeout));
     admit(&state.gate, peer.ip(), request, next).await
 }
 
@@ -455,7 +465,8 @@ async fn witness_ready(State(state): State<WitnessApiState>) -> Response {
     let Some(lease) = state.readiness.acquire() else {
         return readiness_response(state.readiness.last_ready());
     };
-    let is_ready = state.runtime.check_ready().await.is_ok();
+    let deadline = OperationDeadline::after(state.operation_timeout);
+    let is_ready = state.runtime.check_ready(deadline).await.is_ok();
     lease.finish(is_ready);
     readiness_response(is_ready)
 }
@@ -469,6 +480,7 @@ async fn anchor_ready(State(state): State<AnchorApiState>) -> Response {
 
 async fn register(
     State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     payload: Result<Json<RegisterRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(payload)) = payload else {
@@ -478,6 +490,7 @@ async fn register(
         state
             .runtime
             .register_vault(
+                deadline,
                 payload.policy_material,
                 payload.accepted_registration,
                 payload.checkpoint,
@@ -492,6 +505,7 @@ async fn register(
 
 async fn checkpoint(
     State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     payload: Result<Json<CheckpointRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(payload)) = payload else {
@@ -500,7 +514,7 @@ async fn checkpoint(
     operation_result(
         state
             .runtime
-            .advance_checkpoint(payload.policy_material, payload.checkpoint)
+            .advance_checkpoint(deadline, payload.policy_material, payload.checkpoint)
             .await
             .map(|()| OperationResponse {
                 status: "accepted",
@@ -509,11 +523,14 @@ async fn checkpoint(
     )
 }
 
-async fn compact(State(state): State<WitnessApiState>) -> Response {
+async fn compact(
+    State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
+) -> Response {
     operation_result(
         state
             .runtime
-            .compact_replay()
+            .compact_replay(deadline)
             .await
             .map(|_| OperationResponse {
                 status: "accepted",
@@ -524,6 +541,7 @@ async fn compact(State(state): State<WitnessApiState>) -> Response {
 
 async fn reserve(
     State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     payload: Result<Json<ReserveRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(payload)) = payload else {
@@ -532,7 +550,7 @@ async fn reserve(
     operation_result(
         state
             .runtime
-            .reserve(payload.request, payload.manifest)
+            .reserve(deadline, payload.request, payload.manifest)
             .await
             .map(progress_response),
     )
@@ -540,6 +558,7 @@ async fn reserve(
 
 async fn decide(
     State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     payload: Result<Json<DecideRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(payload)) = payload else {
@@ -548,7 +567,12 @@ async fn decide(
     operation_result(
         state
             .runtime
-            .decide(payload.request, payload.manifest, payload.approvals)
+            .decide(
+                deadline,
+                payload.request,
+                payload.manifest,
+                payload.approvals,
+            )
             .await
             .map(progress_response),
     )
@@ -556,6 +580,7 @@ async fn decide(
 
 async fn cancel(
     State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
     payload: Result<Json<CancelRequest>, JsonRejection>,
 ) -> Response {
     let Ok(Json(payload)) = payload else {
@@ -564,7 +589,7 @@ async fn cancel(
     operation_result(
         state
             .runtime
-            .cancel(payload.request, payload.cancellation)
+            .cancel(deadline, payload.request, payload.cancellation)
             .await
             .map(cancellation_response),
     )
@@ -689,6 +714,9 @@ fn runtime_error(error: RuntimeError) -> Response {
         | RuntimeErrorKind::AnchorUnavailable
         | RuntimeErrorKind::InvalidPolicyMaterial => {
             refusal(StatusCode::SERVICE_UNAVAILABLE, RefusalReason::Unavailable)
+        }
+        RuntimeErrorKind::DeadlineExceeded => {
+            refusal(StatusCode::REQUEST_TIMEOUT, RefusalReason::Unavailable)
         }
         RuntimeErrorKind::InternalFailure => internal_failure(),
     }

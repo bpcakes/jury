@@ -286,6 +286,7 @@ fn validate_limits(limits: &TransportLimits) -> Result<(), AdapterError> {
         || limits.burst_requests > 100_000
         || !(100..=60_000).contains(&limits.request_timeout_ms)
         || !(100..=60_000).contains(&limits.shutdown_grace_ms)
+        || limits.shutdown_grace_ms < limits.request_timeout_ms
     {
         return invalid();
     }
@@ -438,6 +439,14 @@ mod tests {
         shared_writer.external_anchor.write_authority =
             shared_writer.database.authority.backup_authority.clone();
         assert!(validate_separation(&shared_writer).is_err());
+    }
+
+    #[test]
+    fn shutdown_grace_covers_the_request_deadline() {
+        let mut limits = config().limits;
+        assert_eq!(validate_limits(&limits), Ok(()));
+        limits.request_timeout_ms = 101;
+        assert!(validate_limits(&limits).is_err());
     }
 
     #[test]

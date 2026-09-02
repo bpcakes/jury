@@ -1,4 +1,8 @@
-use std::{io::Read as _, path::Path, time::Duration};
+use std::{
+    io::Read as _,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use jury_core::witness_engine::{AnchorCompareAndSwap, ExternalWitnessAnchor, WitnessAnchorError};
 use jury_protocol::{
@@ -143,6 +147,8 @@ pub struct HttpExternalAnchor {
     endpoint: Url,
     witness_id: PrincipalId,
     credential: BearerCredential,
+    request_timeout: Duration,
+    operation_deadline: Option<Instant>,
 }
 
 impl HttpExternalAnchor {
@@ -181,13 +187,31 @@ impl HttpExternalAnchor {
             endpoint,
             witness_id,
             credential: load_bearer(credential_file)?,
+            request_timeout,
+            operation_deadline: None,
         })
     }
 
+    #[must_use]
+    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.operation_deadline = Some(deadline);
+        self
+    }
+
+    fn remaining_timeout(&self) -> Result<Duration, AdapterError> {
+        remaining_timeout(
+            self.request_timeout,
+            self.operation_deadline,
+            Instant::now(),
+        )
+    }
+
     fn read_remote(&self) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
+        let timeout = self.remaining_timeout()?;
         let response = self
             .client
             .get(self.endpoint.clone())
+            .timeout(timeout)
             .send()
             .map_err(|_| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?;
         match response.status() {
@@ -200,6 +224,21 @@ impl HttpExternalAnchor {
             _ => Err(AdapterError::new(AdapterErrorKind::AnchorUnavailable)),
         }
     }
+}
+
+fn remaining_timeout(
+    request_timeout: Duration,
+    operation_deadline: Option<Instant>,
+    now: Instant,
+) -> Result<Duration, AdapterError> {
+    let Some(deadline) = operation_deadline else {
+        return Ok(request_timeout);
+    };
+    deadline
+        .checked_duration_since(now)
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| remaining.min(request_timeout))
+        .ok_or_else(|| AdapterError::new(AdapterErrorKind::AnchorUnavailable))
 }
 
 impl ExternalWitnessAnchor for HttpExternalAnchor {
@@ -220,9 +259,11 @@ impl ExternalWitnessAnchor for HttpExternalAnchor {
                 .map_err(|_| WitnessAnchorError)?,
             next_exact_anchor: candidate.clone(),
         };
+        let timeout = self.remaining_timeout().map_err(|_| WitnessAnchorError)?;
         let response = self
             .client
             .post(self.endpoint.clone())
+            .timeout(timeout)
             .header(authorization_header(), self.credential.authorization())
             .json(&request)
             .send()
@@ -437,6 +478,28 @@ mod tests {
                 .ok_or("anchor restore overwrite should fail")?
                 .kind(),
             AdapterErrorKind::TargetExists
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn anchor_calls_share_the_remaining_operation_budget() -> TestResult {
+        let now = Instant::now();
+        let request_timeout = Duration::from_secs(5);
+        assert_eq!(
+            remaining_timeout(request_timeout, Some(now + Duration::from_millis(250)), now,)?,
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            remaining_timeout(request_timeout, Some(now + Duration::from_secs(30)), now,)?,
+            request_timeout
+        );
+        assert_eq!(
+            remaining_timeout(request_timeout, Some(now), now)
+                .err()
+                .ok_or("expired operation should not issue another request")?
+                .kind(),
+            AdapterErrorKind::AnchorUnavailable
         );
         Ok(())
     }

@@ -2,7 +2,7 @@ use std::{
     path::PathBuf,
     sync::mpsc::{self, Sender, SyncSender, TryRecvError, TrySendError},
     thread::{self, JoinHandle},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use jury_core::witness_engine::{
@@ -26,6 +26,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeErrorKind {
     Refused(WitnessReasonV1),
+    DeadlineExceeded,
     StoreUnavailable,
     AnchorUnavailable,
     InvalidPolicyMaterial,
@@ -48,6 +49,12 @@ impl RuntimeError {
             kind: RuntimeErrorKind::Refused(reason),
         }
     }
+
+    const fn deadline_exceeded() -> Self {
+        Self {
+            kind: RuntimeErrorKind::DeadlineExceeded,
+        }
+    }
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -57,6 +64,28 @@ impl std::fmt::Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
+
+#[derive(Clone, Copy, Debug)]
+pub struct OperationDeadline(Instant);
+
+impl OperationDeadline {
+    #[must_use]
+    pub fn after(duration: Duration) -> Self {
+        Self(Instant::now() + duration)
+    }
+
+    fn instant(self) -> Instant {
+        self.0
+    }
+
+    fn ensure_remaining(self) -> Result<(), RuntimeError> {
+        if Instant::now() < self.0 {
+            Ok(())
+        } else {
+            Err(RuntimeError::deadline_exceeded())
+        }
+    }
+}
 
 pub struct WitnessRuntime {
     identity: Box<dyn WitnessEngineIdentity>,
@@ -85,70 +114,80 @@ impl WitnessRuntime {
         self.identity.principal_id()
     }
 
-    pub fn check_ready(&mut self) -> Result<(), RuntimeError> {
-        self.with_engine(|engine| engine.check_ready())
+    pub fn check_ready(&mut self, deadline: OperationDeadline) -> Result<(), RuntimeError> {
+        self.with_engine(deadline, |engine| engine.check_ready())
     }
 
     pub fn register_vault(
         &mut self,
+        deadline: OperationDeadline,
         material: &PublicPolicyMaterialV1,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
     ) -> Result<(), RuntimeError> {
+        deadline.ensure_remaining()?;
         let policy = material.replay().map_err(map_adapter_error)?;
         let encoded = material.encode().map_err(map_adapter_error)?;
-        self.with_engine(|engine| {
+        self.with_engine(deadline, |engine| {
             engine.register_vault(&policy, accepted_registration, checkpoint, encoded)
         })
     }
 
     pub fn advance_checkpoint(
         &mut self,
+        deadline: OperationDeadline,
         material: &PublicPolicyMaterialV1,
         checkpoint: VaultPolicyCheckpointV1,
     ) -> Result<(), RuntimeError> {
+        deadline.ensure_remaining()?;
         let policy = material.replay().map_err(map_adapter_error)?;
         let encoded = material.encode().map_err(map_adapter_error)?;
-        self.with_engine(|engine| engine.advance_checkpoint(&policy, checkpoint, encoded))
+        self.with_engine(deadline, |engine| {
+            engine.advance_checkpoint(&policy, checkpoint, encoded)
+        })
     }
 
     pub fn reserve(
         &mut self,
+        deadline: OperationDeadline,
         request: WitnessRequestV1,
         manifest: &ActionManifestV1,
     ) -> Result<WitnessProgress, RuntimeError> {
-        self.with_policy_engine(request.vault_id, |engine, policy| {
+        self.with_policy_engine(deadline, request.vault_id, |engine, policy| {
             engine.reserve(policy, request, manifest)
         })
     }
 
     pub fn decide(
         &mut self,
+        deadline: OperationDeadline,
         request: &WitnessRequestV1,
         manifest: &ActionManifestV1,
         approvals: &[ApprovalDecisionV1],
     ) -> Result<WitnessProgress, RuntimeError> {
-        self.with_policy_engine(request.vault_id, |engine, policy| {
+        self.with_policy_engine(deadline, request.vault_id, |engine, policy| {
             engine.decide(policy, request, manifest, approvals)
         })
     }
 
     pub fn cancel(
         &mut self,
+        deadline: OperationDeadline,
         request: &WitnessRequestV1,
         cancellation: &RequestCancellationV1,
     ) -> Result<CancellationProgress, RuntimeError> {
-        self.with_policy_engine(request.vault_id, |engine, policy| {
+        self.with_policy_engine(deadline, request.vault_id, |engine, policy| {
             engine.cancel(policy, request, cancellation)
         })
     }
 
-    pub fn compact_replay(&mut self) -> Result<usize, RuntimeError> {
-        self.with_engine(|engine| engine.compact_replay())
+    pub fn compact_replay(&mut self, deadline: OperationDeadline) -> Result<usize, RuntimeError> {
+        self.with_engine(deadline, |engine| engine.compact_replay())
     }
 
     fn with_engine<T>(
         &mut self,
+        deadline: OperationDeadline,
         operation: impl FnOnce(
             &mut WitnessEngine<
                 '_,
@@ -160,9 +199,14 @@ impl WitnessRuntime {
             >,
         ) -> Result<T, WitnessEngineError>,
     ) -> Result<T, RuntimeError> {
+        deadline.ensure_remaining()?;
         let mut store = SqliteWitnessStore::open(&self.database_path, self.identity.principal_id())
             .map_err(map_adapter_error)?;
-        let mut anchor = self.external_anchor.clone();
+        deadline.ensure_remaining()?;
+        let mut anchor = self
+            .external_anchor
+            .clone()
+            .with_deadline(deadline.instant());
         let mut random = OsRandom;
         let mut engine = WitnessEngine::new(
             self.identity.as_ref(),
@@ -176,6 +220,7 @@ impl WitnessRuntime {
 
     fn with_policy_engine<T>(
         &mut self,
+        deadline: OperationDeadline,
         vault_id: VaultId,
         operation: impl FnOnce(
             &mut WitnessEngine<
@@ -189,9 +234,14 @@ impl WitnessRuntime {
             &jury_core::policy::PolicyState,
         ) -> Result<T, WitnessEngineError>,
     ) -> Result<T, RuntimeError> {
+        deadline.ensure_remaining()?;
         let mut store = SqliteWitnessStore::open(&self.database_path, self.identity.principal_id())
             .map_err(map_adapter_error)?;
-        let mut anchor = self.external_anchor.clone();
+        deadline.ensure_remaining()?;
+        let mut anchor = self
+            .external_anchor
+            .clone()
+            .with_deadline(deadline.instant());
         let mut random = OsRandom;
         {
             let mut engine = WitnessEngine::new(
@@ -203,6 +253,7 @@ impl WitnessRuntime {
             );
             engine.check_ready().map_err(map_engine_error)?;
         }
+        deadline.ensure_remaining()?;
         let persisted = store.load_validated().map_err(map_adapter_error)?;
         let material = persisted
             .logical
@@ -214,6 +265,7 @@ impl WitnessRuntime {
         let policy = PublicPolicyMaterialV1::decode(&material)
             .and_then(|material| material.replay())
             .map_err(map_adapter_error)?;
+        deadline.ensure_remaining()?;
         let mut engine = WitnessEngine::new(
             self.identity.as_ref(),
             &mut store,
@@ -227,7 +279,7 @@ impl WitnessRuntime {
 
 #[derive(Clone)]
 pub struct WitnessRuntimeHandle {
-    sender: SyncSender<RuntimeCommand>,
+    sender: SyncSender<QueuedCommand>,
 }
 
 pub struct WitnessRuntimeWorker {
@@ -268,9 +320,28 @@ enum RuntimeCommand {
     Compact(tokio::sync::oneshot::Sender<Result<usize, RuntimeError>>),
 }
 
+struct QueuedCommand {
+    deadline: OperationDeadline,
+    command: RuntimeCommand,
+}
+
+impl RuntimeCommand {
+    fn response_is_closed(&self) -> bool {
+        match self {
+            Self::CheckReady(response) => response.is_closed(),
+            Self::Register { response, .. } => response.is_closed(),
+            Self::AdvanceCheckpoint { response, .. } => response.is_closed(),
+            Self::Reserve { response, .. } => response.is_closed(),
+            Self::Decide { response, .. } => response.is_closed(),
+            Self::Cancel { response, .. } => response.is_closed(),
+            Self::Compact(response) => response.is_closed(),
+        }
+    }
+}
+
 impl WitnessRuntimeWorker {
     pub fn spawn(mut runtime: WitnessRuntime, queue_capacity: usize) -> Result<Self, AdapterError> {
-        let (sender, receiver) = mpsc::sync_channel(queue_capacity.max(1));
+        let (sender, receiver) = mpsc::sync_channel::<QueuedCommand>(queue_capacity.max(1));
         let (shutdown, shutdown_receiver) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("juryd-security-state".to_owned())
@@ -280,8 +351,7 @@ impl WitnessRuntimeWorker {
                         Ok(()) | Err(TryRecvError::Disconnected) => break,
                         Err(TryRecvError::Empty) => {}
                     }
-                    let command = match receiver.recv_timeout(std::time::Duration::from_millis(50))
-                    {
+                    let queued = match receiver.recv_timeout(Duration::from_millis(50)) {
                         Ok(command) => command,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -290,9 +360,13 @@ impl WitnessRuntimeWorker {
                         Ok(()) | Err(TryRecvError::Disconnected) => break,
                         Err(TryRecvError::Empty) => {}
                     }
-                    match command {
+                    if queued.command.response_is_closed() {
+                        continue;
+                    }
+                    let deadline = queued.deadline;
+                    match queued.command {
                         RuntimeCommand::CheckReady(response) => {
-                            let _ = response.send(runtime.check_ready());
+                            let _ = response.send(runtime.check_ready(deadline));
                         }
                         RuntimeCommand::Register {
                             material,
@@ -301,6 +375,7 @@ impl WitnessRuntimeWorker {
                             response,
                         } => {
                             let _ = response.send(runtime.register_vault(
+                                deadline,
                                 &material,
                                 accepted_registration,
                                 checkpoint,
@@ -311,15 +386,15 @@ impl WitnessRuntimeWorker {
                             checkpoint,
                             response,
                         } => {
-                            let _ =
-                                response.send(runtime.advance_checkpoint(&material, checkpoint));
+                            let _ = response
+                                .send(runtime.advance_checkpoint(deadline, &material, checkpoint));
                         }
                         RuntimeCommand::Reserve {
                             request,
                             manifest,
                             response,
                         } => {
-                            let _ = response.send(runtime.reserve(request, &manifest));
+                            let _ = response.send(runtime.reserve(deadline, request, &manifest));
                         }
                         RuntimeCommand::Decide {
                             request,
@@ -327,17 +402,19 @@ impl WitnessRuntimeWorker {
                             approvals,
                             response,
                         } => {
-                            let _ = response.send(runtime.decide(&request, &manifest, &approvals));
+                            let _ = response
+                                .send(runtime.decide(deadline, &request, &manifest, &approvals));
                         }
                         RuntimeCommand::Cancel {
                             request,
                             cancellation,
                             response,
                         } => {
-                            let _ = response.send(runtime.cancel(&request, &cancellation));
+                            let _ =
+                                response.send(runtime.cancel(deadline, &request, &cancellation));
                         }
                         RuntimeCommand::Compact(response) => {
-                            let _ = response.send(runtime.compact_replay());
+                            let _ = response.send(runtime.compact_replay(deadline));
                         }
                     }
                 }
@@ -366,99 +443,129 @@ impl WitnessRuntimeWorker {
 }
 
 impl WitnessRuntimeHandle {
-    pub async fn check_ready(&self) -> Result<(), RuntimeError> {
+    pub(crate) async fn check_ready(
+        &self,
+        deadline: OperationDeadline,
+    ) -> Result<(), RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::CheckReady(response))?;
+        self.submit(deadline, RuntimeCommand::CheckReady(response))?;
         receive(receiver).await
     }
 
     pub async fn register_vault(
         &self,
+        deadline: OperationDeadline,
         material: PublicPolicyMaterialV1,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
     ) -> Result<(), RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::Register {
-            material,
-            accepted_registration,
-            checkpoint,
-            response,
-        })?;
+        self.submit(
+            deadline,
+            RuntimeCommand::Register {
+                material,
+                accepted_registration,
+                checkpoint,
+                response,
+            },
+        )?;
         receive(receiver).await
     }
 
     pub async fn advance_checkpoint(
         &self,
+        deadline: OperationDeadline,
         material: PublicPolicyMaterialV1,
         checkpoint: VaultPolicyCheckpointV1,
     ) -> Result<(), RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::AdvanceCheckpoint {
-            material,
-            checkpoint,
-            response,
-        })?;
+        self.submit(
+            deadline,
+            RuntimeCommand::AdvanceCheckpoint {
+                material,
+                checkpoint,
+                response,
+            },
+        )?;
         receive(receiver).await
     }
 
     pub async fn reserve(
         &self,
+        deadline: OperationDeadline,
         request: WitnessRequestV1,
         manifest: ActionManifestV1,
     ) -> Result<WitnessProgress, RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::Reserve {
-            request,
-            manifest,
-            response,
-        })?;
+        self.submit(
+            deadline,
+            RuntimeCommand::Reserve {
+                request,
+                manifest,
+                response,
+            },
+        )?;
         receive(receiver).await
     }
 
     pub async fn decide(
         &self,
+        deadline: OperationDeadline,
         request: WitnessRequestV1,
         manifest: ActionManifestV1,
         approvals: Vec<ApprovalDecisionV1>,
     ) -> Result<WitnessProgress, RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::Decide {
-            request,
-            manifest,
-            approvals,
-            response,
-        })?;
+        self.submit(
+            deadline,
+            RuntimeCommand::Decide {
+                request,
+                manifest,
+                approvals,
+                response,
+            },
+        )?;
         receive(receiver).await
     }
 
     pub async fn cancel(
         &self,
+        deadline: OperationDeadline,
         request: WitnessRequestV1,
         cancellation: RequestCancellationV1,
     ) -> Result<CancellationProgress, RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::Cancel {
-            request,
-            cancellation,
-            response,
-        })?;
-        receive(receiver).await
-    }
-
-    pub async fn compact_replay(&self) -> Result<usize, RuntimeError> {
-        let (response, receiver) = tokio::sync::oneshot::channel();
-        self.submit(RuntimeCommand::Compact(response))?;
-        receive(receiver).await
-    }
-
-    fn submit(&self, command: RuntimeCommand) -> Result<(), RuntimeError> {
-        self.sender.try_send(command).map_err(|error| RuntimeError {
-            kind: match error {
-                TrySendError::Full(_) => RuntimeErrorKind::StoreUnavailable,
-                TrySendError::Disconnected(_) => RuntimeErrorKind::InternalFailure,
+        self.submit(
+            deadline,
+            RuntimeCommand::Cancel {
+                request,
+                cancellation,
+                response,
             },
-        })
+        )?;
+        receive(receiver).await
+    }
+
+    pub async fn compact_replay(&self, deadline: OperationDeadline) -> Result<usize, RuntimeError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.submit(deadline, RuntimeCommand::Compact(response))?;
+        receive(receiver).await
+    }
+
+    fn submit(
+        &self,
+        deadline: OperationDeadline,
+        command: RuntimeCommand,
+    ) -> Result<(), RuntimeError> {
+        deadline.ensure_remaining()?;
+        self.sender
+            .try_send(QueuedCommand { deadline, command })
+            .map_err(|error| RuntimeError {
+                kind: match error {
+                    TrySendError::Full(_) => RuntimeErrorKind::StoreUnavailable,
+                    TrySendError::Disconnected(_) => RuntimeErrorKind::InternalFailure,
+                },
+            })
     }
 }
 
@@ -524,4 +631,42 @@ fn map_adapter_error(error: AdapterError) -> RuntimeError {
         | AdapterErrorKind::Io => RuntimeErrorKind::InternalFailure,
     };
     RuntimeError { kind }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expired_work_is_rejected_before_it_enters_the_runtime_queue()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let handle = WitnessRuntimeHandle { sender };
+        let (response, response_receiver) = tokio::sync::oneshot::channel();
+
+        let error = handle
+            .submit(
+                OperationDeadline::after(Duration::ZERO),
+                RuntimeCommand::CheckReady(response),
+            )
+            .err()
+            .ok_or("expired command must not be queued")?;
+
+        assert_eq!(error.kind(), RuntimeErrorKind::DeadlineExceeded);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(response_receiver.blocking_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn dropped_callers_mark_queued_work_as_abandoned() {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        let command = RuntimeCommand::CheckReady(response);
+        assert!(!command.response_is_closed());
+        drop(receiver);
+        assert!(command.response_is_closed());
+    }
 }

@@ -102,6 +102,13 @@ the bearer credential before body deserialization or admission to the shared
 rate/concurrency budget. Concurrent readiness probes are single-flighted and
 never enqueue duplicate database/anchor checks.
 
+The request timeout is one end-to-end operation budget: it is attached before
+handler extraction, retained while work waits in the serialized witness queue,
+and shared by every external-anchor attempt. Work whose caller has gone away is
+discarded before execution. `shutdown_grace_ms` must be at least
+`request_timeout_ms`, so accepted work cannot extend shutdown by a fresh series
+of per-step timeouts.
+
 Witness endpoints are:
 
 | Endpoint | Authentication | Purpose |
