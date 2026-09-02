@@ -13,6 +13,7 @@ fn checked_in_linux_configs_match_the_strict_schema_and_separation_contract()
     assert!(!witness.tls.allow_insecure_loopback);
     assert!(!witness.external_anchor.allow_insecure_loopback);
     assert!(!anchor.tls.allow_insecure_loopback);
+    assert_eq!(witness.witness_id, anchor.witness_id);
     assert_eq!(witness.external_anchor.authority, anchor.database.authority);
     assert_eq!(
         witness.external_anchor.write_authority,

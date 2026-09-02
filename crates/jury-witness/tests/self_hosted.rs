@@ -68,6 +68,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         &anchor_config,
         &json!({
             "schema": 1,
+            "witness_id": witness_id,
             "listen": format!("127.0.0.1:{anchor_port}"),
             "tls": {
                 "certificate_file": certificate,
@@ -146,6 +147,41 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         &format!("https://127.0.0.1:{anchor_port}/readyz"),
         &mut anchor,
     )?;
+    let foreign_witness_id = PrincipalId::from_bytes([8; 32])?;
+    let foreign_anchor = WitnessStateAnchorV1 {
+        schema: 1,
+        witness_id: foreign_witness_id,
+        witness_signing_key_fingerprint: Digest32::new([8; 32]),
+        witness_signing_key_epoch: 1,
+        state_generation: 1,
+        database_state_digest: Digest32::new([8; 32]),
+        vault_high_watermarks: Vec::new(),
+        replay_retain_through_ms: 0,
+        last_accepted_wall_time_ms: 1,
+        predecessor_anchor_digest: Digest32::new([0; 32]),
+        issued_at_ms: 1,
+        signature: Signature64::new([8; 64]),
+    };
+    let foreign_path = format!(
+        "https://127.0.0.1:{anchor_port}/v1/anchors/{}",
+        hex_id(&foreign_witness_id)
+    );
+    assert_eq!(
+        client.get(&foreign_path).send()?.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        client
+            .post(&foreign_path)
+            .bearer_auth(ANCHOR_TOKEN)
+            .json(&json!({
+                "expected_anchor_digest": null,
+                "next_exact_anchor": foreign_anchor
+            }))
+            .send()?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
     let mut witness = ProcessGuard::spawn(executable, &["serve", "--config"], &witness_config)?;
     let witness_base = format!("https://127.0.0.1:{witness_port}");
     wait_ready(&client, &format!("{witness_base}/readyz"), &mut witness)?;
@@ -234,12 +270,14 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
     fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o700))?;
     let port = unused_port()?;
     let token = fixture.path().join("anchor.token");
+    let witness_id = PrincipalId::from_bytes([9; 32])?;
     write_file(&token, ANCHOR_TOKEN.as_bytes(), 0o600)?;
     let config = fixture.path().join("anchor.json");
     write_json(
         &config,
         &json!({
             "schema": 1,
+            "witness_id": witness_id,
             "listen": format!("127.0.0.1:{port}"),
             "tls": {
                 "certificate_file": null,

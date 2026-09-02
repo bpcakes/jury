@@ -129,6 +129,7 @@ struct WitnessApiState {
 #[derive(Clone)]
 struct AnchorApiState {
     repository: Arc<Mutex<SqliteAnchorRepository>>,
+    witness_id: PrincipalId,
     write_credential: CredentialDigest,
 }
 
@@ -207,7 +208,9 @@ pub async fn run_anchor_service(config: AnchorServiceConfig) -> Result<(), Adapt
     let state = AnchorApiState {
         repository: Arc::new(Mutex::new(SqliteAnchorRepository::open(
             &config.database.path,
+            config.witness_id,
         )?)),
+        witness_id: config.witness_id,
         write_credential: load_digest(&config.write_credential_file)?,
     };
     let app = Router::new()
@@ -493,12 +496,15 @@ async fn read_anchor(
     let Ok(witness_id) = parse_principal_id(&witness_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if witness_id != state.witness_id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let repository = state.repository;
     match tokio::task::spawn_blocking(move || {
         repository
             .lock()
             .map_err(|_| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?
-            .read(&witness_id)
+            .read()
     })
     .await
     {
@@ -520,6 +526,9 @@ async fn compare_and_swap_anchor(
     let Ok(witness_id) = parse_principal_id(&witness_id) else {
         return invalid_request();
     };
+    if witness_id != state.witness_id {
+        return invalid_request();
+    }
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
@@ -529,7 +538,6 @@ async fn compare_and_swap_anchor(
             .lock()
             .map_err(|_| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?
             .compare_and_swap(
-                &witness_id,
                 payload.expected_anchor_digest.as_ref(),
                 &payload.next_exact_anchor,
             )

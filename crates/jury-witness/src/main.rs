@@ -147,7 +147,7 @@ async fn run_anchor(command: AnchorCommand) -> Result<(), AdapterError> {
         }
         AnchorCommand::Init { config } => {
             let config = AnchorServiceConfig::load_database_command(&config)?;
-            SqliteAnchorRepository::open(&config.database.path)?;
+            SqliteAnchorRepository::open(&config.database.path, config.witness_id)?;
             println!("juryd external-anchor database initialized");
             Ok(())
         }

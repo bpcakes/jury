@@ -113,11 +113,13 @@ Witness endpoints are:
 | `POST /v1/requests/cancel` | client | Cancel or return the stable too-late response |
 
 Anchor endpoints are `GET /livez`, `GET /readyz`, and
-`GET|POST /v1/anchors/{witness_id}`. Anchor reads are public and address only a
-caller-supplied witness ID; the API has no list operation. Anchor writes require
-the scoped write credential and perform exact authenticated monotonic
+`GET|POST /v1/anchors/{witness_id}`. Each anchor service is bound to the one
+public `witness_id` in its configuration; reads for any other ID are absent and
+writes are rejected. The API has no list operation. Anchor writes require that
+witness's scoped write credential and perform exact authenticated monotonic
 compare-and-swap. The witness reads the stored value back byte-for-byte before
-acknowledging a mutation.
+acknowledging a mutation. The witness client trusts only the configured anchor
+CA and does not merge it with the host's platform trust roots.
 
 Health bodies contain only `status` and the pre-alpha maturity warning. They do
 not enumerate principals, policies, vaults, items, requests, generations, or

@@ -22,6 +22,7 @@ const MAX_ANCHOR_HTTP_BYTES: usize = 1024 * 1024;
 
 pub struct SqliteAnchorRepository {
     connection: Connection,
+    witness_id: PrincipalId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -31,31 +32,28 @@ pub enum AnchorCasResult {
 }
 
 impl SqliteAnchorRepository {
-    pub fn open(path: &Path) -> Result<Self, AdapterError> {
+    pub fn open(path: &Path, witness_id: PrincipalId) -> Result<Self, AdapterError> {
         Ok(Self {
             connection: open_managed_database(path, ANCHOR_DATABASE_KIND, true)?,
+            witness_id,
         })
     }
 
-    pub fn read(
-        &self,
-        witness_id: &PrincipalId,
-    ) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
-        load_anchor(&self.connection, witness_id)
+    pub fn read(&self) -> Result<Option<WitnessStateAnchorV1>, AdapterError> {
+        load_anchor(&self.connection, &self.witness_id)
     }
 
     pub fn compare_and_swap(
         &mut self,
-        witness_id: &PrincipalId,
         expected_digest: Option<&Digest32>,
         candidate: &WitnessStateAnchorV1,
     ) -> Result<AnchorCasResult, AdapterError> {
-        validate_candidate(witness_id, candidate)?;
+        validate_candidate(&self.witness_id, candidate)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(anchor_unavailable)?;
-        let current = load_anchor(&transaction, witness_id)?;
+        let current = load_anchor(&transaction, &self.witness_id)?;
         if current.as_ref().is_some_and(|current| current == candidate) {
             transaction.commit().map_err(anchor_unavailable)?;
             return Ok(AnchorCasResult::Applied(candidate.clone()));
@@ -92,7 +90,7 @@ impl SqliteAnchorRepository {
                      digest = excluded.digest, \
                      anchor_json = excluded.anchor_json",
                 params![
-                    witness_id.as_bytes().as_slice(),
+                    self.witness_id.as_bytes().as_slice(),
                     generation,
                     digest.as_bytes().as_slice(),
                     encoded
@@ -101,7 +99,7 @@ impl SqliteAnchorRepository {
             .map_err(anchor_unavailable)?;
         transaction.commit().map_err(anchor_unavailable)?;
         let readback = self
-            .read(witness_id)?
+            .read()?
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::AnchorUnavailable))?;
         if readback != *candidate {
             return Err(AdapterError::new(AdapterErrorKind::Conflict));
@@ -171,7 +169,7 @@ impl HttpExternalAnchor {
         let certificate = reqwest::Certificate::from_pem(&ca_bytes)
             .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
         let client = Client::builder()
-            .add_root_certificate(certificate)
+            .tls_certs_only([certificate])
             .connect_timeout(request_timeout)
             .timeout(request_timeout)
             .https_only(!allow_insecure_loopback)
@@ -380,29 +378,38 @@ mod tests {
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
         let path = directory.path().join("anchors.sqlite3");
         let witness_id = PrincipalId::from_bytes([1; 32])?;
-        let mut repository = SqliteAnchorRepository::open(&path)?;
+        let mut repository = SqliteAnchorRepository::open(&path, witness_id)?;
+        let foreign = candidate(PrincipalId::from_bytes([8; 32])?, 1, zero_digest(), 8);
+        assert_eq!(
+            repository
+                .compare_and_swap(None, &foreign)
+                .err()
+                .ok_or("foreign witness candidate should fail")?
+                .kind(),
+            AdapterErrorKind::InvalidState
+        );
         let first = candidate(witness_id, 1, zero_digest(), 3);
         assert_eq!(
-            repository.compare_and_swap(&witness_id, None, &first)?,
+            repository.compare_and_swap(None, &first)?,
             AnchorCasResult::Applied(first.clone())
         );
         assert_eq!(
-            repository.compare_and_swap(&witness_id, None, &first)?,
+            repository.compare_and_swap(None, &first)?,
             AnchorCasResult::Applied(first.clone())
         );
 
         let first_digest = first.digest()?;
         let wrong = candidate(witness_id, 2, Digest32::new([9; 32]), 4);
         assert_eq!(
-            repository.compare_and_swap(&witness_id, Some(&first_digest), &wrong)?,
+            repository.compare_and_swap(Some(&first_digest), &wrong)?,
             AnchorCasResult::Conflict(Some(first.clone()))
         );
         let second = candidate(witness_id, 2, first_digest.clone(), 5);
         assert_eq!(
-            repository.compare_and_swap(&witness_id, Some(&first_digest), &second)?,
+            repository.compare_and_swap(Some(&first_digest), &second)?,
             AnchorCasResult::Applied(second.clone())
         );
-        assert_eq!(repository.read(&witness_id)?, Some(second));
+        assert_eq!(repository.read()?, Some(second));
         Ok(())
     }
 
@@ -414,14 +421,14 @@ mod tests {
         let backup = directory.path().join("backup.sqlite3");
         let restored = directory.path().join("restored.sqlite3");
         let witness_id = PrincipalId::from_bytes([6; 32])?;
-        let mut repository = SqliteAnchorRepository::open(&source)?;
+        let mut repository = SqliteAnchorRepository::open(&source, witness_id)?;
         let first = candidate(witness_id, 1, zero_digest(), 7);
-        repository.compare_and_swap(&witness_id, None, &first)?;
+        repository.compare_and_swap(None, &first)?;
 
         backup_anchor_database(&source, &backup)?;
         restore_anchor_database(&backup, &restored)?;
         assert_eq!(
-            SqliteAnchorRepository::open(&restored)?.read(&witness_id)?,
+            SqliteAnchorRepository::open(&restored, witness_id)?.read()?,
             Some(first)
         );
         assert_eq!(

@@ -26,7 +26,6 @@ type TestResult = Result<(), Box<dyn Error>>;
 
 struct DirectAnchor {
     repository: SqliteAnchorRepository,
-    witness_id: jury_protocol::vault_v1::PrincipalId,
 }
 
 impl DirectAnchor {
@@ -35,17 +34,14 @@ impl DirectAnchor {
         witness_id: jury_protocol::vault_v1::PrincipalId,
     ) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
-            repository: SqliteAnchorRepository::open(path)?,
-            witness_id,
+            repository: SqliteAnchorRepository::open(path, witness_id)?,
         })
     }
 }
 
 impl ExternalWitnessAnchor for DirectAnchor {
     fn read(&mut self) -> Result<Option<WitnessStateAnchorV1>, WitnessAnchorError> {
-        self.repository
-            .read(&self.witness_id)
-            .map_err(|_| WitnessAnchorError)
+        self.repository.read().map_err(|_| WitnessAnchorError)
     }
 
     fn compare_and_swap(
@@ -58,7 +54,7 @@ impl ExternalWitnessAnchor for DirectAnchor {
             .transpose()
             .map_err(|_| WitnessAnchorError)?;
         self.repository
-            .compare_and_swap(&self.witness_id, expected_digest.as_ref(), candidate)
+            .compare_and_swap(expected_digest.as_ref(), candidate)
             .map(|result| match result {
                 AnchorCasResult::Applied(_) => AnchorCompareAndSwap::Published,
                 AnchorCasResult::Conflict(_) => AnchorCompareAndSwap::Conflict,
@@ -97,7 +93,7 @@ fn real_sqlite_split_writes_reconcile_and_one_sided_rollbacks_fail_closed() -> T
     assert_eq!(reconciled.pending_anchor, None);
     assert_eq!(reconciled.published_anchor, Some(first.clone()));
     assert_eq!(
-        SqliteAnchorRepository::open(&anchor_database)?.read(&witness_id)?,
+        SqliteAnchorRepository::open(&anchor_database, witness_id)?.read()?,
         Some(first)
     );
 
@@ -109,11 +105,8 @@ fn real_sqlite_split_writes_reconcile_and_one_sided_rollbacks_fail_closed() -> T
     let mut store = SqliteWitnessStore::open(&witness_database, witness_id)?;
     let second = commit_pending(&mut store, &identity, 2)?;
     let expected = second.predecessor_anchor_digest.clone();
-    SqliteAnchorRepository::open(&anchor_database)?.compare_and_swap(
-        &witness_id,
-        Some(&expected),
-        &second,
-    )?;
+    SqliteAnchorRepository::open(&anchor_database, witness_id)?
+        .compare_and_swap(Some(&expected), &second)?;
     drop(store);
 
     check_ready(&identity, &witness_database, &anchor_database)?;

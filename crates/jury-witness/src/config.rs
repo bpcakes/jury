@@ -92,6 +92,7 @@ pub struct WitnessServiceConfig {
 #[serde(deny_unknown_fields)]
 pub struct AnchorServiceConfig {
     pub schema: u16,
+    pub witness_id: PrincipalId,
     pub listen: SocketAddr,
     pub tls: TlsConfig,
     pub database: DatabaseConfig,
@@ -108,6 +109,7 @@ pub struct WitnessDatabaseCommandConfig {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnchorDatabaseCommandConfig {
+    pub witness_id: PrincipalId,
     pub database: DatabaseConfig,
 }
 
@@ -209,6 +211,7 @@ impl AnchorServiceConfig {
         validate_database_path(&config.database.path)?;
         validate_boundary(&config.database.authority)?;
         Ok(AnchorDatabaseCommandConfig {
+            witness_id: config.witness_id,
             database: config.database,
         })
     }
