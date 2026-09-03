@@ -1,6 +1,9 @@
 //! Offline aggregation of per-witness durable checkpoint acknowledgements.
 
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use jury_protocol::{
     vault_v1::{ContentRole, Digest32, PrincipalId},
@@ -214,7 +217,7 @@ pub fn verify_witness_policy_rotation(
         || rotation.prior_vault_policy_hash != *prior.terminal_revision_hash()
         || rotation.next_vault_policy_sequence != next.sequence()
         || rotation.next_vault_policy_hash != *next.terminal_revision_hash()
-        || next.sequence() != prior.sequence().saturating_add(1)
+        || !next.is_direct_descendant_of(prior)
     {
         return Err(rotation_error(
             RotationVerificationErrorKind::InvalidPolicyTransition,
@@ -230,6 +233,9 @@ pub fn verify_witness_policy_rotation(
         || prior_policy.revision != rotation.prior_witness_policy_revision
         || next_policy.witness_policy_id != rotation.next_witness_policy_id
         || next_policy.revision != rotation.next_witness_policy_revision
+        || next_policy.witness_policy_id != prior_policy.witness_policy_id
+        || next_policy.revision != prior_policy.revision.saturating_add(1)
+        || next_policy.predecessor_policy_digest != rotation.prior_witness_policy_digest
         || prior_policy.digest().ok().as_ref() != Some(&rotation.prior_witness_policy_digest)
         || next_policy.digest().ok().as_ref() != Some(&rotation.next_witness_policy_digest)
         || rotation.reason != rotation_reason(prior_policy, next_policy)
@@ -243,7 +249,12 @@ pub fn verify_witness_policy_rotation(
         .items()
         .filter(|(_, item)| item_uses_policy(item, &rotation.prior_witness_policy_digest))
         .map(|(item_id, _)| *item_id)
-        .collect::<Vec<_>>();
+        .chain(
+            next.items()
+                .filter(|(_, item)| item_uses_policy(item, &rotation.next_witness_policy_digest))
+                .map(|(item_id, _)| *item_id),
+        )
+        .collect::<BTreeSet<_>>();
     if expected_items.len() != rotation.affected_items.len() {
         return Err(rotation_error(
             RotationVerificationErrorKind::IncompleteItemRotation,
@@ -309,6 +320,17 @@ pub fn verify_witness_recovery(
     recovery
         .validate_shape()
         .map_err(|_| rotation_error(RotationVerificationErrorKind::InvalidRecord))?;
+    let prior_policy = prior
+        .witness_policy(&rotation.prior_witness_policy_digest)
+        .ok_or_else(|| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?;
+    let next_policy = next
+        .witness_policy(&rotation.next_witness_policy_digest)
+        .ok_or_else(|| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?;
+    if next_policy.witness_threshold < prior_policy.witness_threshold {
+        return Err(rotation_error(
+            RotationVerificationErrorKind::UnsafeRecovery,
+        ));
+    }
     let rotation_digest = verify_witness_policy_rotation(prior, next, rotation)?;
     let prior_checkpoint_digest = validate_checkpoint(prior, prior_checkpoint)
         .map_err(|_| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?;
@@ -316,9 +338,6 @@ pub fn verify_witness_recovery(
         .map_err(|_| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?;
     let registration_digest = witness_registration_digest(new_registration)
         .map_err(|_| rotation_error(RotationVerificationErrorKind::InvalidRecord))?;
-    let next_policy = next
-        .witness_policy(&next_checkpoint.witness_policy_digest)
-        .ok_or_else(|| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?;
     let descriptor_matches = next_policy.witness_descriptors.iter().any(|descriptor| {
         descriptor.status == DescriptorStatus::Active
             && descriptor.canonical_bytes() == recovery.new_witness_descriptor.as_bytes()
@@ -384,7 +403,7 @@ fn item_uses_policy(item: &crate::policy::ItemPolicyState, policy_digest: &Diges
     })
 }
 
-fn rotation_reason(
+pub(crate) fn rotation_reason(
     prior: &crate::policy::WitnessPolicy,
     next: &crate::policy::WitnessPolicy,
 ) -> WitnessRotationReasonV1 {
@@ -406,23 +425,21 @@ fn rotation_reason(
     if prior.witness_threshold != next.witness_threshold {
         return WitnessRotationReasonV1::WitnessThreshold;
     }
-    if prior
-        .witness_descriptors
-        .iter()
-        .zip(&next.witness_descriptors)
-        .any(|(prior, next)| prior.share_index != next.share_index)
-    {
+    let prior_descriptors = active_witness_descriptors(prior);
+    let next_descriptors = active_witness_descriptors(next);
+    if prior_descriptors.iter().any(|(id, prior)| {
+        next_descriptors
+            .get(id)
+            .is_none_or(|next| prior.share_index != next.share_index)
+    }) {
         return WitnessRotationReasonV1::ShareIndex;
     }
-    if prior
-        .witness_descriptors
-        .iter()
-        .zip(&next.witness_descriptors)
-        .any(|(prior, next)| {
+    if prior_descriptors.iter().any(|(id, prior)| {
+        next_descriptors.get(id).is_none_or(|next| {
             prior.contribution_public_key != next.contribution_public_key
                 || prior.contribution_key_epoch != next.contribution_key_epoch
         })
-    {
+    }) {
         return WitnessRotationReasonV1::ContributionKey;
     }
     if prior.construction != next.construction {
@@ -431,15 +448,12 @@ fn rotation_reason(
     if prior.suite != next.suite {
         return WitnessRotationReasonV1::Suite;
     }
-    if prior
-        .witness_descriptors
-        .iter()
-        .zip(&next.witness_descriptors)
-        .any(|(prior, next)| {
+    if prior_descriptors.iter().any(|(id, prior)| {
+        next_descriptors.get(id).is_none_or(|next| {
             prior.signing_public_key != next.signing_public_key
                 || prior.signing_key_epoch != next.signing_key_epoch
         })
-    {
+    }) {
         return WitnessRotationReasonV1::WitnessSigningKey;
     }
     if prior.approver_descriptors != next.approver_descriptors
@@ -449,6 +463,17 @@ fn rotation_reason(
         return WitnessRotationReasonV1::ApproverRuleOrLabel;
     }
     WitnessRotationReasonV1::DirectMode
+}
+
+fn active_witness_descriptors(
+    policy: &crate::policy::WitnessPolicy,
+) -> BTreeMap<PrincipalId, &crate::policy::WitnessPolicyDescriptor> {
+    policy
+        .witness_descriptors
+        .iter()
+        .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
+        .map(|descriptor| (descriptor.witness_id, descriptor))
+        .collect()
 }
 
 fn verify_rotation_owner_signature(

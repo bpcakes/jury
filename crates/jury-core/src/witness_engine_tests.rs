@@ -5,10 +5,10 @@ use jury_protocol::{
     vault_v1::{
         AccessRole, ApprovalId, CancellationId, ContentRole, DescriptorMetadataV1, Digest32,
         Encapsulation1120, ItemAccessMode, ItemId, ItemKind, Nonce12, PrincipalDescriptorV1,
-        PrincipalId, PrincipalKind, ReceiptId, RecipientPublicKey1216, RequestId, RevisionSealId,
-        RotationId, ShareCiphertext49, Signature64, SlotId, VaultId, WitnessPolicyId,
-        WitnessShareCapsuleV1, WitnessedSlotV1, WitnessedStateV1, recipient_public_key_fingerprint,
-        witnessed_slot_set_digest,
+        PrincipalId, PrincipalKind, ReceiptId, RecipientPublicKey1216, RecoveryId, RequestId,
+        RevisionSealId, RotationId, ShareCiphertext49, Signature64, SlotId, VaultId,
+        WitnessPolicyId, WitnessShareCapsuleV1, WitnessedSlotV1, WitnessedStateV1,
+        recipient_public_key_fingerprint, witnessed_slot_set_digest,
     },
     witness_v1::{
         ActionManifestV1, ApprovalDecisionKindV1, ApprovalDecisionV1, ApprovalModeV1,
@@ -16,9 +16,10 @@ use jury_protocol::{
         OperationContextV1, OutputSinkV1, PlatformAssuranceV1, PolicyMaterialBytes,
         PublicReceiptScopeV1, ReceiptAcknowledgementV1, ReceiptCompletionV1, ReceiptOutcomeV1,
         RegistrationBytes, RequestBytes, RequestCancellationV1, StdinModeV1,
-        VaultPolicyCheckpointV1, WitnessDecisionKindV1, WitnessOperationV1,
+        VaultPolicyCheckpointV1, WitnessDecisionKindV1, WitnessDescriptorBytes, WitnessOperationV1,
         WitnessPolicyRotationV1, WitnessReasonV1, WitnessReceiptMaterialV1, WitnessReceiptV1,
-        WitnessRotationItemV1, WitnessRotationReasonV1, signing_key_fingerprint,
+        WitnessRecoveryV1, WitnessRotationItemV1, WitnessRotationReasonV1, signing_key_fingerprint,
+        witness_registration_digest,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -36,8 +37,8 @@ use crate::{
         WitnessPolicyDescriptor,
     },
     witness_operations::{
-        CheckpointPropagationPhase, RotationVerificationErrorKind, verify_checkpoint_propagation,
-        verify_witness_policy_rotation,
+        CheckpointPropagationPhase, RotationVerificationErrorKind, rotation_reason,
+        verify_checkpoint_propagation, verify_witness_policy_rotation, verify_witness_recovery,
     },
     witness_receipt::verify_witness_receipt_with_policy,
     witness_validation::{RequestPolicyError, validate_request_policy},
@@ -560,6 +561,7 @@ fn fixture_policy(
         genesis_fingerprint: Digest32::new([0x02; 32]),
         sequence: 1,
         terminal_revision_hash: Digest32::new([0x72; 32]),
+        revision_hashes: vec![Digest32::new([0x02; 32]), Digest32::new([0x72; 32])],
         principals: principals.clone(),
         historical_principal_descriptors: principals
             .iter()
@@ -1063,6 +1065,9 @@ fn descendant_policy_and_checkpoint_at_sequence(
     let mut next_policy = fixture.policy.clone();
     next_policy.sequence = next_sequence;
     next_policy.terminal_revision_hash = Digest32::new([0x74; 32]);
+    next_policy
+        .revision_hashes
+        .push(next_policy.terminal_revision_hash.clone());
     if let Some(replacement) = replacement {
         let replacement = replacement.public_descriptor()?;
         let principal = next_policy
@@ -2634,7 +2639,7 @@ fn signed_rotation_binds_both_fresh_item_seals_and_the_new_key_period() -> TestR
     else {
         return Err("replacement role mismatch".into());
     };
-    let (mut next, _next_checkpoint) =
+    let (mut next, next_checkpoint) =
         descendant_policy_and_checkpoint_with_replacement(&fixture, Some(&replacement))?;
     let mut prior = fixture.policy.clone();
 
@@ -2742,6 +2747,83 @@ fn signed_rotation_binds_both_fresh_item_seals_and_the_new_key_period() -> TestR
         rotation.digest()?
     );
 
+    let registration = RegistrationBytes::new(vec![0x91, 0x92])?;
+    let mut recovery = WitnessRecoveryV1 {
+        schema: 1,
+        recovery_id: RecoveryId::from_bytes([0xfc; 32])?,
+        vault_id: next.vault_id(),
+        genesis_fingerprint: next.genesis_fingerprint().clone(),
+        unavailable_prior_witness_id: None,
+        new_witness_descriptor: WitnessDescriptorBytes::new(
+            next_witness_policy.witness_descriptors[0].canonical_bytes(),
+        )?,
+        new_registration_digest: witness_registration_digest(&registration)?,
+        prior_checkpoint_digest: fixture.checkpoint.digest()?,
+        next_checkpoint_digest: next_checkpoint.digest()?,
+        rotation_record_digest: rotation.digest()?,
+        statement: 1,
+        issued_at_ms: NOW_MS,
+        owner_id: owner.principal_id,
+        owner_key_fingerprint: rotation.owner_key_fingerprint.clone(),
+        owner_key_epoch: 1,
+        signature: Signature64::new([0; 64]),
+    };
+    recovery.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&recovery.signature_preimage()?)?;
+    let mut lower_threshold = next.clone();
+    lower_threshold
+        .witness_policies
+        .get_mut(&rotation.next_witness_policy_digest)
+        .ok_or("next witness policy absent")?
+        .witness_threshold = 1;
+    let unsafe_recovery = verify_witness_recovery(
+        &prior,
+        &lower_threshold,
+        &fixture.checkpoint,
+        &next_checkpoint,
+        &rotation,
+        &registration,
+        &recovery,
+    )
+    .err()
+    .ok_or("recovery lowered the witness threshold")?;
+    assert_eq!(
+        unsafe_recovery.kind(),
+        RotationVerificationErrorKind::UnsafeRecovery
+    );
+
+    let mut forked_next = next.clone();
+    forked_next.revision_hashes[0] = Digest32::new([0xfe; 32]);
+    let fork_error = verify_witness_policy_rotation(&prior, &forked_next, &rotation)
+        .err()
+        .ok_or("an unrelated terminal policy snapshot verified as a descendant")?;
+    assert_eq!(
+        fork_error.kind(),
+        RotationVerificationErrorKind::InvalidPolicyTransition
+    );
+
+    let mut added_governed_item = next.clone();
+    let added_item_id = ItemId::from_bytes([0xfd; 32])?;
+    let mut added_item = added_governed_item
+        .item(&fixture.request.item_id)
+        .cloned()
+        .ok_or("next governed item absent")?;
+    if let Some(state) = &mut added_item.witnessed_state {
+        for slot in &mut state.slots {
+            slot.item_id = added_item_id;
+        }
+    }
+    added_governed_item.items.insert(added_item_id, added_item);
+    let added_item_error = verify_witness_policy_rotation(&prior, &added_governed_item, &rotation)
+        .err()
+        .ok_or("a newly governed item omitted from rotation evidence verified")?;
+    assert_eq!(
+        added_item_error.kind(),
+        RotationVerificationErrorKind::IncompleteItemRotation
+    );
+
     let mut incomplete = rotation.clone();
     incomplete.affected_items[0].next_descriptor_capsule_set_digest = Digest32::new([0xff; 32]);
     incomplete.signature = fixture
@@ -2839,6 +2921,44 @@ fn checkpoint_gap_fork_and_downgrade_have_distinct_safe_outcomes() -> TestResult
         );
     }
     assert_eq!(store.state.logical.state_generation, 2);
+    Ok(())
+}
+
+#[test]
+fn rotation_reason_matches_active_descriptors_by_identity() -> TestResult {
+    let fixture = fixture()?;
+    let mut identity_random = TestRandom::new(0xabcd_1234_5678_90ef);
+    let UnlockedIdentity::Witness(replacement) =
+        make_identity(0x31, PrincipalKind::Witness, &mut identity_random)?
+    else {
+        return Err("replacement role mismatch".into());
+    };
+    let (next, _) =
+        descendant_policy_and_checkpoint_with_replacement(&fixture, Some(&replacement))?;
+    let mut prior_policy = fixture
+        .policy
+        .witness_policy(&fixture.request.witness_policy_digest)
+        .cloned()
+        .ok_or("prior witness policy absent")?;
+    let next_item = next
+        .item(&fixture.request.item_id)
+        .and_then(|item| item.witnessed_state.as_ref())
+        .and_then(|state| state.slots.first())
+        .ok_or("next witnessed slot absent")?;
+    let next_policy = next
+        .witness_policy(&next_item.witness_policy_digest)
+        .ok_or("next witness policy absent")?;
+
+    let mut retired = prior_policy.witness_descriptors[0].clone();
+    retired.status = DescriptorStatus::Revoked;
+    retired.witness_id = PrincipalId::from_bytes([0x01; 32])?;
+    retired.share_index = 32;
+    prior_policy.witness_descriptors.insert(0, retired);
+
+    assert_eq!(
+        rotation_reason(&prior_policy, next_policy),
+        WitnessRotationReasonV1::ContributionKey
+    );
     Ok(())
 }
 

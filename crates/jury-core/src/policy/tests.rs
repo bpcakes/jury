@@ -166,6 +166,28 @@ fn only_the_current_owner_can_sign_a_revision() -> AnyResult {
 }
 
 #[test]
+fn replayed_state_retains_exact_policy_ancestry() -> AnyResult {
+    let (owner, created) = created_policy()?;
+    let principal = TestSigner::new(0x22, 0x32, PrincipalKind::Human)?;
+    let descendant = prepare_with_test_signer(
+        &created.state,
+        &owner,
+        1_700_000_000_001,
+        vec![PolicyOperationV1::PrincipalAdd {
+            descriptor: principal.descriptor,
+            display_label: "ExamplePrincipal".to_owned(),
+            registration_proof_digest: FixedBytes::new([0x44; 32]),
+        }],
+    )?;
+    assert!(descendant.state.is_direct_descendant_of(&created.state));
+
+    let mut unrelated = descendant.state;
+    unrelated.revision_hashes[0] = FixedBytes::new([0xff; 32]);
+    assert!(!unrelated.is_direct_descendant_of(&created.state));
+    Ok(())
+}
+
+#[test]
 fn signed_principal_lifecycle_replays_and_never_reuses_an_id() -> AnyResult {
     let (owner, mut created) = created_policy()?;
     let principal = TestSigner::new(0x22, 0x32, PrincipalKind::Human)?;

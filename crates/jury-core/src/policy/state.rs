@@ -167,6 +167,10 @@ pub struct PolicyState {
     pub(crate) genesis_fingerprint: Digest32,
     pub(crate) sequence: u64,
     pub(crate) terminal_revision_hash: Digest32,
+    /// Authenticated genesis/revision hashes in sequence order. Keeping the
+    /// lineage in the replay result lets downstream transition validators
+    /// prove ancestry instead of comparing terminal snapshots heuristically.
+    pub(crate) revision_hashes: Vec<Digest32>,
     pub(crate) principals: BTreeMap<PrincipalId, PrincipalPolicyState>,
     pub(crate) historical_principal_descriptors: BTreeMap<PrincipalId, PrincipalDescriptorV1>,
     pub(crate) historical_principal_ids: BTreeSet<PrincipalId>,
@@ -199,6 +203,18 @@ impl PolicyState {
     #[must_use]
     pub const fn terminal_revision_hash(&self) -> &Digest32 {
         &self.terminal_revision_hash
+    }
+
+    #[must_use]
+    pub(crate) fn is_direct_descendant_of(&self, prior: &Self) -> bool {
+        self.vault_id == prior.vault_id
+            && self.genesis_fingerprint == prior.genesis_fingerprint
+            && self.sequence == prior.sequence.saturating_add(1)
+            && u64::try_from(prior.revision_hashes.len()).ok() == prior.sequence.checked_add(1)
+            && self.revision_hashes.len() == prior.revision_hashes.len().saturating_add(1)
+            && self.revision_hashes.starts_with(&prior.revision_hashes)
+            && self.revision_hashes.last() == Some(&self.terminal_revision_hash)
+            && prior.revision_hashes.last() == Some(&prior.terminal_revision_hash)
     }
 
     #[must_use]

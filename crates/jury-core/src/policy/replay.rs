@@ -197,6 +197,9 @@ impl PolicyState {
         state.terminal_revision_hash = revision
             .recomputed_hash()
             .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidFormat))?;
+        state
+            .revision_hashes
+            .push(state.terminal_revision_hash.clone());
         Ok(PreparedPolicyRevision { revision, state })
     }
 }
@@ -239,7 +242,8 @@ pub(super) fn replay_policy_with_catalog(
         vault_id: genesis.vault_id,
         genesis_fingerprint: genesis_fingerprint.clone(),
         sequence: 0,
-        terminal_revision_hash: genesis_fingerprint,
+        terminal_revision_hash: genesis_fingerprint.clone(),
+        revision_hashes: vec![genesis_fingerprint],
         principals: BTreeMap::from([(
             owner_id,
             PrincipalPolicyState {
@@ -297,6 +301,8 @@ pub(super) fn replay_policy_with_catalog(
         next.terminal_revision_hash = revision
             .recomputed_hash()
             .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidFormat))?;
+        next.revision_hashes
+            .push(next.terminal_revision_hash.clone());
         state = next;
         prior_timestamp = revision.timestamp_ms;
     }

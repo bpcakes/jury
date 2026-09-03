@@ -324,6 +324,7 @@ fn normalized_state_hash_matches_the_frozen_j01a_vector() -> AnyResult {
         genesis_fingerprint: FixedBytes::new([0; 32]),
         sequence,
         terminal_revision_hash: FixedBytes::new([0; 32]),
+        revision_hashes: Vec::new(),
         principals,
         historical_principal_descriptors,
         historical_principal_ids,
