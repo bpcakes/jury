@@ -181,7 +181,10 @@ $ juryd database audit --config /etc/juryd/witness.json \
 
 The destination must be absent. The command does not open identity, TLS-key, or
 bearer-credential files, does not compare the external anchor, and does not
-claim contribution readiness.
+claim contribution readiness. Audit opens the source through SQLite's immutable
+read-only mode and leaves its bytes, permissions, and directory untouched. It
+therefore refuses a database with WAL, shared-memory, or rollback-journal
+sidecars; stop the service cleanly or audit a completed database backup.
 
 The SQLite adapter caps the complete serialized witness snapshot at 64 MiB.
 It rejects an operation that would cross the cap as protocol capacity

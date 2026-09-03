@@ -1,7 +1,9 @@
 use std::{
+    ffi::OsString,
     fs, io,
+    os::unix::ffi::OsStrExt as _,
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -235,7 +237,8 @@ pub fn audit_witness_database(
     path: &Path,
     witness_id: PrincipalId,
 ) -> Result<WitnessAuditSnapshotV1, AdapterError> {
-    let state = SqliteWitnessStore::open(path, witness_id)?.load_validated()?;
+    let connection = open_read_only_database(path, WITNESS_DATABASE_KIND)?;
+    let state = load_witness_state(&connection, witness_id)?;
     let published_anchor_digest = state
         .published_anchor
         .as_ref()
@@ -290,6 +293,59 @@ pub fn audit_witness_database(
             .unwrap_or(0),
         external_anchor_compared: false,
         contribution_readiness_claimed: false,
+    })
+}
+
+fn open_read_only_database(path: &Path, expected_kind: &str) -> Result<Connection, AdapterError> {
+    validate_destination_path(path, false)?;
+    if sqlite_sidecars(path).iter().any(|sidecar| sidecar.exists()) {
+        return Err(AdapterError::new(AdapterErrorKind::DatabaseUnavailable));
+    }
+    // `database audit` is explicitly limited to a stopped or copied database.
+    // Immutable mode prevents SQLite from creating WAL/SHM files or taking a
+    // write-capable path. Existing sidecars are rejected so uncheckpointed WAL
+    // state cannot be silently ignored.
+    let uri = immutable_sqlite_uri(path);
+    let connection = Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(database_unavailable)?;
+    connection
+        .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAX_SQLITE_ROW_BYTES)
+        .map_err(database_unavailable)?;
+    set_busy_timeout(&connection, MAXIMUM_SQLITE_BUSY_TIMEOUT)?;
+    connection
+        .pragma_update(None, "query_only", true)
+        .map_err(database_unavailable)?;
+    validate_database(&connection, expected_kind)?;
+    Ok(connection)
+}
+
+fn immutable_sqlite_uri(path: &Path) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut uri = String::with_capacity(path.as_os_str().as_bytes().len().saturating_mul(3) + 17);
+    uri.push_str("file:");
+    for byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            uri.push(char::from(*byte));
+        } else {
+            uri.push('%');
+            uri.push(char::from(HEX[usize::from(*byte >> 4)]));
+            uri.push(char::from(HEX[usize::from(*byte & 0x0f)]));
+        }
+    }
+    uri.push_str("?immutable=1");
+    uri
+}
+
+fn sqlite_sidecars(path: &Path) -> [PathBuf; 3] {
+    ["-wal", "-shm", "-journal"].map(|suffix| {
+        let mut sidecar = OsString::from(path.as_os_str());
+        sidecar.push(suffix);
+        PathBuf::from(sidecar)
     })
 }
 
@@ -773,6 +829,14 @@ mod tests {
         let path = directory.path().join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([6; 32])?;
         SqliteWitnessStore::initialize(&path, witness_id)?;
+        drop(SqliteWitnessStore::open(&path, witness_id)?);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400))?;
+        let before_bytes = fs::read(&path)?;
+        let before_mode = fs::metadata(&path)?.permissions().mode();
+        let wal = path.with_file_name("witness.sqlite3-wal");
+        let shared_memory = path.with_file_name("witness.sqlite3-shm");
+        assert!(!wal.exists());
+        assert!(!shared_memory.exists());
 
         let snapshot = audit_witness_database(&path, witness_id)?;
         assert_eq!(snapshot.scope, "offline-witness-database-only");
@@ -793,6 +857,14 @@ mod tests {
                     .any(|window| window == forbidden)
             );
         }
+        assert_eq!(fs::read(&path)?, before_bytes);
+        assert_eq!(fs::metadata(&path)?.permissions().mode(), before_mode);
+        assert!(!wal.exists());
+        assert!(!shared_memory.exists());
+
+        fs::write(&wal, b"uncheckpointed-wal-placeholder")?;
+        assert!(audit_witness_database(&path, witness_id).is_err());
+        assert_eq!(fs::read(&wal)?, b"uncheckpointed-wal-placeholder");
         Ok(())
     }
 
