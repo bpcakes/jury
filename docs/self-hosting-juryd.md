@@ -168,9 +168,10 @@ replace that distinction with a restart loop.
 
 Authenticated operator status is deliberately different from public health. It
 reports this witness's state generation, bounded counts, retention horizon, and
-per-vault checkpoint acknowledgement, but no registration bytes, policy
-material, request IDs, approvals, contributions, or item/principal names. It is
-not an aggregate view and always reports `global_freshness_claimed: false`.
+one signed anchor containing the per-vault checkpoint watermarks, but no
+registration bytes, policy material, request IDs, approvals, contributions, or
+item/principal names. It is not an aggregate view and always reports
+`global_freshness_claimed: false`.
 
 For an offline, value-free inventory of a stopped or copied witness database:
 
@@ -305,6 +306,13 @@ $ jury receipt verify /absolute/public/path/ExampleReceipt.json \
 policy replay, requester/approver/witness signatures, counted identities,
 manifest and checkpoint digests, and witness state generations. It proves those
 decisions only—not endpoint execution, output, non-exfiltration, or forgetting.
+Without `--checkpoint`, the trust root is only the internally consistent
+owner-signed policy chain embedded in the receipt; the command reports whether
+an independently retained exact checkpoint was supplied and matched. The
+receipt's aggregate reason and issue time are collector-reported metadata unless
+a verified endpoint acknowledgement or completion authenticates the receipt
+core. Individual signed approver and witness reason codes remain authenticated
+and are reported separately.
 
 For additional transparency, operators may publish the exact public policy
 bundles, checkpoints, per-witness acknowledgements, signed state anchors,

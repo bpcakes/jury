@@ -82,10 +82,13 @@ claims delivery or synchronization. Witness checkpoint status similarly reports
 only the exact per-witness durable acknowledgements supplied to it and never
 claims global freshness. Offline receipt verification proves signed public
 decisions and their exact request, manifest digest, policy checkpoint, and
-witness state generations. It does not prove endpoint execution, output,
-non-exfiltration, or forgetting. A witnessed-only configuration is not yet an
-operational secret-access path because the end-user request/open workflow
-remains J22 work.
+witness state generations. With no separately retained checkpoint, it reports
+that its trust root is only the internally consistent embedded owner-signed
+policy chain. Aggregate receipt reason/time fields are collector metadata unless
+a verified endpoint record authenticates the receipt core. It does not prove
+endpoint execution, output, non-exfiltration, or forgetting. A witnessed-only
+configuration is not yet an operational secret-access path because the
+end-user request/open workflow remains J22 work.
 
 Artifact publication is the export commit point. If the separate local receipt
 cannot be recorded afterward, export still reports the published artifact as a
