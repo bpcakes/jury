@@ -16,18 +16,18 @@ the minimal recovery evidence and the plan is no longer active.
 - [x] Research the frozen protocol, state machines, current call sites, and
   SQLite read-only behavior; resolve the six review questions without changing
   the J19-frozen documents.
-- [ ] Centralize receipt policy/request validation, correct time semantics, and
-  report collector-field and trust-root provenance honestly.
-- [ ] Require exact authenticated policy ancestry for rotation/recovery and
-  enforce complete reseal plus non-decreasing recovery threshold.
-- [ ] Replace quadratic operational-status acknowledgements with one anchor and
+- [x] (2026-09-03 12:08Z) Centralized receipt policy/request validation, corrected time semantics, and
+  reported collector-field and trust-root provenance honestly.
+- [x] (2026-09-03 12:08Z) Required exact authenticated policy ancestry for rotation/recovery and
+  enforced complete reseal plus non-decreasing recovery threshold.
+- [x] (2026-09-03 12:08Z) Replaced quadratic operational-status acknowledgements with one anchor and
   bounded per-vault summaries.
-- [ ] Centralize and pin the policy-material codec, reject noncanonical CLI
-  input, and avoid repeated maximum-size receipt serialization.
-- [ ] Open offline database audits read-only without chmod, WAL reconfiguration,
+- [x] (2026-09-03 12:08Z) Centralized and pinned the policy-material codec, rejected noncanonical CLI
+  input, and avoided repeated maximum-size receipt serialization.
+- [x] (2026-09-03 12:08Z) Opened offline database audits read-only without chmod, WAL reconfiguration,
   or sidecar creation.
-- [ ] Run targeted tests, `scripts/jig work check`, the full workspace suite,
-  applicable gates, close J23 again, and finish this plan.
+- [x] (2026-09-03 12:09Z) Ran targeted tests, `scripts/jig work check`, the full workspace suite,
+  and applicable gates; closed J23 and finished this plan successfully.
 
 ## Surprises & Discoveries
 
@@ -43,6 +43,10 @@ the minimal recovery evidence and the plan is no longer active.
 - SQLite documents `SQLITE_OPEN_READONLY` for an existing non-writable database;
   immutable mode is unsuitable for a live database because it skips locking and
   change detection.
+- The final repository LOC gate uses the default-main baseline, not only the
+  plan baseline. It exposed oversized aggregation points elsewhere on the
+  branch; their items were split mechanically into responsibility-oriented
+  include files before the final gate run.
 
 ## Decision Log
 
@@ -58,12 +62,37 @@ the minimal recovery evidence and the plan is no longer active.
 - Centralize the existing compact-JSON byte format behind a versioned codec and
   golden tests. A future protocol revision may adopt a different canonical
   encoding, but J19-frozen v1 bytes cannot change here.
-- Use a normal read-only SQLite connection for audit. Do not use immutable mode
-  against potentially live state.
+- Require audit input to be a stopped or copied database with no SQLite
+  sidecars, then open it read-only with SQLite's immutable URI flag. Never use
+  immutable mode against potentially live state.
 
 ## Outcomes & Retrospective
 
-Pending implementation and verification.
+The review findings were a mix of local boundary omissions and a deeper
+structural problem. Individual comparisons were missing, but the recurring
+cause was duplicated validation and representation knowledge across the live
+witness, offline receipt verifier, CLI, persistence adapter, and operational
+status API. The implementation now has one shared request-policy validator, one
+versioned policy-material codec, exact policy-journal ancestry, identity-keyed
+rotation comparison, one-pass receipt digest derivation, a linear status
+shape, and a dedicated non-mutating audit opener.
+
+The fixes landed as independent commits:
+
+- `94fe9f5` unifies receipt request validation and evidence provenance.
+- `8f4bc03` proves rotation ancestry and recovery safety.
+- `d2b57aa` makes operational status linear.
+- `cdcb2bd` centralizes canonical receipt material.
+- `60fb647` makes offline audit non-mutating.
+- `68e357a` qualifies receipt and status claims in documentation.
+- `3f48a9e` and `9e07f47` split oversized protocol, verifier, persistence,
+  CLI, server, and test aggregation surfaces without changing their items.
+
+The final `scripts/jig work check` passed all required gates. Its full
+`cargo test --workspace` run passed in 517.1 seconds, including 101
+`jury-core` tests, 36 `jury-process` tests, frozen witness-v1 vectors,
+self-hosted witness tests, split-write recovery, and doc tests. Rustfmt,
+Clippy, contract validation, and the default-main LOC policy also passed.
 
 ## Context and Orientation
 
