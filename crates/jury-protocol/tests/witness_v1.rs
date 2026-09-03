@@ -3,17 +3,21 @@ use std::{error::Error, io};
 use jury_protocol::{
     vault_v1::{
         AccessRole, ApprovalId, CancellationId, ContentRole, Digest32, FixedBytes, ItemAccessMode,
-        ItemId, PrincipalId, ReceiptId, RecipientPublicKey1216, RequestId, ResponseId,
-        RevisionSealId, SlotId, VaultId, WitnessPolicyId, recipient_public_key_fingerprint,
+        ItemId, PrincipalId, ReceiptId, RecipientPublicKey1216, RecoveryId, RequestId, ResponseId,
+        RevisionSealId, RotationId, SlotId, VaultId, WitnessPolicyId,
+        recipient_public_key_fingerprint,
     },
     witness_v1::{
         ActionManifestV1, ApprovalDecisionKindV1, ApprovalDecisionV1, ApprovalModeV1,
         ApprovalTargetEntryV1, ApprovalTargetV1, CancellerRoleV1, IntendedWitnessV1,
-        OperationContextV1, OutputSinkV1, PlatformAssuranceV1, RequestBytes, RequestCancellationV1,
-        StdinModeV1, VaultHighWatermarkV1, VaultPolicyCheckpointV1, WitnessContributionEnvelopeV1,
-        WitnessDecisionKindV1, WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1,
-        WitnessReceiptMaterialV1, WitnessRequestV1, WitnessResponseV1, WitnessStateAnchorV1,
-        signing_key_fingerprint,
+        OperationContextV1, OutputSinkV1, PlatformAssuranceV1, PolicyMaterialBytes,
+        PublicReceiptScopeV1, ReceiptAcknowledgementV1, ReceiptCompletionV1, ReceiptOutcomeV1,
+        RegistrationBytes, RequestBytes, RequestCancellationV1, StdinModeV1, VaultHighWatermarkV1,
+        VaultPolicyCheckpointV1, WitnessContributionEnvelopeV1, WitnessDecisionKindV1,
+        WitnessDecisionV1, WitnessDescriptorBytes, WitnessOperationV1, WitnessPolicyRotationV1,
+        WitnessReasonV1, WitnessReceiptMaterialV1, WitnessReceiptV1, WitnessRecoveryV1,
+        WitnessRequestV1, WitnessResponseV1, WitnessRotationItemV1, WitnessRotationReasonV1,
+        WitnessStateAnchorV1, signing_key_fingerprint, witness_registration_digest,
     },
 };
 use serde_json::Value;
@@ -51,6 +55,12 @@ fn digest_hex(corpus: &Value, name: &str, key: &str) -> TestResult<Digest32> {
 
 fn repeated_digest(byte: u8) -> Digest32 {
     FixedBytes::new([byte; 32])
+}
+
+fn length_prefixed(bytes: &[u8]) -> TestResult<Vec<u8>> {
+    let mut output = u32::try_from(bytes.len())?.to_be_bytes().to_vec();
+    output.extend_from_slice(bytes);
+    Ok(output)
 }
 
 fn action_manifest(corpus: &Value) -> TestResult<ActionManifestV1> {
@@ -183,6 +193,119 @@ fn witness_request(corpus: &Value) -> TestResult<WitnessRequestV1> {
     })
 }
 
+fn approval_decision(corpus: &Value, index: u8) -> TestResult<ApprovalDecisionV1> {
+    let vector_name = format!("approval_decision_{}", index + 1);
+    let descriptor_name = format!("approver_descriptor_{}", index + 1);
+    let approver_id = PrincipalId::from_bytes([0x41 + index; 32])?;
+    let signing_public_key = fixed_hex(vector_hex(
+        corpus,
+        &descriptor_name,
+        "signing_public_key_hex",
+    )?)?;
+    Ok(ApprovalDecisionV1 {
+        schema: 1,
+        approval_id: ApprovalId::from_bytes([0x80 + index; 32])?,
+        request_id: RequestId::from_bytes([0x07; 32])?,
+        request_digest: digest_hex(corpus, "witness_request", "digest_hex")?,
+        action_manifest_digest: digest_hex(corpus, "action_manifest", "digest_hex")?,
+        presentation_digest: digest_hex(corpus, "approval_presentation", "digest_hex")?,
+        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
+        witness_policy_revision: 1,
+        witness_policy_digest: digest_hex(corpus, "witness_policy", "digest_hex")?,
+        approver_id,
+        approver_key_fingerprint: signing_key_fingerprint(2, &approver_id, 1, &signing_public_key),
+        approver_key_epoch: 1,
+        approval_mode: ApprovalModeV1::Human,
+        decision: ApprovalDecisionKindV1::Approve,
+        reason: WitnessReasonV1::None,
+        issued_at_ms: ISSUED_AT + 1_000,
+        not_before_ms: None,
+        expires_at_ms: EXPIRES_AT,
+        nonce: ApprovalId::from_bytes([0x82 + index; 32])?,
+        intended_witness_set_digest: fixed_hex(hex::decode(
+            "67aa234cb2c72a8d9301dd1a41ccb89980488a19ed903bccba6a2ba2ef46fe5a",
+        )?)?,
+        signature: fixed_hex(vector_hex(corpus, &vector_name, "signature_hex")?)?,
+    })
+}
+
+fn policy_checkpoint(corpus: &Value) -> TestResult<VaultPolicyCheckpointV1> {
+    Ok(VaultPolicyCheckpointV1 {
+        schema: 1,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: repeated_digest(0x02),
+        vault_policy_sequence: 7,
+        vault_policy_hash: repeated_digest(0x72),
+        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
+        witness_policy_revision: 1,
+        witness_policy_digest: digest_hex(corpus, "witness_policy", "digest_hex")?,
+        witness_set_digest: fixed_hex(hex::decode(
+            "1ca3be89d2e1d2de0bf25cfcfe82569fd63228031feea946b1fff38ee30b200a",
+        )?)?,
+        approver_set_digest: fixed_hex(hex::decode(
+            "95ac3364e23be58775128029e79a3bd9f447011cc96bf95a98bc2e193d8d6bb5",
+        )?)?,
+        review_label_set_digest: fixed_hex(hex::decode(
+            "da3e0c4bc71493d609254bd71fc7f182947aa6f61bb63129cdcb3baea42082c5",
+        )?)?,
+        predecessor_checkpoint_digest: repeated_digest(0),
+        issued_at_ms: ISSUED_AT - 500,
+        issuer_owner_id: PrincipalId::from_bytes([0x09; 32])?,
+        issuer_key_fingerprint: fixed_hex(hex::decode(
+            "20367a13894f8ebbb319f692e58c68369ddd3d547ed886b08fcb05ef74f1932c",
+        )?)?,
+        issuer_key_epoch: 1,
+        signature: fixed_hex(vector_hex(corpus, "policy_checkpoint", "signature_hex")?)?,
+    })
+}
+
+fn witness_decision(corpus: &Value, index: u8) -> TestResult<WitnessDecisionV1> {
+    let vector_name = format!("witness_decision_{}", index + 1);
+    let descriptor_name = format!("witness_descriptor_{}", index + 1);
+    let witness_id = PrincipalId::from_bytes([0x51 + index; 32])?;
+    let signing_public_key = fixed_hex(vector_hex(
+        corpus,
+        &descriptor_name,
+        "signing_public_key_hex",
+    )?)?;
+    Ok(WitnessDecisionV1 {
+        schema: 1,
+        response_id: ResponseId::from_bytes([0xb0 + index; 32])?,
+        request_id: RequestId::from_bytes([0x07; 32])?,
+        request_digest: digest_hex(corpus, "witness_request", "digest_hex")?,
+        action_manifest_digest: digest_hex(corpus, "action_manifest", "digest_hex")?,
+        witness_id,
+        witness_signing_key_fingerprint: signing_key_fingerprint(
+            3,
+            &witness_id,
+            1,
+            &signing_public_key,
+        ),
+        witness_signing_key_epoch: 1,
+        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
+        witness_policy_revision: 1,
+        witness_policy_digest: digest_hex(corpus, "witness_policy", "digest_hex")?,
+        policy_checkpoint_digest: digest_hex(corpus, "policy_checkpoint", "digest_hex")?,
+        state_generation: 2 + u64::from(index),
+        decision: WitnessDecisionKindV1::Approve,
+        reason: WitnessReasonV1::None,
+        issued_at_ms: ISSUED_AT + 2_000,
+        expires_at_ms: EXPIRES_AT,
+        contribution_digest: Some(fixed_hex(hex::decode(
+            corpus["construction_vector"]["contributions"][usize::from(index)]["digest_hex"]
+                .as_str()
+                .ok_or_else(|| failure("missing contribution digest"))?,
+        )?)?),
+        share_index: Some(index + 1),
+        share_commitment: Some(fixed_hex(hex::decode(
+            corpus["construction_vector"]["capsules"][usize::from(index)]["share_commitment_hex"]
+                .as_str()
+                .ok_or_else(|| failure("missing share commitment"))?,
+        )?)?),
+        signature: fixed_hex(vector_hex(corpus, &vector_name, "signature_hex")?)?,
+    })
+}
+
 #[test]
 fn action_manifest_matches_the_frozen_vector() -> TestResult {
     let corpus = corpus()?;
@@ -217,6 +340,20 @@ fn request_matches_the_frozen_vector_and_rejects_unknown_versions() -> TestResul
     assert_eq!(
         request.digest()?,
         digest_hex(&corpus, "witness_request", "digest_hex")?
+    );
+    assert_eq!(
+        WitnessRequestV1::from_signature_preimage(
+            &request.signature_preimage()?,
+            request.client_signature.clone(),
+        )?,
+        request
+    );
+
+    let mut trailing = request.signature_preimage()?;
+    trailing.push(0);
+    assert!(
+        WitnessRequestV1::from_signature_preimage(&trailing, request.client_signature.clone())
+            .is_err()
     );
 
     let mut unknown_protocol = request.clone();
@@ -496,6 +633,213 @@ fn cancellation_matches_the_frozen_vector() -> TestResult {
         cancellation.digest()?,
         digest_hex(&corpus, "request_cancellation", "digest_hex")?
     );
+    Ok(())
+}
+
+#[test]
+fn rotation_and_recovery_match_the_frozen_vectors() -> TestResult {
+    let corpus = corpus()?;
+    assert_eq!(
+        witness_registration_digest(&RegistrationBytes::new(vector_hex(
+            &corpus,
+            "witness_registration",
+            "body_hex",
+        )?)?)?,
+        digest_hex(&corpus, "witness_registration", "digest_hex")?
+    );
+    let owner_fingerprint = fixed_hex(hex::decode(
+        "20367a13894f8ebbb319f692e58c68369ddd3d547ed886b08fcb05ef74f1932c",
+    )?)?;
+    let rotation = WitnessPolicyRotationV1 {
+        schema: 1,
+        rotation_id: RotationId::from_bytes([0xda; 32])?,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: repeated_digest(0x02),
+        prior_vault_policy_sequence: 7,
+        prior_vault_policy_hash: repeated_digest(0x72),
+        next_vault_policy_sequence: 8,
+        next_vault_policy_hash: repeated_digest(0xdb),
+        prior_witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
+        prior_witness_policy_revision: 1,
+        prior_witness_policy_digest: digest_hex(&corpus, "witness_policy", "digest_hex")?,
+        next_witness_policy_id: WitnessPolicyId::from_bytes([0xdc; 32])?,
+        next_witness_policy_revision: 2,
+        next_witness_policy_digest: repeated_digest(0xdd),
+        reason: WitnessRotationReasonV1::ApproverRuleOrLabel,
+        affected_items: vec![WitnessRotationItemV1 {
+            item_id: ItemId::from_bytes([0x03; 32])?,
+            prior_key_epoch: 3,
+            next_key_epoch: 4,
+            next_descriptor_revision: 5,
+            next_descriptor_revision_seal_id: RevisionSealId::from_bytes([0xd6; 32])?,
+            next_descriptor_capsule_set_digest: repeated_digest(0xd7),
+            next_body_revision: 5,
+            next_body_revision_seal_id: RevisionSealId::from_bytes([0xd8; 32])?,
+            next_body_capsule_set_digest: repeated_digest(0xd9),
+        }],
+        issued_at_ms: ISSUED_AT + 4_000,
+        owner_id: PrincipalId::from_bytes([0x09; 32])?,
+        owner_key_fingerprint: owner_fingerprint.clone(),
+        owner_key_epoch: 1,
+        signature: fixed_hex(vector_hex(
+            &corpus,
+            "witness_policy_rotation",
+            "signature_hex",
+        )?)?,
+    };
+    assert_eq!(
+        rotation.signature_preimage()?,
+        vector_hex(&corpus, "witness_policy_rotation", "preimage_hex")?
+    );
+    assert_eq!(
+        rotation.canonical_bytes()?,
+        vector_hex(&corpus, "witness_policy_rotation", "message_hex")?
+    );
+    assert_eq!(
+        rotation.digest()?,
+        digest_hex(&corpus, "witness_policy_rotation", "digest_hex")?
+    );
+
+    let recovery = WitnessRecoveryV1 {
+        schema: 1,
+        recovery_id: RecoveryId::from_bytes([0xde; 32])?,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: repeated_digest(0x02),
+        unavailable_prior_witness_id: Some(PrincipalId::from_bytes([0x51; 32])?),
+        new_witness_descriptor: WitnessDescriptorBytes::new(vector_hex(
+            &corpus,
+            "witness_descriptor_3",
+            "message_hex",
+        )?)?,
+        new_registration_digest: digest_hex(&corpus, "witness_registration", "digest_hex")?,
+        prior_checkpoint_digest: digest_hex(&corpus, "policy_checkpoint", "digest_hex")?,
+        next_checkpoint_digest: repeated_digest(0xdf),
+        rotation_record_digest: rotation.digest()?,
+        statement: 1,
+        issued_at_ms: ISSUED_AT + 5_000,
+        owner_id: PrincipalId::from_bytes([0x09; 32])?,
+        owner_key_fingerprint: owner_fingerprint,
+        owner_key_epoch: 1,
+        signature: fixed_hex(vector_hex(&corpus, "witness_recovery", "signature_hex")?)?,
+    };
+    assert_eq!(
+        recovery.signature_preimage()?,
+        vector_hex(&corpus, "witness_recovery", "preimage_hex")?
+    );
+    assert_eq!(
+        recovery.canonical_bytes()?,
+        vector_hex(&corpus, "witness_recovery", "message_hex")?
+    );
+    assert_eq!(
+        recovery.digest()?,
+        digest_hex(&corpus, "witness_recovery", "digest_hex")?
+    );
+    Ok(())
+}
+
+#[test]
+fn complete_receipt_matches_the_frozen_vector_and_round_trips_json() -> TestResult {
+    let corpus = corpus()?;
+    let request = witness_request(&corpus)?;
+    let mut policy_material = length_prefixed(&vector_hex(
+        &corpus,
+        "owner_policy_revision",
+        "message_hex",
+    )?)?;
+    policy_material.extend_from_slice(&length_prefixed(&vector_hex(
+        &corpus,
+        "witness_policy",
+        "body_hex",
+    )?)?);
+    let core_digest = digest_hex(&corpus, "receipt_core", "digest_hex")?;
+    let endpoint_fingerprint = request.requester_signing_key_fingerprint.clone();
+    let acknowledgement = ReceiptAcknowledgementV1 {
+        schema: 1,
+        receipt_id: ReceiptId::from_bytes([0xe0; 32])?,
+        receipt_core_digest: core_digest.clone(),
+        request_digest: request.digest()?,
+        endpoint_principal_id: request.requester_principal_id,
+        endpoint_key_fingerprint: endpoint_fingerprint.clone(),
+        endpoint_key_epoch: 1,
+        started_at_ms: ISSUED_AT + 1_500,
+        signature: fixed_hex(vector_hex(
+            &corpus,
+            "receipt_acknowledgement",
+            "signature_hex",
+        )?)?,
+    };
+    assert_eq!(
+        acknowledgement.canonical_bytes()?,
+        vector_hex(&corpus, "receipt_acknowledgement", "message_hex")?
+    );
+    let completion = ReceiptCompletionV1 {
+        schema: 1,
+        receipt_id: ReceiptId::from_bytes([0xe0; 32])?,
+        receipt_core_digest: core_digest,
+        acknowledgement_digest: Some(acknowledgement.digest()?),
+        endpoint_principal_id: request.requester_principal_id,
+        endpoint_key_fingerprint: endpoint_fingerprint,
+        endpoint_key_epoch: 1,
+        outcome: ReceiptOutcomeV1::Approved,
+        reason: WitnessReasonV1::None,
+        completed_at_ms: ISSUED_AT + 3_000,
+        signature: fixed_hex(vector_hex(&corpus, "receipt_completion", "signature_hex")?)?,
+    };
+    assert_eq!(
+        completion.canonical_bytes()?,
+        vector_hex(&corpus, "receipt_completion", "message_hex")?
+    );
+    let receipt = WitnessReceiptV1 {
+        schema: 1,
+        receipt_id: ReceiptId::from_bytes([0xe0; 32])?,
+        request_signature_preimage: RequestBytes::new(request.signature_preimage()?)?,
+        client_signature: request.client_signature.clone(),
+        request_digest: request.digest()?,
+        action_manifest_digest: digest_hex(&corpus, "action_manifest", "digest_hex")?,
+        presentation_digest: digest_hex(&corpus, "approval_presentation", "digest_hex")?,
+        public_scope: PublicReceiptScopeV1::from_request(&request),
+        approval_decisions: vec![
+            approval_decision(&corpus, 0)?,
+            approval_decision(&corpus, 1)?,
+        ],
+        witness_decisions: vec![witness_decision(&corpus, 0)?, witness_decision(&corpus, 1)?],
+        policy_checkpoint: policy_checkpoint(&corpus)?,
+        witness_policy_material: PolicyMaterialBytes::new(policy_material)?,
+        approval_threshold: 2,
+        witness_threshold: 2,
+        counted_approver_ids: vec![
+            PrincipalId::from_bytes([0x41; 32])?,
+            PrincipalId::from_bytes([0x42; 32])?,
+        ],
+        counted_witness_ids: vec![
+            PrincipalId::from_bytes([0x51; 32])?,
+            PrincipalId::from_bytes([0x52; 32])?,
+        ],
+        outcome: ReceiptOutcomeV1::Approved,
+        reason: WitnessReasonV1::None,
+        issued_at_ms: ISSUED_AT + 3_000,
+        expires_at_ms: EXPIRES_AT,
+        endpoint_acknowledgement: Some(acknowledgement),
+        endpoint_completion: Some(completion),
+    };
+    assert_eq!(
+        receipt.core_bytes()?,
+        vector_hex(&corpus, "receipt_core", "body_hex")?
+    );
+    assert_eq!(
+        receipt.core_digest()?,
+        digest_hex(&corpus, "receipt_core", "digest_hex")?
+    );
+    assert_eq!(
+        receipt.canonical_bytes()?,
+        vector_hex(&corpus, "witness_receipt", "body_hex")?
+    );
+    assert_eq!(
+        receipt.digest()?,
+        digest_hex(&corpus, "witness_receipt", "digest_hex")?
+    );
+    let encoded = receipt.to_json_bytes()?;
+    assert_eq!(WitnessReceiptV1::parse_json(&encoded)?, receipt);
     Ok(())
 }
 

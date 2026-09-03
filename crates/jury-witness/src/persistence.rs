@@ -7,10 +7,12 @@ use std::{
 
 use jury_core::witness_engine::{PersistedWitnessState, WitnessStateStore, WitnessStoreError};
 use jury_protocol::vault_v1::{Digest32, PrincipalId};
+use jury_protocol::{vault_v1::VaultId, witness_v1::ReplayStateV1};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup,
     limits::Limit, params,
 };
+use serde::Serialize;
 use tempfile::NamedTempFile;
 
 use self::state_codec::{encode_persisted_state, map_codec_adapter_error, map_codec_store_error};
@@ -29,6 +31,36 @@ pub struct SqliteWitnessStore {
     connection: Connection,
     witness_id: PrincipalId,
     deadline: Option<Instant>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessAuditVaultV1 {
+    pub vault_id: VaultId,
+    pub genesis_fingerprint: Digest32,
+    pub policy_sequence: u64,
+    pub checkpoint_digest: Digest32,
+}
+
+/// Value-free offline database inventory. It deliberately does not claim that
+/// the separately administered external anchor currently matches.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessAuditSnapshotV1 {
+    pub schema: u16,
+    pub scope: &'static str,
+    pub witness_id: PrincipalId,
+    pub state_generation: u64,
+    pub published_anchor_digest: Option<Digest32>,
+    pub published_anchor_generation: Option<u64>,
+    pub pending_anchor_candidate: bool,
+    pub vaults: Vec<WitnessAuditVaultV1>,
+    pub replay_record_count: usize,
+    pub reserved_replay_record_count: usize,
+    pub stable_replay_record_count: usize,
+    pub replay_retain_through_ms: u64,
+    pub external_anchor_compared: bool,
+    pub contribution_readiness_claimed: bool,
 }
 
 impl SqliteWitnessStore {
@@ -197,6 +229,68 @@ pub fn backup_witness_database(source: &Path, destination: &Path) -> Result<(), 
 
 pub fn restore_witness_database(backup: &Path, destination: &Path) -> Result<(), AdapterError> {
     restore_managed_database(backup, destination, WITNESS_DATABASE_KIND)
+}
+
+pub fn audit_witness_database(
+    path: &Path,
+    witness_id: PrincipalId,
+) -> Result<WitnessAuditSnapshotV1, AdapterError> {
+    let state = SqliteWitnessStore::open(path, witness_id)?.load_validated()?;
+    let published_anchor_digest = state
+        .published_anchor
+        .as_ref()
+        .map(|anchor| anchor.digest())
+        .transpose()
+        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+    let vaults = state
+        .logical
+        .vaults
+        .iter()
+        .map(|(vault_id, vault)| {
+            Ok(WitnessAuditVaultV1 {
+                vault_id: *vault_id,
+                genesis_fingerprint: vault.current_checkpoint.genesis_fingerprint.clone(),
+                policy_sequence: vault.current_checkpoint.vault_policy_sequence,
+                checkpoint_digest: vault
+                    .current_checkpoint
+                    .digest()
+                    .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?,
+            })
+        })
+        .collect::<Result<Vec<_>, AdapterError>>()?;
+    let reserved_replay_record_count = state
+        .logical
+        .replay
+        .values()
+        .filter(|entry| entry.state == ReplayStateV1::Reserved)
+        .count();
+    let replay_record_count = state.logical.replay.len();
+    Ok(WitnessAuditSnapshotV1 {
+        schema: 1,
+        scope: "offline-witness-database-only",
+        witness_id: state.logical.witness_id,
+        state_generation: state.logical.state_generation,
+        published_anchor_digest,
+        published_anchor_generation: state
+            .published_anchor
+            .as_ref()
+            .map(|anchor| anchor.state_generation),
+        pending_anchor_candidate: state.pending_anchor.is_some(),
+        vaults,
+        replay_record_count,
+        reserved_replay_record_count,
+        stable_replay_record_count: replay_record_count
+            .saturating_sub(reserved_replay_record_count),
+        replay_retain_through_ms: state
+            .logical
+            .replay
+            .values()
+            .map(|entry| entry.retain_through_ms)
+            .max()
+            .unwrap_or(0),
+        external_anchor_compared: false,
+        contribution_readiness_claimed: false,
+    })
 }
 
 pub(crate) fn open_managed_database(
@@ -669,6 +763,36 @@ mod tests {
                 .kind(),
             AdapterErrorKind::TargetExists
         );
+        Ok(())
+    }
+
+    #[test]
+    fn offline_audit_is_value_free_and_never_claims_external_freshness() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("witness.sqlite3");
+        let witness_id = PrincipalId::from_bytes([6; 32])?;
+        SqliteWitnessStore::initialize(&path, witness_id)?;
+
+        let snapshot = audit_witness_database(&path, witness_id)?;
+        assert_eq!(snapshot.scope, "offline-witness-database-only");
+        assert!(!snapshot.external_anchor_compared);
+        assert!(!snapshot.contribution_readiness_claimed);
+        let encoded = serde_json::to_vec(&snapshot)?;
+        for forbidden in [
+            b"policy_material".as_slice(),
+            b"accepted_registration".as_slice(),
+            b"request_signature_preimage".as_slice(),
+            b"approval_decisions".as_slice(),
+            b"contribution_envelope".as_slice(),
+            b"passphrase".as_slice(),
+        ] {
+            assert!(
+                !encoded
+                    .windows(forbidden.len())
+                    .any(|window| window == forbidden)
+            );
+        }
         Ok(())
     }
 

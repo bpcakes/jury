@@ -26,7 +26,7 @@ pub(super) fn mutation_output(
         item_quorum_claim_suppressed: plan.warnings().item_quorum_claim_suppressed,
         warnings: if operation == "policy-require-witnessed" {
             vec![
-                "witness policy validation currently requires this machine's local policy catalog; portable distribution is not implemented",
+                "distribute the exact public policy material and checkpoint; freshness exists only per verified witness acknowledgement",
             ]
         } else {
             Vec::new()

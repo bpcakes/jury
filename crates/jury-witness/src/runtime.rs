@@ -7,14 +7,15 @@ use std::{
 
 use jury_core::witness_engine::{
     CancellationProgress, WitnessClock, WitnessEngine, WitnessEngineError, WitnessEngineErrorKind,
-    WitnessEngineIdentity, WitnessProgress,
+    WitnessEngineIdentity, WitnessOperationalStatus, WitnessProgress,
 };
 use jury_protected::OsRandom;
 use jury_protocol::{
     vault_v1::VaultId,
     witness_v1::{
         ActionManifestV1, ApprovalDecisionV1, RegistrationBytes, RequestCancellationV1,
-        VaultPolicyCheckpointV1, WitnessReasonV1, WitnessRequestV1,
+        VaultPolicyCheckpointV1, WitnessCheckpointAcknowledgementV1, WitnessReasonV1,
+        WitnessRequestV1,
     },
 };
 
@@ -122,13 +123,20 @@ impl WitnessRuntime {
         self.with_engine(deadline, |engine| engine.check_ready())
     }
 
+    pub fn operational_status(
+        &mut self,
+        deadline: OperationDeadline,
+    ) -> Result<WitnessOperationalStatus, RuntimeError> {
+        self.with_engine(deadline, |engine| engine.operational_status())
+    }
+
     pub fn register_vault(
         &mut self,
         deadline: OperationDeadline,
         material: &PublicPolicyMaterialV1,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, RuntimeError> {
         deadline.ensure_remaining()?;
         let policy = material.replay().map_err(map_adapter_error)?;
         let encoded = material.encode().map_err(map_adapter_error)?;
@@ -142,7 +150,7 @@ impl WitnessRuntime {
         deadline: OperationDeadline,
         material: &PublicPolicyMaterialV1,
         checkpoint: VaultPolicyCheckpointV1,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, RuntimeError> {
         deadline.ensure_remaining()?;
         let policy = material.replay().map_err(map_adapter_error)?;
         let encoded = material.encode().map_err(map_adapter_error)?;
@@ -302,16 +310,19 @@ pub struct WitnessRuntimeWorker {
 
 enum RuntimeCommand {
     CheckReady(tokio::sync::oneshot::Sender<Result<(), RuntimeError>>),
+    OperationalStatus(tokio::sync::oneshot::Sender<Result<WitnessOperationalStatus, RuntimeError>>),
     Register {
         material: PublicPolicyMaterialV1,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
-        response: tokio::sync::oneshot::Sender<Result<(), RuntimeError>>,
+        response:
+            tokio::sync::oneshot::Sender<Result<WitnessCheckpointAcknowledgementV1, RuntimeError>>,
     },
     AdvanceCheckpoint {
         material: PublicPolicyMaterialV1,
         checkpoint: VaultPolicyCheckpointV1,
-        response: tokio::sync::oneshot::Sender<Result<(), RuntimeError>>,
+        response:
+            tokio::sync::oneshot::Sender<Result<WitnessCheckpointAcknowledgementV1, RuntimeError>>,
     },
     Reserve {
         request: WitnessRequestV1,
@@ -341,6 +352,7 @@ impl RuntimeCommand {
     fn response_is_closed(&self) -> bool {
         match self {
             Self::CheckReady(response) => response.is_closed(),
+            Self::OperationalStatus(response) => response.is_closed(),
             Self::Register { response, .. } => response.is_closed(),
             Self::AdvanceCheckpoint { response, .. } => response.is_closed(),
             Self::Reserve { response, .. } => response.is_closed(),
@@ -379,6 +391,9 @@ impl WitnessRuntimeWorker {
                     match queued.command {
                         RuntimeCommand::CheckReady(response) => {
                             let _ = response.send(runtime.check_ready(deadline));
+                        }
+                        RuntimeCommand::OperationalStatus(response) => {
+                            let _ = response.send(runtime.operational_status(deadline));
                         }
                         RuntimeCommand::Register {
                             material,
@@ -464,13 +479,22 @@ impl WitnessRuntimeHandle {
         receive(receiver).await
     }
 
+    pub async fn operational_status(
+        &self,
+        deadline: OperationDeadline,
+    ) -> Result<WitnessOperationalStatus, RuntimeError> {
+        let (response, receiver) = tokio::sync::oneshot::channel();
+        self.submit(deadline, RuntimeCommand::OperationalStatus(response))?;
+        receive(receiver).await
+    }
+
     pub async fn register_vault(
         &self,
         deadline: OperationDeadline,
         material: PublicPolicyMaterialV1,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
         self.submit(
             deadline,
@@ -489,7 +513,7 @@ impl WitnessRuntimeHandle {
         deadline: OperationDeadline,
         material: PublicPolicyMaterialV1,
         checkpoint: VaultPolicyCheckpointV1,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, RuntimeError> {
         let (response, receiver) = tokio::sync::oneshot::channel();
         self.submit(
             deadline,

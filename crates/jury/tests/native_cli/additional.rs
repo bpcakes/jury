@@ -180,6 +180,7 @@ fn commit_witnessed_policy(
     repository: &Path,
     data: &Path,
     state: &Path,
+    artifacts: &Path,
     vault_path: &Path,
     actors: &PolicyActors,
 ) -> TestResult {
@@ -258,8 +259,32 @@ fn commit_witnessed_policy(
     assert!(
         committed["warnings"][0]
             .as_str()
-            .is_some_and(|warning| warning.contains("local policy catalog"))
+            .is_some_and(|warning| warning.contains("per verified witness acknowledgement"))
     );
+
+    let material_path = artifacts.join("ExamplePolicyMaterial.json");
+    let exported = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "witness",
+            "policy-material",
+            "--output",
+            material_path.to_str().ok_or("invalid material path")?,
+        ],
+        b"",
+    )?)?;
+    assert_eq!(exported["operation"], "witness-policy-material");
+    assert_eq!(exported["contains_private_material"], false);
+    let material: ReceiptPolicyMaterialV1 = serde_json::from_slice(&fs::read(&material_path)?)?;
+    let replayed = material.replay()?;
+    assert_eq!(
+        Some(replayed.sequence()),
+        exported["policy_sequence"].as_u64()
+    );
+    assert_eq!(material.witness_policies.len(), 1);
 
     let vault = VaultFileV1::parse(&fs::read(vault_path)?)?;
     let (direct_slots, witnessed_state) = vault
@@ -352,7 +377,7 @@ fn native_cli_configures_witnessed_only_policy_and_rejects_unsafe_preflight() ->
     let actors = initialize_policy_actors(&repository, &data, &state, &artifacts)?;
     let vault_path = repository.join(".jury/vault.json");
     assert_unsafe_policy_preflight(&repository, &data, &state, &vault_path, &actors)?;
-    commit_witnessed_policy(&repository, &data, &state, &vault_path, &actors)?;
+    commit_witnessed_policy(&repository, &data, &state, &artifacts, &vault_path, &actors)?;
     assert_witness_removal_requires_rotation(
         &repository,
         &data,
@@ -378,6 +403,8 @@ fn explicit_detached_home_supports_native_mutation_publication() -> TestResult {
         &state,
         &[
             "--json",
+            "--home",
+            home_value,
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "identity",

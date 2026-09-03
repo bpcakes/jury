@@ -782,11 +782,19 @@ fn escaped_pipe_owner_does_not_make_capture_unbounded() -> Result<(), Box<dyn st
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let started = Instant::now();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result =
+            run_owned_process_tree_with_output(&mut command, Duration::from_secs(2), || false);
+        let _ = sender.send(result);
+    });
 
-    let output =
-        run_owned_process_tree_with_output(&mut command, Duration::from_secs(2), || false)?;
-    assert!(started.elapsed() < Duration::from_millis(500));
+    wait_for_file(&marker)?;
+    let result = receiver.recv_timeout(Duration::from_millis(500));
+    worker
+        .join()
+        .map_err(|_| "escaped-owner capture worker panicked")?;
+    let output = result.map_err(|_| "capture remained blocked by the escaped pipe owner")??;
     let stdout = output.stdout.ok_or("stdout was not captured")?;
     let stderr = output.stderr.ok_or("stderr was not captured")?;
     assert!(!stdout.complete || !stderr.complete);

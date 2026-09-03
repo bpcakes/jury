@@ -140,6 +140,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         &["database", "init", "--config"],
         &witness_config,
     )?;
+    assert_initial_audit(executable, &witness_config, fixture.path())?;
     let mut anchor =
         ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &anchor_config)?;
     let certificate_bytes = fs::read(&certificate)?;
@@ -203,6 +204,8 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
     assert!(!live_text.contains("policy"));
     assert!(!live_text.contains("item"));
 
+    assert_operator_status(&client, &witness_base)?;
+
     let marker = "ExampleSecretMustNotAppear";
     let unauthenticated = client
         .post(format!("{witness_base}/v1/requests/reserve"))
@@ -264,6 +267,46 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
 
     witness.stop_gracefully()?;
     anchor.stop_gracefully()?;
+    Ok(())
+}
+
+fn assert_initial_audit(executable: &str, witness_config: &Path, root: &Path) -> TestResult {
+    let audit_export = root.join("witness-audit.json");
+    run_success_with_output(
+        executable,
+        &["database", "audit", "--config"],
+        witness_config,
+        &audit_export,
+    )?;
+    let audit: serde_json::Value = serde_json::from_slice(&fs::read(audit_export)?)?;
+    assert_eq!(audit["scope"], "offline-witness-database-only");
+    assert_eq!(audit["external_anchor_compared"], false);
+    assert_eq!(audit["contribution_readiness_claimed"], false);
+    Ok(())
+}
+
+fn assert_operator_status(client: &Client, witness_base: &str) -> TestResult {
+    let status: serde_json::Value = client
+        .get(format!("{witness_base}/v1/operator/status"))
+        .bearer_auth(OPERATOR_TOKEN)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    assert_eq!(status["scope"], "this-witness-only");
+    assert_eq!(status["global_freshness_claimed"], false);
+    assert_eq!(
+        status["operational"]["checkpoint_acknowledgements"],
+        json!([])
+    );
+    let text = status.to_string();
+    for forbidden in [
+        "policy_material",
+        "accepted_registration",
+        "passphrase",
+        "contribution_envelope",
+    ] {
+        assert!(!text.contains(forbidden));
+    }
     Ok(())
 }
 
@@ -493,6 +536,25 @@ fn run_success(executable: &str, arguments: &[&str], config: &Path) -> TestResul
     let status = Command::new(executable)
         .args(arguments)
         .arg(config)
+        .stdin(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err(format!("juryd administration command failed with {status}").into());
+    }
+    Ok(())
+}
+
+fn run_success_with_output(
+    executable: &str,
+    arguments: &[&str],
+    config: &Path,
+    output: &Path,
+) -> TestResult {
+    let status = Command::new(executable)
+        .args(arguments)
+        .arg(config)
+        .args(["--output"])
+        .arg(output)
         .stdin(Stdio::null())
         .status()?;
     if !status.success() {

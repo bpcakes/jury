@@ -19,10 +19,10 @@ use jury_protocol::{
         MAX_RECORDED_APPROVALS, MAX_REPLAY_RECORDS_PER_SERVICE, MAX_REPLAY_RECORDS_PER_VAULT,
         PolicyMaterialBytes, REPLAY_RETENTION_MS, RegistrationBytes, ReplayStateV1,
         RequestCancellationV1, VaultHighWatermarkV1, VaultPolicyCheckpointV1,
-        WitnessContributionEnvelopeV1, WitnessDatabaseStateV1, WitnessDecisionKindV1,
-        WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1, WitnessReceiptMaterialV1,
-        WitnessReplayRecordV1, WitnessResponseV1, WitnessStateAnchorV1, WitnessVaultStateV1,
-        signing_key_fingerprint,
+        WitnessCheckpointAcknowledgementV1, WitnessContributionEnvelopeV1, WitnessDatabaseStateV1,
+        WitnessDecisionKindV1, WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1,
+        WitnessReceiptMaterialV1, WitnessReplayRecordV1, WitnessResponseV1, WitnessStateAnchorV1,
+        WitnessVaultStateV1, signing_key_fingerprint,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -455,6 +455,20 @@ pub enum CancellationProgress {
     TooLate(Box<WitnessResponseV1>),
 }
 
+/// Value-free state exported only after exact database/external-anchor
+/// reconciliation. Every checkpoint acknowledgement remains scoped to this
+/// one witness; callers must not infer aggregate freshness from it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessOperationalStatus {
+    pub witness_id: PrincipalId,
+    pub state_generation: u64,
+    pub replay_record_count: usize,
+    pub compactable_replay_record_count: usize,
+    pub replay_retain_through_ms: u64,
+    pub checkpoint_acknowledgements: Vec<WitnessCheckpointAcknowledgementV1>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ApprovalTally {
     approved: usize,
@@ -519,13 +533,47 @@ where
         self.require_safe_clock(&state, self.clock.wall_time_ms())
     }
 
+    /// Returns safe operational state after the same reconciliation required
+    /// before contribution service. It exposes no registrations, policy
+    /// material, request messages, approvals, or encrypted contributions.
+    pub fn operational_status(&mut self) -> Result<WitnessOperationalStatus, WitnessEngineError> {
+        let now_ms = self.clock.wall_time_ms();
+        let state = self.ready_state()?;
+        self.require_safe_clock(&state, now_ms)?;
+        let checkpoint_acknowledgements = state
+            .logical
+            .vaults
+            .keys()
+            .map(|vault_id| checkpoint_acknowledgement(&state, vault_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(WitnessOperationalStatus {
+            witness_id: state.logical.witness_id,
+            state_generation: state.logical.state_generation,
+            replay_record_count: state.logical.replay.len(),
+            compactable_replay_record_count: state
+                .logical
+                .replay
+                .values()
+                .filter(|entry| now_ms > entry.retain_through_ms)
+                .count(),
+            replay_retain_through_ms: state
+                .logical
+                .replay
+                .values()
+                .map(|entry| entry.retain_through_ms)
+                .max()
+                .unwrap_or(0),
+            checkpoint_acknowledgements,
+        })
+    }
+
     pub fn register_vault(
         &mut self,
         policy: &PolicyState,
         accepted_registration: RegistrationBytes,
         checkpoint: VaultPolicyCheckpointV1,
         current_policy_material: PolicyMaterialBytes,
-    ) -> Result<(), WitnessEngineError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, WitnessEngineError> {
         if accepted_registration.is_empty() || current_policy_material.is_empty() {
             return Err(refused(WitnessReasonV1::Invalid));
         }
@@ -544,19 +592,21 @@ where
                 && current.accepted_registration == accepted_registration
                 && current.current_policy_material == current_policy_material
             {
-                return Ok(());
+                return checkpoint_acknowledgement(&state, &checkpoint.vault_id);
             }
             return Err(refused(WitnessReasonV1::CheckpointFork));
         }
+        let vault_id = checkpoint.vault_id;
         state.logical.vaults.insert(
-            checkpoint.vault_id,
+            vault_id,
             RegisteredWitnessVault {
                 accepted_registration,
                 current_checkpoint: checkpoint,
                 current_policy_material,
             },
         );
-        self.commit_and_publish(state, now_ms).map(|_| ())
+        let state = self.commit_and_publish(state, now_ms)?;
+        checkpoint_acknowledgement(&state, &vault_id)
     }
 
     pub fn advance_checkpoint(
@@ -564,7 +614,7 @@ where
         policy: &PolicyState,
         checkpoint: VaultPolicyCheckpointV1,
         current_policy_material: PolicyMaterialBytes,
-    ) -> Result<(), WitnessEngineError> {
+    ) -> Result<WitnessCheckpointAcknowledgementV1, WitnessEngineError> {
         if current_policy_material.is_empty() {
             return Err(refused(WitnessReasonV1::Invalid));
         }
@@ -582,7 +632,7 @@ where
             .ok_or_else(|| refused(WitnessReasonV1::StalePolicy))?;
         if current.current_checkpoint == checkpoint {
             if current.current_policy_material == current_policy_material {
-                return Ok(());
+                return checkpoint_acknowledgement(&state, &checkpoint.vault_id);
             }
             return Err(refused(WitnessReasonV1::CheckpointFork));
         }
@@ -642,14 +692,16 @@ where
             entry.state = ReplayStateV1::Denied;
             entry.response = Some(response);
         }
+        let vault_id = checkpoint.vault_id;
         let current = state
             .logical
             .vaults
-            .get_mut(&checkpoint.vault_id)
+            .get_mut(&vault_id)
             .ok_or_else(|| refused(WitnessReasonV1::InternalFailure))?;
         current.current_checkpoint = checkpoint;
         current.current_policy_material = current_policy_material;
-        self.commit_and_publish(state, now_ms).map(|_| ())
+        let state = self.commit_and_publish(state, now_ms)?;
+        checkpoint_acknowledgement(&state, &vault_id)
     }
 
     pub fn cancel(
@@ -1602,6 +1654,41 @@ where
             contribution: Some(contribution),
         })
     }
+}
+
+fn checkpoint_acknowledgement(
+    state: &PersistedWitnessState,
+    vault_id: &VaultId,
+) -> Result<WitnessCheckpointAcknowledgementV1, WitnessEngineError> {
+    let vault = state
+        .logical
+        .vaults
+        .get(vault_id)
+        .ok_or_else(|| refused(WitnessReasonV1::StalePolicy))?;
+    let exact_anchor = state
+        .published_anchor
+        .clone()
+        .ok_or_else(|| refused(WitnessReasonV1::AnchorConflict))?;
+    let acknowledgement = WitnessCheckpointAcknowledgementV1 {
+        schema: 1,
+        witness_id: state.logical.witness_id,
+        vault_id: *vault_id,
+        checkpoint_digest: vault
+            .current_checkpoint
+            .digest()
+            .map_err(|_| refused(WitnessReasonV1::Invalid))?,
+        vault_policy_sequence: vault.current_checkpoint.vault_policy_sequence,
+        witness_policy_digest: vault.current_checkpoint.witness_policy_digest.clone(),
+        state_generation: state.logical.state_generation,
+        anchor_digest: exact_anchor
+            .digest()
+            .map_err(|_| refused(WitnessReasonV1::Invalid))?,
+        exact_anchor,
+    };
+    acknowledgement
+        .validate_shape()
+        .map_err(|_| refused(WitnessReasonV1::InternalFailure))?;
+    Ok(acknowledgement)
 }
 
 fn validate_checkpoint<I: WitnessEngineIdentity + ?Sized>(

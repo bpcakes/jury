@@ -23,6 +23,8 @@ The native Linux CLI currently handles:
 - privacy cover and local audit verification;
 - direct transparent execution and bounded brokered execution;
 - signed portable-ciphertext export, inspection, and strict import;
+- public witness-policy export and per-witness checkpoint propagation status;
+- bounded offline inspection and verification of witnessed-decision receipts;
 - public history and capacity status.
 
 Representative commands:
@@ -51,6 +53,14 @@ $ jury transfer export --out /absolute/path/ExampleTransfer.json
 $ jury transfer inspect --in /absolute/path/ExampleTransfer.json
 $ jury transfer import --in /absolute/path/ExampleTransfer.json --dry-run
 $ jury transfer status
+$ jury witness policy-material --output /absolute/path/ExamplePolicyMaterial.json
+$ jury witness policy-status \
+    --policy-material /absolute/path/ExamplePolicyMaterial.json \
+    --checkpoint /absolute/path/ExampleCheckpoint.json \
+    --acknowledgement /absolute/path/ExampleWitnessOneAck.json
+$ jury receipt inspect /absolute/path/ExampleReceipt.json
+$ jury receipt verify /absolute/path/ExampleReceipt.json \
+    --checkpoint /absolute/path/ExampleCheckpoint.json
 ```
 
 Inside a Git worktree, `jury vault init` writes only the encrypted
@@ -68,9 +78,14 @@ accepts only a first installation, an identical artifact, or a complete
 authenticated strict descendant that does not introduce unilateral direct slots
 or weaken witnessed authority. It never merges branches. `transfer status`
 describes only the selected identity's last successful local export and never
-claims delivery or synchronization. J23 separately owns portable witness-service
-recovery. A witnessed-only configuration is not yet an operational
-secret-access path.
+claims delivery or synchronization. Witness checkpoint status similarly reports
+only the exact per-witness durable acknowledgements supplied to it and never
+claims global freshness. Offline receipt verification proves signed public
+decisions and their exact request, manifest digest, policy checkpoint, and
+witness state generations. It does not prove endpoint execution, output,
+non-exfiltration, or forgetting. A witnessed-only configuration is not yet an
+operational secret-access path because the end-user request/open workflow
+remains J22 work.
 
 Artifact publication is the export commit point. If the separate local receipt
 cannot be recorded afterward, export still reports the published artifact as a

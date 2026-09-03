@@ -13,8 +13,8 @@ use crate::canonical::{self, jce_v1 as jce, optional_u8, optional_u64};
 use crate::vault_v1::{
     AccessRole, ApprovalId, BoundedBytes, CancellationId, ContentRole, Digest32, Encapsulation1120,
     FieldId, FixedBytes, ItemAccessMode, ItemId, PrincipalId, ReceiptId, RecipientPublicKey1216,
-    RequestId, ResponseId, RevisionSealId, ShareCiphertext49, Signature64, SlotId, VaultId,
-    VerificationPublicKey32, WitnessPolicyId,
+    RecoveryId, RequestId, ResponseId, RevisionSealId, RotationId, ShareCiphertext49, Signature64,
+    SlotId, VaultId, VerificationPublicKey32, WitnessPolicyId,
 };
 
 pub const SUITE: u16 = 1;
@@ -32,6 +32,8 @@ pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const MAX_APPROVAL_BYTES: usize = 16 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+pub const MAX_RECEIPT_JSON_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_ROTATION_ITEMS: usize = 10_000;
 pub const MAX_REPLAY_RECORDS_PER_VAULT: usize = 65_536;
 pub const MAX_REPLAY_RECORDS_PER_SERVICE: usize = 1_048_576;
 
@@ -43,6 +45,20 @@ pub type ResponseBytes = BoundedBytes<MAX_RESPONSE_BYTES>;
 pub type CancellationBytes = BoundedBytes<{ 48 * 1024 }>;
 pub type RegistrationBytes = BoundedBytes<{ 64 * 1024 }>;
 pub type PolicyMaterialBytes = BoundedBytes<{ 16 * 1024 * 1024 }>;
+pub type WitnessDescriptorBytes = BoundedBytes<4096>;
+
+/// Digests the exact three-message witness-registration composite.
+///
+/// The bytes remain opaque at this protocol layer, but the digest framing is
+/// frozen by protocol v1 and is also used by witness recovery records.
+pub fn witness_registration_digest(
+    registration: &RegistrationBytes,
+) -> Result<Digest32, WitnessProtocolError> {
+    if registration.is_empty() {
+        return Err(invalid_format());
+    }
+    hash_bytes("jury-witness-v1/registration/hash", registration.as_bytes())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WitnessProtocolErrorKind {
@@ -1118,6 +1134,124 @@ impl WitnessRequestV1 {
         }
         Ok(())
     }
+
+    /// Reconstructs the exact typed request carried by a receipt.
+    ///
+    /// Receipt verification uses this parser instead of trusting a second,
+    /// independently supplied projection of the signed request. The parser is
+    /// deliberately limited to the frozen v1 signature preimage and rejects
+    /// trailing bytes and non-canonical encodings.
+    pub fn from_signature_preimage(
+        preimage: &[u8],
+        client_signature: Signature64,
+    ) -> Result<Self, WitnessProtocolError> {
+        if preimage.len() > MAX_REQUEST_BYTES {
+            return Err(WitnessProtocolError::new(
+                WitnessProtocolErrorKind::CapacityExhausted,
+            ));
+        }
+        let mut input = CanonicalInput::new(preimage);
+        input.domain("jury-witness-v1/request/signature")?;
+        let schema = input.u16()?;
+        let protocol_version = input.u16()?;
+        let construction = input.u16()?;
+        let request_id = input.identifier(RequestId::from_bytes)?;
+        let client_nonce = input.identifier(RequestId::from_bytes)?;
+        let vault_id = input.identifier(VaultId::from_bytes)?;
+        let genesis_fingerprint = input.fixed()?;
+        let item_id = input.identifier(ItemId::from_bytes)?;
+        let key_epoch = input.u64()?;
+        let item_access_mode = match input.u8()? {
+            1 => ItemAccessMode::DirectOnly,
+            2 => ItemAccessMode::WitnessedOnly,
+            3 => ItemAccessMode::Mixed,
+            _ => return Err(invalid_format()),
+        };
+        let slot_id = input.identifier(SlotId::from_bytes)?;
+        let content_role = match input.u8()? {
+            1 => ContentRole::Descriptor,
+            2 => ContentRole::Body,
+            _ => return Err(invalid_format()),
+        };
+        let revision = input.u64()?;
+        let revision_seal_id = input.identifier(RevisionSealId::from_bytes)?;
+        let vault_policy_sequence = input.u64()?;
+        let vault_policy_hash = input.fixed()?;
+        let policy_checkpoint_digest = input.fixed()?;
+        let witness_policy_id = input.identifier(WitnessPolicyId::from_bytes)?;
+        let witness_policy_revision = input.u64()?;
+        let witness_policy_digest = input.fixed()?;
+        let requester_principal_id = input.identifier(PrincipalId::from_bytes)?;
+        let requester_signing_key_fingerprint = input.fixed()?;
+        let requester_signing_key_epoch = input.u64()?;
+        let requested_access_role = match input.u8()? {
+            1 => AccessRole::Reader,
+            2 => AccessRole::Writer,
+            3 => AccessRole::Owner,
+            _ => return Err(invalid_format()),
+        };
+        let operation = witness_operation_from_tag(input.u8()?)?;
+        let approval_target_digest = input.fixed()?;
+        let action_manifest_digest = input.fixed()?;
+        let workload_digest = input.fixed()?;
+        let issued_at_ms = input.u64()?;
+        let not_before_ms = input.optional_u64()?;
+        let expires_at_ms = input.u64()?;
+        let request_session_public_key = input.fixed()?;
+        let request_session_key_fingerprint = input.fixed()?;
+        let witness_count = input.length(MAX_POLICY_ACTORS)?;
+        let mut intended_witness_set = Vec::with_capacity(witness_count);
+        for _ in 0..witness_count {
+            intended_witness_set.push(IntendedWitnessV1 {
+                witness_id: input.identifier(PrincipalId::from_bytes)?,
+                share_index: input.u8()?,
+                signing_key_fingerprint: input.fixed()?,
+                contribution_key_fingerprint: input.fixed()?,
+            });
+        }
+        input.finish()?;
+        let request = Self {
+            schema,
+            protocol_version,
+            construction,
+            request_id,
+            client_nonce,
+            vault_id,
+            genesis_fingerprint,
+            item_id,
+            key_epoch,
+            item_access_mode,
+            slot_id,
+            content_role,
+            revision,
+            revision_seal_id,
+            vault_policy_sequence,
+            vault_policy_hash,
+            policy_checkpoint_digest,
+            witness_policy_id,
+            witness_policy_revision,
+            witness_policy_digest,
+            requester_principal_id,
+            requester_signing_key_fingerprint,
+            requester_signing_key_epoch,
+            requested_access_role,
+            operation,
+            approval_target_digest,
+            action_manifest_digest,
+            workload_digest,
+            issued_at_ms,
+            not_before_ms,
+            expires_at_ms,
+            request_session_public_key,
+            request_session_key_fingerprint,
+            intended_witness_set,
+            client_signature,
+        };
+        if request.signature_preimage()?.as_slice() != preimage {
+            return Err(invalid_format());
+        }
+        Ok(request)
+    }
 }
 
 impl fmt::Debug for WitnessRequestV1 {
@@ -1746,6 +1880,64 @@ impl fmt::Debug for WitnessStateAnchorV1 {
     }
 }
 
+/// Per-witness evidence that one exact policy checkpoint survived the witness
+/// database commit and external-anchor compare-and-swap/readback sequence.
+///
+/// This is deliberately not an aggregate freshness statement. The embedded
+/// signed anchor speaks only for `witness_id` and its own state generation.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessCheckpointAcknowledgementV1 {
+    pub schema: u16,
+    pub witness_id: PrincipalId,
+    pub vault_id: VaultId,
+    pub checkpoint_digest: Digest32,
+    pub vault_policy_sequence: u64,
+    pub witness_policy_digest: Digest32,
+    pub state_generation: u64,
+    pub anchor_digest: Digest32,
+    pub exact_anchor: WitnessStateAnchorV1,
+}
+
+impl WitnessCheckpointAcknowledgementV1 {
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        self.exact_anchor.validate_shape()?;
+        let anchor_digest = self.exact_anchor.digest()?;
+        let matching_watermark = self
+            .exact_anchor
+            .vault_high_watermarks
+            .iter()
+            .find(|watermark| watermark.vault_id == self.vault_id)
+            .is_some_and(|watermark| {
+                watermark.policy_sequence == self.vault_policy_sequence
+                    && watermark.checkpoint_digest == self.checkpoint_digest
+            });
+        if self.schema != 1
+            || self.vault_policy_sequence == 0
+            || self.state_generation == 0
+            || self.witness_id != self.exact_anchor.witness_id
+            || self.state_generation != self.exact_anchor.state_generation
+            || self.anchor_digest != anchor_digest
+            || !matching_watermark
+        {
+            return Err(invalid_format());
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for WitnessCheckpointAcknowledgementV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WitnessCheckpointAcknowledgementV1")
+            .field("witness_id", &self.witness_id)
+            .field("vault_id", &self.vault_id)
+            .field("vault_policy_sequence", &self.vault_policy_sequence)
+            .field("state_generation", &self.state_generation)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReplayStateV1 {
@@ -1936,6 +2128,777 @@ impl ProtocolRefusalV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WitnessRotationReasonV1 {
+    WitnessMembership,
+    WitnessThreshold,
+    ShareIndex,
+    ContributionKey,
+    Construction,
+    Suite,
+    WitnessSigningKey,
+    ApproverRuleOrLabel,
+    DirectMode,
+}
+
+impl WitnessRotationReasonV1 {
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::WitnessMembership => 1,
+            Self::WitnessThreshold => 2,
+            Self::ShareIndex => 3,
+            Self::ContributionKey => 4,
+            Self::Construction => 5,
+            Self::Suite => 6,
+            Self::WitnessSigningKey => 7,
+            Self::ApproverRuleOrLabel => 8,
+            Self::DirectMode => 9,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessRotationItemV1 {
+    pub item_id: ItemId,
+    pub prior_key_epoch: u64,
+    pub next_key_epoch: u64,
+    pub next_descriptor_revision: u64,
+    pub next_descriptor_revision_seal_id: RevisionSealId,
+    pub next_descriptor_capsule_set_digest: Digest32,
+    pub next_body_revision: u64,
+    pub next_body_revision_seal_id: RevisionSealId,
+    pub next_body_capsule_set_digest: Digest32,
+}
+
+impl WitnessRotationItemV1 {
+    fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        if self.prior_key_epoch == 0
+            || self.next_key_epoch != self.prior_key_epoch.saturating_add(1)
+            || self.next_descriptor_revision == 0
+            || self.next_body_revision == 0
+        {
+            return Err(invalid_format());
+        }
+        let mut output = Vec::with_capacity(192);
+        output.extend_from_slice(self.item_id.as_bytes());
+        output.extend_from_slice(&self.prior_key_epoch.to_be_bytes());
+        output.extend_from_slice(&self.next_key_epoch.to_be_bytes());
+        output.extend_from_slice(&self.next_descriptor_revision.to_be_bytes());
+        output.extend_from_slice(self.next_descriptor_revision_seal_id.as_bytes());
+        output.extend_from_slice(self.next_descriptor_capsule_set_digest.as_bytes());
+        output.extend_from_slice(&self.next_body_revision.to_be_bytes());
+        output.extend_from_slice(self.next_body_revision_seal_id.as_bytes());
+        output.extend_from_slice(self.next_body_capsule_set_digest.as_bytes());
+        Ok(output)
+    }
+}
+
+/// Owner-signed proof that a witness-policy change was paired with complete
+/// fresh item epochs and capsule sets.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessPolicyRotationV1 {
+    pub schema: u16,
+    pub rotation_id: RotationId,
+    pub vault_id: VaultId,
+    pub genesis_fingerprint: Digest32,
+    pub prior_vault_policy_sequence: u64,
+    pub prior_vault_policy_hash: Digest32,
+    pub next_vault_policy_sequence: u64,
+    pub next_vault_policy_hash: Digest32,
+    pub prior_witness_policy_id: WitnessPolicyId,
+    pub prior_witness_policy_revision: u64,
+    pub prior_witness_policy_digest: Digest32,
+    pub next_witness_policy_id: WitnessPolicyId,
+    pub next_witness_policy_revision: u64,
+    pub next_witness_policy_digest: Digest32,
+    pub reason: WitnessRotationReasonV1,
+    pub affected_items: Vec<WitnessRotationItemV1>,
+    pub issued_at_ms: u64,
+    pub owner_id: PrincipalId,
+    pub owner_key_fingerprint: Digest32,
+    pub owner_key_epoch: u64,
+    pub signature: Signature64,
+}
+
+impl WitnessPolicyRotationV1 {
+    fn append_fields(&self, output: &mut Vec<u8>) -> Result<(), WitnessProtocolError> {
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.rotation_id.as_bytes());
+        output.extend_from_slice(self.vault_id.as_bytes());
+        output.extend_from_slice(self.genesis_fingerprint.as_bytes());
+        output.extend_from_slice(&self.prior_vault_policy_sequence.to_be_bytes());
+        output.extend_from_slice(self.prior_vault_policy_hash.as_bytes());
+        output.extend_from_slice(&self.next_vault_policy_sequence.to_be_bytes());
+        output.extend_from_slice(self.next_vault_policy_hash.as_bytes());
+        output.extend_from_slice(self.prior_witness_policy_id.as_bytes());
+        output.extend_from_slice(&self.prior_witness_policy_revision.to_be_bytes());
+        output.extend_from_slice(self.prior_witness_policy_digest.as_bytes());
+        output.extend_from_slice(self.next_witness_policy_id.as_bytes());
+        output.extend_from_slice(&self.next_witness_policy_revision.to_be_bytes());
+        output.extend_from_slice(self.next_witness_policy_digest.as_bytes());
+        output.push(self.reason.tag());
+        let items = self
+            .affected_items
+            .iter()
+            .map(WitnessRotationItemV1::canonical_bytes)
+            .collect::<Result<Vec<_>, _>>()?;
+        list_bytes(output, &items)?;
+        output.extend_from_slice(&self.issued_at_ms.to_be_bytes());
+        output.extend_from_slice(self.owner_id.as_bytes());
+        output.extend_from_slice(self.owner_key_fingerprint.as_bytes());
+        output.extend_from_slice(&self.owner_key_epoch.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = jce("jury-witness-v1/rotation/signature");
+        self.append_fields(&mut output)?;
+        Ok(output)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        let mut output = Vec::new();
+        self.append_fields(&mut output)?;
+        self.validate_shape()?;
+        output.extend_from_slice(self.signature.as_bytes());
+        Ok(output)
+    }
+
+    pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_signed(
+            "jury-witness-v1/rotation/hash",
+            &self.signature_preimage()?,
+            &self.signature,
+        )
+    }
+
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        if self.schema != 1
+            || self.prior_vault_policy_sequence == 0
+            || self.next_vault_policy_sequence != self.prior_vault_policy_sequence.saturating_add(1)
+            || self.prior_witness_policy_revision == 0
+            || self.next_witness_policy_revision == 0
+            || self.affected_items.is_empty()
+            || self.affected_items.len() > MAX_ROTATION_ITEMS
+            || !strictly_sorted_unique(&self.affected_items, |left, right| {
+                left.item_id < right.item_id
+            })
+            || self.issued_at_ms == 0
+            || self.owner_key_epoch == 0
+        {
+            return Err(invalid_format());
+        }
+        for item in &self.affected_items {
+            item.canonical_bytes()?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for WitnessPolicyRotationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WitnessPolicyRotationV1")
+            .field("rotation_id", &self.rotation_id)
+            .field("vault_id", &self.vault_id)
+            .field("reason", &self.reason)
+            .field("affected_item_count", &self.affected_items.len())
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Owner-signed replacement record for a witness that cannot prove replay
+/// continuity. It authorizes only the new identity and never revives the old
+/// service state.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessRecoveryV1 {
+    pub schema: u16,
+    pub recovery_id: RecoveryId,
+    pub vault_id: VaultId,
+    pub genesis_fingerprint: Digest32,
+    pub unavailable_prior_witness_id: Option<PrincipalId>,
+    pub new_witness_descriptor: WitnessDescriptorBytes,
+    pub new_registration_digest: Digest32,
+    pub prior_checkpoint_digest: Digest32,
+    pub next_checkpoint_digest: Digest32,
+    pub rotation_record_digest: Digest32,
+    pub statement: u8,
+    pub issued_at_ms: u64,
+    pub owner_id: PrincipalId,
+    pub owner_key_fingerprint: Digest32,
+    pub owner_key_epoch: u64,
+    pub signature: Signature64,
+}
+
+impl WitnessRecoveryV1 {
+    fn append_fields(&self, output: &mut Vec<u8>) -> Result<(), WitnessProtocolError> {
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.recovery_id.as_bytes());
+        output.extend_from_slice(self.vault_id.as_bytes());
+        output.extend_from_slice(self.genesis_fingerprint.as_bytes());
+        optional_fixed(
+            output,
+            self.unavailable_prior_witness_id
+                .as_ref()
+                .map(PrincipalId::as_bytes),
+        );
+        bytes_field(output, self.new_witness_descriptor.as_bytes())?;
+        output.extend_from_slice(self.new_registration_digest.as_bytes());
+        output.extend_from_slice(self.prior_checkpoint_digest.as_bytes());
+        output.extend_from_slice(self.next_checkpoint_digest.as_bytes());
+        output.extend_from_slice(self.rotation_record_digest.as_bytes());
+        output.push(self.statement);
+        output.extend_from_slice(&self.issued_at_ms.to_be_bytes());
+        output.extend_from_slice(self.owner_id.as_bytes());
+        output.extend_from_slice(self.owner_key_fingerprint.as_bytes());
+        output.extend_from_slice(&self.owner_key_epoch.to_be_bytes());
+        Ok(())
+    }
+
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = jce("jury-witness-v1/recovery/signature");
+        self.append_fields(&mut output)?;
+        Ok(output)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = Vec::new();
+        self.append_fields(&mut output)?;
+        output.extend_from_slice(self.signature.as_bytes());
+        Ok(output)
+    }
+
+    pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_signed(
+            "jury-witness-v1/recovery/hash",
+            &self.signature_preimage()?,
+            &self.signature,
+        )
+    }
+
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        if self.schema != 1
+            || self.new_witness_descriptor.is_empty()
+            || self.statement != 1
+            || self.issued_at_ms == 0
+            || self.owner_key_epoch == 0
+        {
+            return Err(invalid_format());
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for WitnessRecoveryV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WitnessRecoveryV1")
+            .field("recovery_id", &self.recovery_id)
+            .field("vault_id", &self.vault_id)
+            .field(
+                "unavailable_prior_witness_id",
+                &self.unavailable_prior_witness_id,
+            )
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReceiptOutcomeV1 {
+    Approved,
+    Denied,
+}
+
+impl ReceiptOutcomeV1 {
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Approved => 1,
+            Self::Denied => 2,
+        }
+    }
+}
+
+/// Value-free projection of the request fields that a receipt is permitted to
+/// disclose. All fields are recomputed from the signed request preimage during
+/// offline verification.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicReceiptScopeV1 {
+    pub schema: u16,
+    pub request_id: RequestId,
+    pub vault_id: VaultId,
+    pub genesis_fingerprint: Digest32,
+    pub item_id: ItemId,
+    pub key_epoch: u64,
+    pub item_access_mode: ItemAccessMode,
+    pub slot_id: SlotId,
+    pub content_role: ContentRole,
+    pub revision: u64,
+    pub revision_seal_id: RevisionSealId,
+    pub vault_policy_sequence: u64,
+    pub vault_policy_hash: Digest32,
+    pub witness_policy_id: WitnessPolicyId,
+    pub witness_policy_revision: u64,
+    pub witness_policy_digest: Digest32,
+    pub requester_principal_id: PrincipalId,
+    pub requested_access_role: AccessRole,
+    pub operation: WitnessOperationV1,
+    pub approval_target_digest: Digest32,
+    pub action_manifest_digest: Digest32,
+    pub workload_digest: Digest32,
+    pub issued_at_ms: u64,
+    pub not_before_ms: Option<u64>,
+    pub expires_at_ms: u64,
+}
+
+impl PublicReceiptScopeV1 {
+    #[must_use]
+    pub fn from_request(request: &WitnessRequestV1) -> Self {
+        Self {
+            schema: 1,
+            request_id: request.request_id,
+            vault_id: request.vault_id,
+            genesis_fingerprint: request.genesis_fingerprint.clone(),
+            item_id: request.item_id,
+            key_epoch: request.key_epoch,
+            item_access_mode: request.item_access_mode,
+            slot_id: request.slot_id,
+            content_role: request.content_role,
+            revision: request.revision,
+            revision_seal_id: request.revision_seal_id,
+            vault_policy_sequence: request.vault_policy_sequence,
+            vault_policy_hash: request.vault_policy_hash.clone(),
+            witness_policy_id: request.witness_policy_id,
+            witness_policy_revision: request.witness_policy_revision,
+            witness_policy_digest: request.witness_policy_digest.clone(),
+            requester_principal_id: request.requester_principal_id,
+            requested_access_role: request.requested_access_role,
+            operation: request.operation,
+            approval_target_digest: request.approval_target_digest.clone(),
+            action_manifest_digest: request.action_manifest_digest.clone(),
+            workload_digest: request.workload_digest.clone(),
+            issued_at_ms: request.issued_at_ms,
+            not_before_ms: request.not_before_ms,
+            expires_at_ms: request.expires_at_ms,
+        }
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        if self.schema != 1
+            || self.key_epoch == 0
+            || self.revision == 0
+            || self.vault_policy_sequence == 0
+            || self.witness_policy_revision == 0
+            || !matches!(
+                self.item_access_mode,
+                ItemAccessMode::WitnessedOnly | ItemAccessMode::Mixed
+            )
+            || !valid_interval(self.issued_at_ms, self.not_before_ms, self.expires_at_ms)
+        {
+            return Err(invalid_format());
+        }
+        let mut output = Vec::new();
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.request_id.as_bytes());
+        output.extend_from_slice(self.vault_id.as_bytes());
+        output.extend_from_slice(self.genesis_fingerprint.as_bytes());
+        output.extend_from_slice(self.item_id.as_bytes());
+        output.extend_from_slice(&self.key_epoch.to_be_bytes());
+        output.push(self.item_access_mode.tag());
+        output.extend_from_slice(self.slot_id.as_bytes());
+        output.push(self.content_role.tag());
+        output.extend_from_slice(&self.revision.to_be_bytes());
+        output.extend_from_slice(self.revision_seal_id.as_bytes());
+        output.extend_from_slice(&self.vault_policy_sequence.to_be_bytes());
+        output.extend_from_slice(self.vault_policy_hash.as_bytes());
+        output.extend_from_slice(self.witness_policy_id.as_bytes());
+        output.extend_from_slice(&self.witness_policy_revision.to_be_bytes());
+        output.extend_from_slice(self.witness_policy_digest.as_bytes());
+        output.extend_from_slice(self.requester_principal_id.as_bytes());
+        output.push(self.requested_access_role.tag());
+        output.push(self.operation.tag());
+        output.extend_from_slice(self.approval_target_digest.as_bytes());
+        output.extend_from_slice(self.action_manifest_digest.as_bytes());
+        output.extend_from_slice(self.workload_digest.as_bytes());
+        output.extend_from_slice(&self.issued_at_ms.to_be_bytes());
+        optional_u64(&mut output, self.not_before_ms);
+        output.extend_from_slice(&self.expires_at_ms.to_be_bytes());
+        Ok(output)
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptAcknowledgementV1 {
+    pub schema: u16,
+    pub receipt_id: ReceiptId,
+    pub receipt_core_digest: Digest32,
+    pub request_digest: Digest32,
+    pub endpoint_principal_id: PrincipalId,
+    pub endpoint_key_fingerprint: Digest32,
+    pub endpoint_key_epoch: u64,
+    pub started_at_ms: u64,
+    pub signature: Signature64,
+}
+
+impl ReceiptAcknowledgementV1 {
+    fn append_fields(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.receipt_id.as_bytes());
+        output.extend_from_slice(self.receipt_core_digest.as_bytes());
+        output.extend_from_slice(self.request_digest.as_bytes());
+        output.extend_from_slice(self.endpoint_principal_id.as_bytes());
+        output.extend_from_slice(self.endpoint_key_fingerprint.as_bytes());
+        output.extend_from_slice(&self.endpoint_key_epoch.to_be_bytes());
+        output.extend_from_slice(&self.started_at_ms.to_be_bytes());
+    }
+
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = jce("jury-witness-v1/receipt/acknowledgement");
+        self.append_fields(&mut output);
+        Ok(output)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = Vec::new();
+        self.append_fields(&mut output);
+        output.extend_from_slice(self.signature.as_bytes());
+        Ok(output)
+    }
+
+    pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_signed(
+            "jury-witness-v1/receipt/acknowledgement/hash",
+            &self.signature_preimage()?,
+            &self.signature,
+        )
+    }
+
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        if self.schema != 1 || self.endpoint_key_epoch == 0 || self.started_at_ms == 0 {
+            return Err(invalid_format());
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ReceiptAcknowledgementV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReceiptAcknowledgementV1")
+            .field("receipt_id", &self.receipt_id)
+            .field("endpoint_principal_id", &self.endpoint_principal_id)
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptCompletionV1 {
+    pub schema: u16,
+    pub receipt_id: ReceiptId,
+    pub receipt_core_digest: Digest32,
+    pub acknowledgement_digest: Option<Digest32>,
+    pub endpoint_principal_id: PrincipalId,
+    pub endpoint_key_fingerprint: Digest32,
+    pub endpoint_key_epoch: u64,
+    pub outcome: ReceiptOutcomeV1,
+    pub reason: WitnessReasonV1,
+    pub completed_at_ms: u64,
+    pub signature: Signature64,
+}
+
+impl ReceiptCompletionV1 {
+    fn append_fields(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.receipt_id.as_bytes());
+        output.extend_from_slice(self.receipt_core_digest.as_bytes());
+        optional_fixed(
+            output,
+            self.acknowledgement_digest
+                .as_ref()
+                .map(FixedBytes::as_bytes),
+        );
+        output.extend_from_slice(self.endpoint_principal_id.as_bytes());
+        output.extend_from_slice(self.endpoint_key_fingerprint.as_bytes());
+        output.extend_from_slice(&self.endpoint_key_epoch.to_be_bytes());
+        output.push(self.outcome.tag());
+        output.push(self.reason.tag());
+        output.extend_from_slice(&self.completed_at_ms.to_be_bytes());
+    }
+
+    pub fn signature_preimage(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = jce("jury-witness-v1/receipt/completion");
+        self.append_fields(&mut output);
+        Ok(output)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = Vec::new();
+        self.append_fields(&mut output);
+        output.extend_from_slice(self.signature.as_bytes());
+        Ok(output)
+    }
+
+    pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_signed(
+            "jury-witness-v1/receipt/completion/hash",
+            &self.signature_preimage()?,
+            &self.signature,
+        )
+    }
+
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        let outcome_matches = match self.outcome {
+            ReceiptOutcomeV1::Approved => self.reason == WitnessReasonV1::None,
+            ReceiptOutcomeV1::Denied => self.reason != WitnessReasonV1::None,
+        };
+        if self.schema != 1
+            || self.endpoint_key_epoch == 0
+            || self.completed_at_ms == 0
+            || !outcome_matches
+        {
+            return Err(invalid_format());
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ReceiptCompletionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReceiptCompletionV1")
+            .field("receipt_id", &self.receipt_id)
+            .field("endpoint_principal_id", &self.endpoint_principal_id)
+            .field("outcome", &self.outcome)
+            .field("reason", &self.reason)
+            .field("signature", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Complete portable receipt assembled from already signed public evidence.
+/// It intentionally contains no contribution envelope or presentation bytes.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessReceiptV1 {
+    pub schema: u16,
+    pub receipt_id: ReceiptId,
+    pub request_signature_preimage: RequestBytes,
+    pub client_signature: Signature64,
+    pub request_digest: Digest32,
+    pub action_manifest_digest: Digest32,
+    pub presentation_digest: Digest32,
+    pub public_scope: PublicReceiptScopeV1,
+    pub approval_decisions: Vec<ApprovalDecisionV1>,
+    pub witness_decisions: Vec<WitnessDecisionV1>,
+    pub policy_checkpoint: VaultPolicyCheckpointV1,
+    pub witness_policy_material: PolicyMaterialBytes,
+    pub approval_threshold: u8,
+    pub witness_threshold: u8,
+    pub counted_approver_ids: Vec<PrincipalId>,
+    pub counted_witness_ids: Vec<PrincipalId>,
+    pub outcome: ReceiptOutcomeV1,
+    pub reason: WitnessReasonV1,
+    pub issued_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub endpoint_acknowledgement: Option<ReceiptAcknowledgementV1>,
+    pub endpoint_completion: Option<ReceiptCompletionV1>,
+}
+
+impl WitnessReceiptV1 {
+    fn core_bytes_unchecked(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        let approvals = self
+            .approval_decisions
+            .iter()
+            .map(ApprovalDecisionV1::canonical_bytes)
+            .collect::<Result<Vec<_>, _>>()?;
+        let decisions = self
+            .witness_decisions
+            .iter()
+            .map(WitnessDecisionV1::canonical_bytes)
+            .collect::<Result<Vec<_>, _>>()?;
+        let checkpoint = self.policy_checkpoint.canonical_bytes()?;
+        let public_scope = self.public_scope.canonical_bytes()?;
+        let mut output = Vec::new();
+        output.extend_from_slice(&self.schema.to_be_bytes());
+        output.extend_from_slice(self.receipt_id.as_bytes());
+        bytes_field(&mut output, self.request_signature_preimage.as_bytes())?;
+        output.extend_from_slice(self.client_signature.as_bytes());
+        output.extend_from_slice(self.request_digest.as_bytes());
+        output.extend_from_slice(self.action_manifest_digest.as_bytes());
+        output.extend_from_slice(self.presentation_digest.as_bytes());
+        bytes_field(&mut output, &public_scope)?;
+        list_bytes(&mut output, &approvals)?;
+        list_bytes(&mut output, &decisions)?;
+        bytes_field(&mut output, &checkpoint)?;
+        bytes_field(&mut output, self.witness_policy_material.as_bytes())?;
+        output.push(self.approval_threshold);
+        output.push(self.witness_threshold);
+        list_fixed(&mut output, &self.counted_approver_ids, |output, id| {
+            output.extend_from_slice(id.as_bytes());
+        })?;
+        list_fixed(&mut output, &self.counted_witness_ids, |output, id| {
+            output.extend_from_slice(id.as_bytes());
+        })?;
+        output.push(self.outcome.tag());
+        output.push(self.reason.tag());
+        output.extend_from_slice(&self.issued_at_ms.to_be_bytes());
+        output.extend_from_slice(&self.expires_at_ms.to_be_bytes());
+        Ok(output)
+    }
+
+    pub fn core_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        self.core_bytes_unchecked()
+    }
+
+    pub fn core_digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_bytes("jury-witness-v1/receipt/core-hash", &self.core_bytes()?)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        let mut output = self.core_bytes_unchecked()?;
+        let acknowledgement = self
+            .endpoint_acknowledgement
+            .as_ref()
+            .map(ReceiptAcknowledgementV1::canonical_bytes)
+            .transpose()?;
+        let completion = self
+            .endpoint_completion
+            .as_ref()
+            .map(ReceiptCompletionV1::canonical_bytes)
+            .transpose()?;
+        optional_bytes(&mut output, acknowledgement.as_deref())?;
+        optional_bytes(&mut output, completion.as_deref())?;
+        Ok(output)
+    }
+
+    pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
+        hash_bytes("jury-witness-v1/receipt/hash", &self.canonical_bytes()?)
+    }
+
+    pub fn parse_json(bytes: &[u8]) -> Result<Self, WitnessProtocolError> {
+        crate::artifact::validate_json_input(bytes, MAX_RECEIPT_JSON_BYTES)
+            .map_err(|_| invalid_format())?;
+        let receipt: Self =
+            crate::artifact::deserialize_json(bytes).map_err(|_| invalid_format())?;
+        receipt.validate_shape()?;
+        Ok(receipt)
+    }
+
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
+        self.validate_shape()?;
+        crate::artifact::pretty_json_bytes(self, MAX_RECEIPT_JSON_BYTES)
+            .map_err(|_| WitnessProtocolError::new(WitnessProtocolErrorKind::CapacityExhausted))
+    }
+
+    pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        let outcome_matches = match self.outcome {
+            ReceiptOutcomeV1::Approved => self.reason == WitnessReasonV1::None,
+            ReceiptOutcomeV1::Denied => self.reason != WitnessReasonV1::None,
+        };
+        if self.schema != 1
+            || self.request_signature_preimage.is_empty()
+            || self.witness_policy_material.is_empty()
+            || usize::from(self.approval_threshold) > MAX_POLICY_ACTORS
+            || !(2..=u8::try_from(MAX_POLICY_ACTORS).unwrap_or(u8::MAX))
+                .contains(&self.witness_threshold)
+            || self.approval_decisions.len() > MAX_RECORDED_APPROVALS
+            || self.witness_decisions.len() > MAX_POLICY_ACTORS
+            || self.counted_approver_ids.len() > MAX_POLICY_ACTORS
+            || self.counted_witness_ids.len() > MAX_POLICY_ACTORS
+            || !strictly_sorted_unique(&self.approval_decisions, |left, right| {
+                left.approver_id < right.approver_id
+            })
+            || !strictly_sorted_unique(&self.witness_decisions, |left, right| {
+                left.witness_id < right.witness_id
+            })
+            || !strictly_sorted_unique(&self.counted_approver_ids, |left, right| left < right)
+            || !strictly_sorted_unique(&self.counted_witness_ids, |left, right| left < right)
+            || self.issued_at_ms == 0
+            || self.expires_at_ms <= self.issued_at_ms
+            || !outcome_matches
+        {
+            return Err(invalid_format());
+        }
+        self.public_scope.canonical_bytes()?;
+        self.policy_checkpoint.canonical_bytes()?;
+        for decision in &self.approval_decisions {
+            decision.canonical_bytes()?;
+        }
+        for decision in &self.witness_decisions {
+            decision.canonical_bytes()?;
+        }
+        let core_digest = hash_bytes(
+            "jury-witness-v1/receipt/core-hash",
+            &self.core_bytes_unchecked()?,
+        )?;
+        if let Some(acknowledgement) = &self.endpoint_acknowledgement {
+            acknowledgement.validate_shape()?;
+            if acknowledgement.receipt_id != self.receipt_id
+                || acknowledgement.receipt_core_digest != core_digest
+                || acknowledgement.request_digest != self.request_digest
+            {
+                return Err(WitnessProtocolError::new(
+                    WitnessProtocolErrorKind::InvalidDigest,
+                ));
+            }
+        }
+        if let Some(completion) = &self.endpoint_completion {
+            completion.validate_shape()?;
+            let acknowledgement_digest = self
+                .endpoint_acknowledgement
+                .as_ref()
+                .map(ReceiptAcknowledgementV1::digest)
+                .transpose()?;
+            if completion.receipt_id != self.receipt_id
+                || completion.receipt_core_digest != core_digest
+                || completion.acknowledgement_digest != acknowledgement_digest
+                || completion.outcome != self.outcome
+                || completion.reason != self.reason
+            {
+                return Err(WitnessProtocolError::new(
+                    WitnessProtocolErrorKind::InvalidDigest,
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for WitnessReceiptV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WitnessReceiptV1")
+            .field("receipt_id", &self.receipt_id)
+            .field("request_id", &self.public_scope.request_id)
+            .field("outcome", &self.outcome)
+            .field("reason", &self.reason)
+            .field("approval_count", &self.approval_decisions.len())
+            .field("witness_decision_count", &self.witness_decisions.len())
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WitnessReceiptMaterialV1 {
@@ -2009,6 +2972,115 @@ pub fn signing_key_fingerprint(
     output.extend_from_slice(&key_epoch.to_be_bytes());
     output.extend_from_slice(public_key.as_bytes());
     digest(&output)
+}
+
+fn witness_operation_from_tag(tag: u8) -> Result<WitnessOperationV1, WitnessProtocolError> {
+    match tag {
+        1 => Ok(WitnessOperationV1::ReadStdout),
+        2 => Ok(WitnessOperationV1::WritePrivateFile),
+        3 => Ok(WitnessOperationV1::TemplateInjection),
+        4 => Ok(WitnessOperationV1::ChildEnvironment),
+        5 => Ok(WitnessOperationV1::ChildStdin),
+        6 => Ok(WitnessOperationV1::ItemMutation),
+        7 => Ok(WitnessOperationV1::Backup),
+        8 => Ok(WitnessOperationV1::Recovery),
+        9 => Ok(WitnessOperationV1::AdministrativeRekey),
+        _ => Err(invalid_format()),
+    }
+}
+
+struct CanonicalInput<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> CanonicalInput<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn domain(&mut self, domain: &str) -> Result<(), WitnessProtocolError> {
+        let expected = jce(domain);
+        if self.take(expected.len())? != expected.as_slice() {
+            return Err(invalid_format());
+        }
+        Ok(())
+    }
+
+    fn u8(&mut self) -> Result<u8, WitnessProtocolError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, WitnessProtocolError> {
+        Ok(u16::from_be_bytes(
+            self.take(2)?.try_into().map_err(|_| invalid_format())?,
+        ))
+    }
+
+    fn u32(&mut self) -> Result<u32, WitnessProtocolError> {
+        Ok(u32::from_be_bytes(
+            self.take(4)?.try_into().map_err(|_| invalid_format())?,
+        ))
+    }
+
+    fn u64(&mut self) -> Result<u64, WitnessProtocolError> {
+        Ok(u64::from_be_bytes(
+            self.take(8)?.try_into().map_err(|_| invalid_format())?,
+        ))
+    }
+
+    fn optional_u64(&mut self) -> Result<Option<u64>, WitnessProtocolError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => self.u64().map(Some),
+            _ => Err(invalid_format()),
+        }
+    }
+
+    fn fixed<const N: usize>(&mut self) -> Result<FixedBytes<N>, WitnessProtocolError> {
+        FixedBytes::from_slice(self.take(N)?).map_err(|_| invalid_format())
+    }
+
+    fn identifier<T, E>(
+        &mut self,
+        constructor: impl FnOnce([u8; 32]) -> Result<T, E>,
+    ) -> Result<T, WitnessProtocolError> {
+        let bytes = self.take(32)?.try_into().map_err(|_| invalid_format())?;
+        constructor(bytes).map_err(|_| invalid_format())
+    }
+
+    fn length(&mut self, maximum: usize) -> Result<usize, WitnessProtocolError> {
+        let length = usize::try_from(self.u32()?).map_err(|_| invalid_format())?;
+        if length > maximum {
+            return Err(WitnessProtocolError::new(
+                WitnessProtocolErrorKind::CapacityExhausted,
+            ));
+        }
+        Ok(length)
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], WitnessProtocolError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or_else(invalid_format)?;
+        let value = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn finish(self) -> Result<(), WitnessProtocolError> {
+        if self.offset == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(invalid_format())
+        }
+    }
+}
+
+const fn invalid_format() -> WitnessProtocolError {
+    WitnessProtocolError::new(WitnessProtocolErrorKind::InvalidFormat)
 }
 
 fn valid_interval(issued_at_ms: u64, not_before_ms: Option<u64>, expires_at_ms: u64) -> bool {

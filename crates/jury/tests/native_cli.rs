@@ -6,6 +6,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use jury_core::witness_receipt::ReceiptPolicyMaterialV1;
 use jury_protocol::vault_v1::{PolicyOperationV1, VaultFileV1};
 
 use self::support::*;

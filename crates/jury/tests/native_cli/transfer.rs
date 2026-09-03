@@ -468,6 +468,11 @@ fn assert_retained_checkpoint_rejects_absent_home(
 #[test]
 fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestResult {
     let temporary = tempfile::tempdir()?;
+    fs::create_dir(temporary.path().join(".git"))?;
+    fs::write(
+        temporary.path().join(".git/HEAD"),
+        b"ref: refs/heads/main\n",
+    )?;
     let source_repository = temporary.path().join("source-repository");
     let target_repository = temporary.path().join("target-repository");
     let source_data = temporary.path().join("source-data");

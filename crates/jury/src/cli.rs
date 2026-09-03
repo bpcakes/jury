@@ -36,6 +36,10 @@ use jury_core::transfer::{
     ArtifactRelation, TransferCreator, TransferPublicCatalogV1, ValidatedTransfer,
     compare_artifacts, item_deltas,
 };
+use jury_core::{
+    witness_operations::verify_checkpoint_propagation,
+    witness_receipt::{ReceiptPolicyMaterialV1, VerifiedWitnessReceipt, verify_witness_receipt},
+};
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, LockedVaultState,
     PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicationOutcome,
@@ -52,6 +56,10 @@ use jury_protocol::vault_v1::{
     MAX_VAULT_BYTES, PolicyOperationV1, PrincipalDescriptorV1, PrincipalId, PrincipalKind,
     RemovalReason, VaultFileV1, VaultHeaderV1, WitnessPolicyId,
 };
+use jury_protocol::witness_v1::{
+    MAX_RECEIPT_JSON_BYTES, PolicyMaterialBytes, VaultPolicyCheckpointV1,
+    WitnessCheckpointAcknowledgementV1, WitnessReceiptV1,
+};
 use sha2::{Digest as _, Sha256};
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -66,9 +74,9 @@ pub use self::dispatch::execute;
 pub use self::output::{CliError, CliErrorKind, CommandOutput, FieldSummary, IdentitySummary};
 use self::{
     access_commands::*, context::*, environment::*, execution_commands::*, identity_commands::*,
-    item_commands::*, mutation_commands::*, policy_commands::*, principal_commands::*, support::*,
-    template_commands::*, transfer_commands::*, transfer_state::*, trust_confirmation::*,
-    vault_commands::*,
+    item_commands::*, mutation_commands::*, policy_commands::*, principal_commands::*,
+    receipt_commands::*, support::*, template_commands::*, transfer_commands::*, transfer_state::*,
+    trust_confirmation::*, vault_commands::*, witness_commands::*,
 };
 
 mod access_commands;
@@ -83,12 +91,14 @@ mod mutation_commands;
 mod output;
 mod policy_commands;
 mod principal_commands;
+mod receipt_commands;
 mod support;
 mod template_commands;
 mod transfer_commands;
 mod transfer_state;
 mod trust_confirmation;
 mod vault_commands;
+mod witness_commands;
 
 const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: do not use with real secrets";
 
@@ -195,6 +205,16 @@ pub enum Command {
     Transfer {
         #[command(subcommand)]
         command: TransferCommand,
+    },
+    /// Inspect or independently verify a witnessed-decision receipt offline.
+    Receipt {
+        #[command(subcommand)]
+        command: ReceiptCommand,
+    },
+    /// Inspect independently collected witness operational evidence offline.
+    Witness {
+        #[command(subcommand)]
+        command: WitnessCommand,
     },
     /// Resolve one field to an explicitly selected private sink.
     Read(ReadArgs),
@@ -477,6 +497,56 @@ pub enum TransferCommand {
     Import(TransferImportArgs),
     /// Compare current state with this identity's last local export receipt.
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReceiptCommand {
+    /// Parse bounded receipt metadata without claiming that its evidence verifies.
+    Inspect(ReceiptInspectArgs),
+    /// Verify all embedded public evidence without network access or an identity.
+    Verify(ReceiptVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ReceiptInspectArgs {
+    #[arg(value_name = "RECEIPT")]
+    pub receipt: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct ReceiptVerifyArgs {
+    #[arg(value_name = "RECEIPT")]
+    pub receipt: PathBuf,
+    /// Pin an independently retained exact policy checkpoint.
+    #[arg(long, value_name = "CHECKPOINT")]
+    pub checkpoint: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WitnessCommand {
+    /// Export the exact public journal and witnessed-policy catalog for distribution.
+    PolicyMaterial(WitnessPolicyMaterialArgs),
+    /// Classify one checkpoint as proposed, partial, or durably accepted.
+    PolicyStatus(WitnessPolicyStatusArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WitnessPolicyMaterialArgs {
+    /// Create this public JSON file; existing paths are never replaced.
+    #[arg(long, value_name = "FILE")]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct WitnessPolicyStatusArgs {
+    /// Complete owner-signed public policy material for the checkpoint.
+    #[arg(long, value_name = "POLICY_MATERIAL")]
+    pub policy_material: PathBuf,
+    #[arg(long, value_name = "CHECKPOINT")]
+    pub checkpoint: PathBuf,
+    /// Per-witness acknowledgement or accepted-response file; may be repeated.
+    #[arg(long = "acknowledgement", value_name = "ACKNOWLEDGEMENT")]
+    pub acknowledgements: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]

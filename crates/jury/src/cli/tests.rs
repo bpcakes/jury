@@ -102,6 +102,68 @@ fn transfer_commands_require_artifact_path_options() {
 }
 
 #[test]
+fn receipt_and_witness_operations_require_explicit_public_artifacts() {
+    assert!(matches!(
+        Cli::try_parse_from([
+            "jury",
+            "receipt",
+            "verify",
+            "/tmp/ExampleReceipt.json",
+            "--checkpoint",
+            "/tmp/ExampleCheckpoint.json",
+        ]),
+        Ok(Cli {
+            command: Command::Receipt {
+                command: ReceiptCommand::Verify(ReceiptVerifyArgs {
+                    checkpoint: Some(_),
+                    ..
+                })
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        Cli::try_parse_from([
+            "jury",
+            "witness",
+            "policy-material",
+            "--output",
+            "/tmp/ExamplePolicy.json",
+        ]),
+        Ok(Cli {
+            command: Command::Witness {
+                command: WitnessCommand::PolicyMaterial(_)
+            },
+            ..
+        })
+    ));
+    assert!(matches!(
+        Cli::try_parse_from([
+            "jury",
+            "witness",
+            "policy-status",
+            "--policy-material",
+            "/tmp/ExamplePolicy.json",
+            "--checkpoint",
+            "/tmp/ExampleCheckpoint.json",
+            "--acknowledgement",
+            "/tmp/ExampleWitnessOneAck.json",
+        ]),
+        Ok(Cli {
+            command: Command::Witness {
+                command: WitnessCommand::PolicyStatus(WitnessPolicyStatusArgs {
+                    acknowledgements,
+                    ..
+                })
+            },
+            ..
+        }) if acknowledgements.len() == 1
+    ));
+    assert!(Cli::try_parse_from(["jury", "receipt", "inspect"]).is_err());
+    assert!(Cli::try_parse_from(["jury", "witness", "policy-material"]).is_err());
+}
+
+#[test]
 fn grouped_fingerprint_is_stable() {
     assert_eq!(grouped("0011223344556677"), "00112233-44556677");
 }

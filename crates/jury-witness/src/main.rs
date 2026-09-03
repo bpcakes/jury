@@ -1,13 +1,19 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{Parser, Subcommand};
+use jury_filesystem::{PreparedPublicFile, preview_public_file};
 use jury_witness::{
     AdapterError,
     anchor::{SqliteAnchorRepository, backup_anchor_database, restore_anchor_database},
     config::{AnchorServiceConfig, WitnessServiceConfig},
-    persistence::{SqliteWitnessStore, backup_witness_database, restore_witness_database},
+    persistence::{
+        SqliteWitnessStore, audit_witness_database, backup_witness_database,
+        restore_witness_database,
+    },
     server::{run_anchor_service, run_witness_service},
 };
+
+const MAX_AUDIT_EXPORT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -61,6 +67,14 @@ enum DatabaseCommand {
         config: PathBuf,
         #[arg(long)]
         backup: PathBuf,
+    },
+    /// Export a value-free database inventory without claiming anchor freshness.
+    Audit {
+        #[arg(long)]
+        config: PathBuf,
+        /// Create this public JSON file; existing paths are never replaced.
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -134,6 +148,26 @@ fn run_database(command: DatabaseCommand) -> Result<(), AdapterError> {
             restore_witness_database(&backup, &config.database.path)?;
             println!(
                 "juryd database restored; contribution readiness remains disabled until exact external-anchor reconciliation"
+            );
+            Ok(())
+        }
+        DatabaseCommand::Audit { config, output } => {
+            let config = WitnessServiceConfig::load_database_command(&config)?;
+            let snapshot = audit_witness_database(&config.database.path, config.witness_id)?;
+            let bytes = serde_json::to_vec_pretty(&snapshot)
+                .map_err(|_| AdapterError::new(jury_witness::AdapterErrorKind::InvalidState))?;
+            let destination = preview_public_file(&output)
+                .map_err(|_| AdapterError::new(jury_witness::AdapterErrorKind::Io))?;
+            PreparedPublicFile::prepare_bounded_if_unchanged(
+                destination,
+                &bytes,
+                MAX_AUDIT_EXPORT_BYTES,
+                false,
+            )
+            .and_then(PreparedPublicFile::publish)
+            .map_err(|_| AdapterError::new(jury_witness::AdapterErrorKind::Io))?;
+            println!(
+                "juryd value-free database audit exported; external anchor compared: false; contribution readiness claimed: false"
             );
             Ok(())
         }

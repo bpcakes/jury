@@ -10,12 +10,13 @@ use axum::{
 };
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use hyper_util::rt::TokioTimer;
-use jury_core::witness_engine::{CancellationProgress, WitnessProgress};
+use jury_core::witness_engine::{CancellationProgress, WitnessOperationalStatus, WitnessProgress};
 use jury_protocol::{
     vault_v1::PrincipalId,
     witness_v1::{
         ActionManifestV1, ApprovalDecisionV1, RegistrationBytes, RequestCancellationV1,
-        VaultPolicyCheckpointV1, WitnessReasonV1, WitnessRequestV1, WitnessResponseV1,
+        VaultPolicyCheckpointV1, WitnessCheckpointAcknowledgementV1, WitnessReasonV1,
+        WitnessRequestV1, WitnessResponseV1,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,32 @@ struct OperationResponse {
 
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
+struct CheckpointAcceptedResponse {
+    status: &'static str,
+    durability: &'static str,
+    global_freshness_claimed: bool,
+    acknowledgement: WitnessCheckpointAcknowledgementV1,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct OperatorStatusResponse {
+    status: &'static str,
+    scope: &'static str,
+    global_freshness_claimed: bool,
+    operational: WitnessOperationalStatus,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompactionResponse {
+    status: &'static str,
+    removed_replay_records: usize,
+    retention_rule: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
 struct RefusalResponse {
     status: &'static str,
     reason: RefusalReason,
@@ -180,6 +207,7 @@ pub async fn run_witness_service(config: WitnessServiceConfig) -> Result<(), Ada
             public_gate_request,
         ));
     let operator = Router::new()
+        .route("/v1/operator/status", get(operator_status))
         .route("/v1/operator/register", post(register))
         .route("/v1/operator/checkpoint", post(checkpoint))
         .route("/v1/operator/replay/compact", post(compact))
@@ -356,7 +384,7 @@ async fn register(
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
-    operation_result(
+    checkpoint_result(
         state
             .runtime
             .register_vault(
@@ -365,11 +393,7 @@ async fn register(
                 payload.accepted_registration,
                 payload.checkpoint,
             )
-            .await
-            .map(|()| OperationResponse {
-                status: "accepted",
-                response: None,
-            }),
+            .await,
     )
 }
 
@@ -381,32 +405,49 @@ async fn checkpoint(
     let Ok(Json(payload)) = payload else {
         return invalid_request();
     };
-    operation_result(
+    checkpoint_result(
         state
             .runtime
             .advance_checkpoint(deadline, payload.policy_material, payload.checkpoint)
-            .await
-            .map(|()| OperationResponse {
-                status: "accepted",
-                response: None,
-            }),
+            .await,
     )
+}
+
+async fn operator_status(
+    State(state): State<WitnessApiState>,
+    Extension(deadline): Extension<OperationDeadline>,
+) -> Response {
+    match state.runtime.operational_status(deadline).await {
+        Ok(operational) => (
+            StatusCode::OK,
+            Json(OperatorStatusResponse {
+                status: "ready",
+                scope: "this-witness-only",
+                global_freshness_claimed: false,
+                operational,
+            }),
+        )
+            .into_response(),
+        Err(error) => runtime_error(error),
+    }
 }
 
 async fn compact(
     State(state): State<WitnessApiState>,
     Extension(deadline): Extension<OperationDeadline>,
 ) -> Response {
-    operation_result(
-        state
-            .runtime
-            .compact_replay(deadline)
-            .await
-            .map(|_| OperationResponse {
+    match state.runtime.compact_replay(deadline).await {
+        Ok(removed_replay_records) => (
+            StatusCode::OK,
+            Json(CompactionResponse {
                 status: "accepted",
-                response: None,
+                removed_replay_records,
+                retention_rule: "only records strictly past expires-at plus frozen replay retention",
             }),
-    )
+        )
+            .into_response(),
+        Err(error) => runtime_error(error),
+    }
 }
 
 async fn reserve(
@@ -531,6 +572,22 @@ async fn compare_and_swap_anchor(
 fn operation_result(result: Result<OperationResponse, RuntimeError>) -> Response {
     match result {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => runtime_error(error),
+    }
+}
+
+fn checkpoint_result(result: Result<WitnessCheckpointAcknowledgementV1, RuntimeError>) -> Response {
+    match result {
+        Ok(acknowledgement) => (
+            StatusCode::OK,
+            Json(CheckpointAcceptedResponse {
+                status: "accepted",
+                durability: "witness-database-and-external-anchor-readback",
+                global_freshness_claimed: false,
+                acknowledgement,
+            }),
+        )
+            .into_response(),
         Err(error) => runtime_error(error),
     }
 }

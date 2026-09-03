@@ -279,10 +279,8 @@ mod tests {
         )?;
         assert_eq!(selected.source(), HomeSource::Repository);
 
-        let outside = root.path().join("outside");
-        fs::create_dir(&outside)?;
         let selected = resolve_vault_home(
-            &outside,
+            Path::new("/"),
             None,
             false,
             None,

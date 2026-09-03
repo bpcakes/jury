@@ -28,6 +28,16 @@ account, host, hypervisor, backup system, or recovery team violates the model.
 Do not place the two services, their backups, or their restore credentials on
 the same host merely because an example can run on loopback.
 
+This diagram is one witness pair, not the complete quorum. A bounded `0.x`
+deployment repeats the pair for each active witness descriptor: 2–32 witnesses,
+with a threshold from 2 through the member count. Each `juryd` instance owns one
+witness identity, one replay/checkpoint database, and one independently operated
+external anchor. Witness instances are also separate from one another and from
+the requesting endpoint. A single witness receives only its encrypted share and
+cannot reconstruct a threshold-2-or-greater revision secret by itself. These are
+declared self-hosting boundaries, not a managed topology or evidence that the
+pre-alpha system protects secrets.
+
 ## Build and provision
 
 Build the operator CLI and daemon from the checked-out source:
@@ -123,6 +133,7 @@ Witness endpoints are:
 | `GET /readyz` | none | Exact database/anchor/identity/clock readiness |
 | `POST /v1/operator/register` | operator | Register exact public policy material, registration bytes, and checkpoint |
 | `POST /v1/operator/checkpoint` | operator | Advance an exact registered checkpoint |
+| `GET /v1/operator/status` | operator | Return value-free state counts and this witness's exact acknowledged checkpoints |
 | `POST /v1/operator/replay/compact` | operator | Compact only records past their retention horizon |
 | `POST /v1/requests/reserve` | client | Durably reserve one request ID |
 | `POST /v1/requests/decide` | client | Evaluate exact request, manifest, and approvals |
@@ -143,10 +154,34 @@ candidate, and the anchor service requires that exact request-body limit. An
 oversized next anchor is refused as capacity exhaustion without changing local
 state, so operators cannot repair it by widening only one transport setting.
 
+Successful register and checkpoint responses contain a signed
+`acknowledgement`, report durability as
+`witness-database-and-external-anchor-readback`, and set
+`global_freshness_claimed` to `false`. Preserve each response as public evidence;
+an HTTP success code or operator credential alone is not a checkpoint
+acknowledgement.
+
 Health bodies contain only `status` and the pre-alpha maturity warning. They do
 not enumerate principals, policies, vaults, items, requests, generations, or
 anchor contents. Readiness may return `503` while liveness remains `200`; do not
 replace that distinction with a restart loop.
+
+Authenticated operator status is deliberately different from public health. It
+reports this witness's state generation, bounded counts, retention horizon, and
+per-vault checkpoint acknowledgement, but no registration bytes, policy
+material, request IDs, approvals, contributions, or item/principal names. It is
+not an aggregate view and always reports `global_freshness_claimed: false`.
+
+For an offline, value-free inventory of a stopped or copied witness database:
+
+```console
+$ juryd database audit --config /etc/juryd/witness.json \
+    --output /absolute/public/path/ExampleWitnessAudit.json
+```
+
+The destination must be absent. The command does not open identity, TLS-key, or
+bearer-credential files, does not compare the external anchor, and does not
+claim contribution readiness.
 
 The SQLite adapter caps the complete serialized witness snapshot at 64 MiB.
 It rejects an operation that would cross the cap as protocol capacity
@@ -195,10 +230,91 @@ in-flight requests, and then stop the serialized identity/runtime worker. A
 client that loses a response retries the same request ID; stable protocol
 responses are persisted rather than recomputed as a new decision.
 
+## Policy distribution and propagation status
+
+Export the exact compact public policy bundle from the vault installation:
+
+```console
+$ jury witness policy-material \
+    --output /absolute/public/path/ExamplePolicyMaterial.json
+```
+
+Distribute that exact file, the signed checkpoint, and the exact registration
+or checkpoint request to each independently administered witness. Keep every
+accepted response separately. Then classify only the evidence in hand:
+
+```console
+$ jury witness policy-status \
+    --policy-material /absolute/public/path/ExamplePolicyMaterial.json \
+    --checkpoint /absolute/public/path/ExampleCheckpoint.json \
+    --acknowledgement /absolute/public/path/ExampleWitnessOneAck.json \
+    --acknowledgement /absolute/public/path/ExampleWitnessTwoAck.json
+```
+
+With no acknowledgements the status is `proposed`; with a nonempty strict subset
+it is `partially-propagated`; only exact signed acknowledgements from every
+active witness produce `durably-accepted`. That last state means each named
+witness durably committed and read back the supplied checkpoint when it signed
+its anchor. It is not a claim that all witnesses remain reachable, mutually
+synchronized, or globally fresh afterward.
+
+## Witness key rotation, retirement, and recovery
+
+Signing-key, contribution-key, membership, threshold, or share-index changes
+are full prospective rotations. Create and register a fresh witness identity,
+then rerun `jury policy require witnessed` for each governed item with the exact
+next witness set. The mutation creates a new item key epoch, descriptor and body
+seals, shares, and capsules. Distribute the next policy/checkpoint and wait for
+the required per-witness acknowledgements before relying on it. Retain old
+public policy material, checkpoints, descriptors, and receipts so historical
+receipt signatures remain verifiable. Old private keys may still open old
+capsules retained in history; rotation does not erase that exposure.
+
+Do not replace the key file underneath an active witness identity or initialize
+an empty database for its old ID. A same-identity restore is valid only with the
+exact protected identity, replay/checkpoint database, and matching external
+anchor described above. If that continuity cannot be proved, recovery uses a
+new witness ID, a new initial registration and anchor, an owner-signed
+`WitnessRecoveryV1` statement, and the complete owner-signed
+`WitnessPolicyRotationV1` item reseal. The old ID is retired from the next active
+policy. Missing quorum makes the item unavailable; recovery never lowers the
+threshold, resets replay/checkpoint state, synthesizes a share, or adds a direct
+slot.
+
+## Retention, compaction, receipts, and transparency
+
+Replay records remain until strictly after request expiry plus 86,400,000 ms,
+and only then become eligible for authenticated compaction. A compact operation
+is itself committed as a new state generation and externally anchored before
+the service responds. Operators may retain records longer but cannot configure
+a shorter protocol horizon.
+
+Receipts are bounded public JSON and contain decisions rather than contribution
+envelopes. Verify them without a network connection or private identity:
+
+```console
+$ jury receipt inspect /absolute/public/path/ExampleReceipt.json
+$ jury receipt verify /absolute/public/path/ExampleReceipt.json \
+    --checkpoint /absolute/public/path/ExampleCheckpoint.json
+```
+
+`inspect` reports unverified structure. `verify` checks the embedded public
+policy replay, requester/approver/witness signatures, counted identities,
+manifest and checkpoint digests, and witness state generations. It proves those
+decisions only—not endpoint execution, output, non-exfiltration, or forgetting.
+
+For additional transparency, operators may publish the exact public policy
+bundles, checkpoints, per-witness acknowledgements, signed state anchors,
+rotation/recovery records, and receipts to an append-only archive under a
+separate authority. The active `0.x` release has no transparency-log service,
+global-consistency protocol, managed topology, or freshness oracle. An archive
+is useful retained evidence; it does not change authorization or repair a stale
+witness.
+
 ## Current scope boundary
 
-This adapter can be built and operated now, including an empty ready service
-and the public protocol endpoints. The end-user witnessed request/approval/open
-workflow remains J22 work. Running `juryd` therefore does not make the current
-`jury` client an operational witnessed-secret path and is not evidence that
-Jury protects secrets.
+This adapter and the J23 receipt/operations surfaces can be built and operated
+now. The end-user witnessed request/approval/open workflow remains J22 work.
+Running `juryd`, collecting acknowledgements, or verifying a receipt therefore
+does not make the current `jury` client an operational witnessed-secret path and
+is not evidence that Jury protects secrets.

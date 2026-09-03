@@ -6,17 +6,19 @@ use jury_protocol::{
         AccessRole, ApprovalId, CancellationId, ContentRole, DescriptorMetadataV1, Digest32,
         Encapsulation1120, ItemAccessMode, ItemId, ItemKind, Nonce12, PrincipalDescriptorV1,
         PrincipalId, PrincipalKind, ReceiptId, RecipientPublicKey1216, RequestId, RevisionSealId,
-        ShareCiphertext49, Signature64, SlotId, VaultId, WitnessPolicyId, WitnessShareCapsuleV1,
-        WitnessedSlotV1, WitnessedStateV1, recipient_public_key_fingerprint,
+        RotationId, ShareCiphertext49, Signature64, SlotId, VaultId, WitnessPolicyId,
+        WitnessShareCapsuleV1, WitnessedSlotV1, WitnessedStateV1, recipient_public_key_fingerprint,
         witnessed_slot_set_digest,
     },
     witness_v1::{
         ActionManifestV1, ApprovalDecisionKindV1, ApprovalDecisionV1, ApprovalModeV1,
         ApprovalTargetEntryV1, ApprovalTargetV1, CancellerRoleV1, IntendedWitnessV1,
         OperationContextV1, OutputSinkV1, PlatformAssuranceV1, PolicyMaterialBytes,
+        PublicReceiptScopeV1, ReceiptAcknowledgementV1, ReceiptCompletionV1, ReceiptOutcomeV1,
         RegistrationBytes, RequestBytes, RequestCancellationV1, StdinModeV1,
-        VaultPolicyCheckpointV1, WitnessDecisionKindV1, WitnessOperationV1, WitnessReasonV1,
-        WitnessReceiptMaterialV1, signing_key_fingerprint,
+        VaultPolicyCheckpointV1, WitnessDecisionKindV1, WitnessOperationV1,
+        WitnessPolicyRotationV1, WitnessReasonV1, WitnessReceiptMaterialV1, WitnessReceiptV1,
+        WitnessRotationItemV1, WitnessRotationReasonV1, signing_key_fingerprint,
     },
 };
 use sha2::{Digest as _, Sha256};
@@ -33,6 +35,11 @@ use crate::{
         PlatformAssurance, PolicyState, PrincipalPolicyState, WitnessOperation, WitnessPolicy,
         WitnessPolicyDescriptor,
     },
+    witness_operations::{
+        CheckpointPropagationPhase, RotationVerificationErrorKind, verify_checkpoint_propagation,
+        verify_witness_policy_rotation,
+    },
+    witness_receipt::verify_witness_receipt_with_policy,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -2618,6 +2625,155 @@ fn checkpoint_rotation_is_accepted_then_the_replaced_witness_stops_serving() -> 
 }
 
 #[test]
+fn signed_rotation_binds_both_fresh_item_seals_and_the_new_key_period() -> TestResult {
+    let fixture = fixture()?;
+    let mut identity_random = TestRandom::new(0xbbbb_cccc_dddd_eeef);
+    let UnlockedIdentity::Witness(replacement) =
+        make_identity(0x31, PrincipalKind::Witness, &mut identity_random)?
+    else {
+        return Err("replacement role mismatch".into());
+    };
+    let (mut next, _next_checkpoint) =
+        descendant_policy_and_checkpoint_with_replacement(&fixture, Some(&replacement))?;
+    let mut prior = fixture.policy.clone();
+
+    let prior_item = prior
+        .items
+        .get_mut(&fixture.request.item_id)
+        .ok_or("prior item absent")?;
+    let prior_state = prior_item
+        .witnessed_state
+        .as_mut()
+        .ok_or("prior witnessed state absent")?;
+    let mut prior_descriptor_slot = prior_state
+        .slots
+        .first()
+        .cloned()
+        .ok_or("prior body slot absent")?;
+    prior_descriptor_slot.slot_id = SlotId::from_bytes([0x44; 32])?;
+    prior_descriptor_slot.content_role = ContentRole::Descriptor;
+    prior_descriptor_slot.revision = prior_item.descriptor.revision;
+    prior_descriptor_slot.revision_seal_id = prior_item.descriptor.revision_seal_id;
+    prior_state.slots.insert(0, prior_descriptor_slot);
+    prior_state.digest = witnessed_slot_set_digest(&prior_state.slots)?;
+
+    let next_item = next
+        .items
+        .get_mut(&fixture.request.item_id)
+        .ok_or("next item absent")?;
+    next_item.descriptor.key_epoch = 2;
+    next_item.descriptor.revision = 2;
+    next_item.descriptor.revision_seal_id = RevisionSealId::from_bytes([0x46; 32])?;
+    let next_state = next_item
+        .witnessed_state
+        .as_mut()
+        .ok_or("next witnessed state absent")?;
+    let mut next_descriptor_slot = next_state
+        .slots
+        .first()
+        .cloned()
+        .ok_or("next body slot absent")?;
+    next_descriptor_slot.slot_id = SlotId::from_bytes([0x45; 32])?;
+    next_descriptor_slot.content_role = ContentRole::Descriptor;
+    next_descriptor_slot.revision = next_item.descriptor.revision;
+    next_descriptor_slot.revision_seal_id = next_item.descriptor.revision_seal_id;
+    next_state.slots.insert(0, next_descriptor_slot.clone());
+    next_state.digest = witnessed_slot_set_digest(&next_state.slots)?;
+    let next_body_slot = next_state
+        .slots
+        .iter()
+        .find(|slot| slot.content_role == ContentRole::Body)
+        .cloned()
+        .ok_or("next body slot absent")?;
+
+    let prior_policy = prior
+        .witness_policy(&fixture.request.witness_policy_digest)
+        .ok_or("prior witness policy absent")?;
+    let next_policy_digest = next_descriptor_slot.witness_policy_digest.clone();
+    let next_witness_policy = next
+        .witness_policy(&next_policy_digest)
+        .ok_or("next witness policy absent")?;
+    let owner = fixture.actors.owner.public_descriptor()?;
+    let mut rotation = WitnessPolicyRotationV1 {
+        schema: 1,
+        rotation_id: RotationId::from_bytes([0xd5; 32])?,
+        vault_id: prior.vault_id(),
+        genesis_fingerprint: prior.genesis_fingerprint().clone(),
+        prior_vault_policy_sequence: prior.sequence(),
+        prior_vault_policy_hash: prior.terminal_revision_hash().clone(),
+        next_vault_policy_sequence: next.sequence(),
+        next_vault_policy_hash: next.terminal_revision_hash().clone(),
+        prior_witness_policy_id: prior_policy.witness_policy_id,
+        prior_witness_policy_revision: prior_policy.revision,
+        prior_witness_policy_digest: fixture.request.witness_policy_digest.clone(),
+        next_witness_policy_id: next_witness_policy.witness_policy_id,
+        next_witness_policy_revision: next_witness_policy.revision,
+        next_witness_policy_digest: next_policy_digest,
+        reason: WitnessRotationReasonV1::ContributionKey,
+        affected_items: vec![WitnessRotationItemV1 {
+            item_id: fixture.request.item_id,
+            prior_key_epoch: 1,
+            next_key_epoch: 2,
+            next_descriptor_revision: next_descriptor_slot.revision,
+            next_descriptor_revision_seal_id: next_descriptor_slot.revision_seal_id,
+            next_descriptor_capsule_set_digest: next_descriptor_slot.capsule_set_digest.clone(),
+            next_body_revision: next_body_slot.revision,
+            next_body_revision_seal_id: next_body_slot.revision_seal_id,
+            next_body_capsule_set_digest: next_body_slot.capsule_set_digest.clone(),
+        }],
+        issued_at_ms: NOW_MS,
+        owner_id: owner.principal_id,
+        owner_key_fingerprint: signing_key_fingerprint(
+            1,
+            &owner.principal_id,
+            1,
+            &owner.verification_public_key,
+        ),
+        owner_key_epoch: 1,
+        signature: Signature64::new([0; 64]),
+    };
+    rotation.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&rotation.signature_preimage()?)?;
+    assert_eq!(
+        verify_witness_policy_rotation(&prior, &next, &rotation)?,
+        rotation.digest()?
+    );
+
+    let mut incomplete = rotation.clone();
+    incomplete.affected_items[0].next_descriptor_capsule_set_digest = Digest32::new([0xff; 32]);
+    incomplete.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&incomplete.signature_preimage()?)?;
+    let incomplete_error = match verify_witness_policy_rotation(&prior, &next, &incomplete) {
+        Err(error) => error,
+        Ok(_) => return Err("an incomplete descriptor reseal verified".into()),
+    };
+    assert_eq!(
+        incomplete_error.kind(),
+        RotationVerificationErrorKind::IncompleteItemRotation
+    );
+
+    let mut wrong_reason = rotation;
+    wrong_reason.reason = WitnessRotationReasonV1::WitnessSigningKey;
+    wrong_reason.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&wrong_reason.signature_preimage()?)?;
+    let reason_error = match verify_witness_policy_rotation(&prior, &next, &wrong_reason) {
+        Err(error) => error,
+        Ok(_) => return Err("a non-canonical rotation reason verified".into()),
+    };
+    assert_eq!(
+        reason_error.kind(),
+        RotationVerificationErrorKind::InvalidPolicyTransition
+    );
+    Ok(())
+}
+
+#[test]
 fn checkpoint_gap_fork_and_downgrade_have_distinct_safe_outcomes() -> TestResult {
     let fixture = fixture()?;
     let (next_policy, next_checkpoint) = descendant_policy_and_checkpoint(&fixture)?;
@@ -2758,5 +2914,274 @@ fn unpublishable_anchor_is_refused_before_local_state_commit() -> TestResult {
     assert!(store.state.logical.vaults.is_empty());
     assert!(store.state.pending_anchor.is_none());
     assert!(anchor.value.is_none());
+    Ok(())
+}
+
+#[test]
+fn independent_witness_acknowledgements_progress_without_a_global_freshness_claim() -> TestResult {
+    let fixture = fixture()?;
+    let clock = FixedClock {
+        wall_ms: NOW_MS,
+        monotonic_ms: 60,
+    };
+    let mut first_store = empty_store(&fixture);
+    let mut first_anchor = MemoryAnchor::default();
+    let mut first_random = TestRandom::new(0x1111_2222_3333_4444);
+    let first_acknowledgement = WitnessEngine::new(
+        &fixture.actors.witnesses[0],
+        &mut first_store,
+        &mut first_anchor,
+        &clock,
+        &mut first_random,
+    )
+    .register_vault(
+        &fixture.policy,
+        RegistrationBytes::new(vec![1])?,
+        fixture.checkpoint.clone(),
+        PolicyMaterialBytes::new(vec![2])?,
+    )?;
+
+    let proposed = verify_checkpoint_propagation(&fixture.policy, &fixture.checkpoint, &[])?;
+    assert_eq!(proposed.phase, CheckpointPropagationPhase::Proposed);
+    assert!(!proposed.global_freshness_claimed);
+    let partial = verify_checkpoint_propagation(
+        &fixture.policy,
+        &fixture.checkpoint,
+        std::slice::from_ref(&first_acknowledgement),
+    )?;
+    assert_eq!(
+        partial.phase,
+        CheckpointPropagationPhase::PartiallyPropagated
+    );
+    assert_eq!(partial.acknowledged_witness_count, 1);
+    assert!(!partial.global_freshness_claimed);
+
+    let mut second_store = MemoryStore {
+        state: PersistedWitnessState::empty(fixture.actors.witnesses[1].principal_id()),
+        fail_before_commit_once: false,
+        fail_after_commit_once: false,
+        fail_mark_once: false,
+    };
+    let mut second_anchor = MemoryAnchor::default();
+    let mut second_random = TestRandom::new(0x5555_6666_7777_8888);
+    let second_acknowledgement = WitnessEngine::new(
+        &fixture.actors.witnesses[1],
+        &mut second_store,
+        &mut second_anchor,
+        &clock,
+        &mut second_random,
+    )
+    .register_vault(
+        &fixture.policy,
+        RegistrationBytes::new(vec![3])?,
+        fixture.checkpoint.clone(),
+        PolicyMaterialBytes::new(vec![4])?,
+    )?;
+    let durable = verify_checkpoint_propagation(
+        &fixture.policy,
+        &fixture.checkpoint,
+        &[first_acknowledgement.clone(), second_acknowledgement],
+    )?;
+    assert_eq!(durable.phase, CheckpointPropagationPhase::DurablyAccepted);
+    assert_eq!(durable.acknowledged_witness_count, 2);
+    assert!(!durable.global_freshness_claimed);
+
+    let mut forged = first_acknowledgement;
+    let mut signature = *forged.exact_anchor.signature.as_bytes();
+    signature[0] ^= 1;
+    forged.exact_anchor.signature = Signature64::new(signature);
+    forged.anchor_digest = forged.exact_anchor.digest()?;
+    assert!(
+        verify_checkpoint_propagation(&fixture.policy, &fixture.checkpoint, &[forged]).is_err()
+    );
+    Ok(())
+}
+
+fn complete_receipt(fixture: &Fixture) -> TestResult<WitnessReceiptV1> {
+    let clock = FixedClock {
+        wall_ms: NOW_MS,
+        monotonic_ms: 70,
+    };
+    let mut decisions = Vec::new();
+    for (index, identity) in fixture.actors.witnesses.iter().enumerate() {
+        let mut store = MemoryStore {
+            state: PersistedWitnessState::empty(identity.principal_id()),
+            fail_before_commit_once: false,
+            fail_after_commit_once: false,
+            fail_mark_once: false,
+        };
+        let mut anchor = MemoryAnchor::default();
+        let mut random = TestRandom::new(0x9000_u64.saturating_add(index as u64));
+        let mut engine = WitnessEngine::new(identity, &mut store, &mut anchor, &clock, &mut random);
+        engine.register_vault(
+            &fixture.policy,
+            RegistrationBytes::new(vec![u8::try_from(index + 1)?])?,
+            fixture.checkpoint.clone(),
+            PolicyMaterialBytes::new(vec![0xa0_u8.saturating_add(u8::try_from(index)?)])?,
+        )?;
+        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?;
+        let WitnessProgress::Stable(response) = engine.decide(
+            &fixture.policy,
+            &fixture.request,
+            &fixture.manifest,
+            &fixture.approvals,
+        )?
+        else {
+            return Err("complete approvals did not create a stable witness response".into());
+        };
+        decisions.push(response.decision);
+    }
+    decisions.sort_unstable_by_key(|decision| decision.witness_id);
+    let mut counted_approver_ids = fixture
+        .approvals
+        .iter()
+        .map(|decision| decision.approver_id)
+        .collect::<Vec<_>>();
+    counted_approver_ids.sort_unstable();
+    let counted_witness_ids = decisions
+        .iter()
+        .map(|decision| decision.witness_id)
+        .collect();
+    Ok(WitnessReceiptV1 {
+        schema: 1,
+        receipt_id: ReceiptId::from_bytes([0xe1; 32])?,
+        request_signature_preimage: RequestBytes::new(fixture.request.signature_preimage()?)?,
+        client_signature: fixture.request.client_signature.clone(),
+        request_digest: fixture.request.digest()?,
+        action_manifest_digest: fixture.manifest.digest()?,
+        presentation_digest: fixture.manifest.presentation_digest.clone(),
+        public_scope: PublicReceiptScopeV1::from_request(&fixture.request),
+        approval_decisions: fixture.approvals.to_vec(),
+        witness_decisions: decisions,
+        policy_checkpoint: fixture.checkpoint.clone(),
+        witness_policy_material: PolicyMaterialBytes::new(vec![1])?,
+        approval_threshold: 2,
+        witness_threshold: 2,
+        counted_approver_ids,
+        counted_witness_ids,
+        outcome: ReceiptOutcomeV1::Approved,
+        reason: WitnessReasonV1::None,
+        issued_at_ms: NOW_MS,
+        expires_at_ms: fixture.request.expires_at_ms,
+        endpoint_acknowledgement: None,
+        endpoint_completion: None,
+    })
+}
+
+#[test]
+fn complete_receipt_verification_rejects_bit_and_field_substitution_mutations() -> TestResult {
+    let fixture = fixture()?;
+    let receipt = complete_receipt(&fixture)?;
+    let verified =
+        verify_witness_receipt_with_policy(&receipt, &fixture.policy, Some(&fixture.checkpoint))?;
+    assert_eq!(verified.counted_approver_ids.len(), 2);
+    assert_eq!(verified.counted_witness_ids.len(), 2);
+    assert!(
+        verified
+            .witness_generations
+            .iter()
+            .all(|generation| generation.state_generation >= 3)
+    );
+    assert!(!verified.endpoint_acknowledged);
+    assert!(!verified.endpoint_completion_recorded);
+
+    let mut mutations = Vec::new();
+    let mut changed_request_digest = receipt.clone();
+    changed_request_digest.request_digest = Digest32::new([0xf1; 32]);
+    mutations.push(changed_request_digest);
+    let mut substituted_manifest = receipt.clone();
+    substituted_manifest.action_manifest_digest = Digest32::new([0xf2; 32]);
+    mutations.push(substituted_manifest);
+    let mut substituted_scope = receipt.clone();
+    substituted_scope.public_scope.item_id = ItemId::from_bytes([0xf3; 32])?;
+    mutations.push(substituted_scope);
+    let mut substituted_identity = receipt.clone();
+    *substituted_identity
+        .counted_witness_ids
+        .last_mut()
+        .ok_or("counted witness absent")? = PrincipalId::from_bytes([0x7f; 32])?;
+    mutations.push(substituted_identity);
+    let mut changed_approval_bit = receipt.clone();
+    let mut approval_signature = *changed_approval_bit.approval_decisions[0]
+        .signature
+        .as_bytes();
+    approval_signature[0] ^= 1;
+    changed_approval_bit.approval_decisions[0].signature = Signature64::new(approval_signature);
+    mutations.push(changed_approval_bit);
+    let mut changed_generation = receipt.clone();
+    changed_generation.witness_decisions[0].state_generation += 1;
+    mutations.push(changed_generation);
+    let mut changed_checkpoint = receipt.clone();
+    let mut checkpoint_signature = *changed_checkpoint.policy_checkpoint.signature.as_bytes();
+    checkpoint_signature[0] ^= 1;
+    changed_checkpoint.policy_checkpoint.signature = Signature64::new(checkpoint_signature);
+    mutations.push(changed_checkpoint);
+    let mut false_denial = receipt.clone();
+    false_denial.outcome = ReceiptOutcomeV1::Denied;
+    false_denial.reason = WitnessReasonV1::PolicyDenied;
+    mutations.push(false_denial);
+
+    for mutation in mutations {
+        assert!(
+            verify_witness_receipt_with_policy(&mutation, &fixture.policy, None).is_err(),
+            "a receipt evidence mutation verified"
+        );
+    }
+
+    let owner = fixture.actors.owner.public_descriptor()?;
+    let mut endpoint_records = receipt.clone();
+    let mut acknowledgement = ReceiptAcknowledgementV1 {
+        schema: 1,
+        receipt_id: endpoint_records.receipt_id,
+        receipt_core_digest: endpoint_records.core_digest()?,
+        request_digest: endpoint_records.request_digest.clone(),
+        endpoint_principal_id: owner.principal_id,
+        endpoint_key_fingerprint: signing_key_fingerprint(
+            1,
+            &owner.principal_id,
+            1,
+            &owner.verification_public_key,
+        ),
+        endpoint_key_epoch: 1,
+        started_at_ms: NOW_MS + 1,
+        signature: Signature64::new([0; 64]),
+    };
+    acknowledgement.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&acknowledgement.signature_preimage()?)?;
+    let mut completion = ReceiptCompletionV1 {
+        schema: 1,
+        receipt_id: endpoint_records.receipt_id,
+        receipt_core_digest: endpoint_records.core_digest()?,
+        acknowledgement_digest: Some(acknowledgement.digest()?),
+        endpoint_principal_id: owner.principal_id,
+        endpoint_key_fingerprint: acknowledgement.endpoint_key_fingerprint.clone(),
+        endpoint_key_epoch: 1,
+        outcome: ReceiptOutcomeV1::Approved,
+        reason: WitnessReasonV1::None,
+        completed_at_ms: NOW_MS + 2,
+        signature: Signature64::new([0; 64]),
+    };
+    completion.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&completion.signature_preimage()?)?;
+    endpoint_records.endpoint_acknowledgement = Some(acknowledgement);
+    endpoint_records.endpoint_completion = Some(completion);
+    let verified_records =
+        verify_witness_receipt_with_policy(&endpoint_records, &fixture.policy, None)?;
+    assert!(verified_records.endpoint_acknowledged);
+    assert!(verified_records.endpoint_completion_recorded);
+
+    let mut identity_random = TestRandom::new(0xaaaa_9999_8888_7777);
+    let UnlockedIdentity::Witness(replacement) =
+        make_identity(0x31, PrincipalKind::Witness, &mut identity_random)?
+    else {
+        return Err("replacement witness role differs".into());
+    };
+    let (_next_policy, _next_checkpoint) =
+        descendant_policy_and_checkpoint_with_replacement(&fixture, Some(&replacement))?;
+    assert!(verify_witness_receipt_with_policy(&receipt, &fixture.policy, None).is_ok());
     Ok(())
 }

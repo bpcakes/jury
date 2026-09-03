@@ -59,6 +59,18 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::Transfer {
             command: TransferCommand::Status,
         } => transfer_status(&cli, &environment, &current, protection),
+        Command::Receipt {
+            command: ReceiptCommand::Inspect(arguments),
+        } => receipt_inspect(arguments),
+        Command::Receipt {
+            command: ReceiptCommand::Verify(arguments),
+        } => receipt_verify(arguments),
+        Command::Witness {
+            command: WitnessCommand::PolicyMaterial(arguments),
+        } => witness_policy_material(&cli, arguments, &environment, &current),
+        Command::Witness {
+            command: WitnessCommand::PolicyStatus(arguments),
+        } => witness_policy_status(arguments),
         Command::Item {
             command: ItemCommand::Create(arguments),
         } => item_create(&cli, arguments, &environment, &current, protection),
