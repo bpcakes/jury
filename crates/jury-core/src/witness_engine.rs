@@ -456,8 +456,9 @@ pub enum CancellationProgress {
 }
 
 /// Value-free state exported only after exact database/external-anchor
-/// reconciliation. Every checkpoint acknowledgement remains scoped to this
-/// one witness; callers must not infer aggregate freshness from it.
+/// reconciliation. One signed anchor contains all per-vault watermarks, so the
+/// status payload grows linearly rather than cloning that anchor once per
+/// vault. Callers must not infer aggregate freshness across witnesses.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WitnessOperationalStatus {
@@ -466,7 +467,7 @@ pub struct WitnessOperationalStatus {
     pub replay_record_count: usize,
     pub compactable_replay_record_count: usize,
     pub replay_retain_through_ms: u64,
-    pub checkpoint_acknowledgements: Vec<WitnessCheckpointAcknowledgementV1>,
+    pub published_anchor: Option<WitnessStateAnchorV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -540,12 +541,6 @@ where
         let now_ms = self.clock.wall_time_ms();
         let state = self.ready_state()?;
         self.require_safe_clock(&state, now_ms)?;
-        let checkpoint_acknowledgements = state
-            .logical
-            .vaults
-            .keys()
-            .map(|vault_id| checkpoint_acknowledgement(&state, vault_id))
-            .collect::<Result<Vec<_>, _>>()?;
         Ok(WitnessOperationalStatus {
             witness_id: state.logical.witness_id,
             state_generation: state.logical.state_generation,
@@ -563,7 +558,7 @@ where
                 .map(|entry| entry.retain_through_ms)
                 .max()
                 .unwrap_or(0),
-            checkpoint_acknowledgements,
+            published_anchor: state.published_anchor,
         })
     }
 

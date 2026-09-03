@@ -294,10 +294,7 @@ fn assert_operator_status(client: &Client, witness_base: &str) -> TestResult {
         .json()?;
     assert_eq!(status["scope"], "this-witness-only");
     assert_eq!(status["global_freshness_claimed"], false);
-    assert_eq!(
-        status["operational"]["checkpoint_acknowledgements"],
-        json!([])
-    );
+    assert_eq!(status["operational"]["published_anchor"], json!(null));
     let text = status.to_string();
     for forbidden in [
         "policy_material",

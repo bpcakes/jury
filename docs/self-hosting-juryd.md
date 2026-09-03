@@ -133,7 +133,7 @@ Witness endpoints are:
 | `GET /readyz` | none | Exact database/anchor/identity/clock readiness |
 | `POST /v1/operator/register` | operator | Register exact public policy material, registration bytes, and checkpoint |
 | `POST /v1/operator/checkpoint` | operator | Advance an exact registered checkpoint |
-| `GET /v1/operator/status` | operator | Return value-free state counts and this witness's exact acknowledged checkpoints |
+| `GET /v1/operator/status` | operator | Return value-free state counts and this witness's one signed anchor containing its exact per-vault checkpoint watermarks |
 | `POST /v1/operator/replay/compact` | operator | Compact only records past their retention horizon |
 | `POST /v1/requests/reserve` | client | Durably reserve one request ID |
 | `POST /v1/requests/decide` | client | Evaluate exact request, manifest, and approvals |

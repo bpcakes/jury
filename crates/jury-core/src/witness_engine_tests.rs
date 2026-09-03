@@ -3061,6 +3061,20 @@ fn independent_witness_acknowledgements_progress_without_a_global_freshness_clai
         fixture.checkpoint.clone(),
         PolicyMaterialBytes::new(vec![2])?,
     )?;
+    let first_status = WitnessEngine::new(
+        &fixture.actors.witnesses[0],
+        &mut first_store,
+        &mut first_anchor,
+        &clock,
+        &mut first_random,
+    )
+    .operational_status()?;
+    let published = first_status
+        .published_anchor
+        .as_ref()
+        .ok_or("registered witness status omitted its signed anchor")?;
+    assert_eq!(published.vault_high_watermarks.len(), 1);
+    assert_eq!(published, &first_acknowledgement.exact_anchor);
 
     let proposed = verify_checkpoint_propagation(&fixture.policy, &fixture.checkpoint, &[])?;
     assert_eq!(proposed.phase, CheckpointPropagationPhase::Proposed);
