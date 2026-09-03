@@ -78,9 +78,19 @@ fn verified_output(verified: &VerifiedWitnessReceipt) -> Result<CommandOutput, C
             "receipt_core_digest": hex(verified.receipt_core_digest.as_bytes()),
             "request_id": hex(verified.request_id.as_bytes()),
             "request_digest": hex(verified.request_digest.as_bytes()),
+            "vault_id": hex(verified.vault_id.as_bytes()),
+            "genesis_fingerprint": hex(verified.genesis_fingerprint.as_bytes()),
+            "vault_policy_sequence": verified.vault_policy_sequence,
+            "vault_policy_hash": hex(verified.vault_policy_hash.as_bytes()),
+            "witness_policy_id": hex(verified.witness_policy_id.as_bytes()),
+            "witness_policy_revision": verified.witness_policy_revision,
+            "witness_policy_digest": hex(verified.witness_policy_digest.as_bytes()),
             "policy_checkpoint_digest": hex(verified.policy_checkpoint_digest.as_bytes()),
             "outcome": verified.outcome,
-            "reason": verified.reason,
+            "reported_reason": verified.reported_reason,
+            "reported_issued_at_ms": verified.reported_issued_at_ms,
+            "receipt_core_endpoint_authenticated": verified.receipt_core_endpoint_authenticated,
+            "retained_checkpoint_matched": verified.retained_checkpoint_matched,
             "counted_approver_ids": verified.counted_approver_ids.iter()
                 .map(|id| hex(id.as_bytes())).collect::<Vec<_>>(),
             "counted_witness_ids": verified.counted_witness_ids.iter()
@@ -88,7 +98,8 @@ fn verified_output(verified: &VerifiedWitnessReceipt) -> Result<CommandOutput, C
             "witness_generations": generations,
             "endpoint_acknowledgement_verified": verified.endpoint_acknowledged,
             "endpoint_completion_verified": verified.endpoint_completion_recorded,
-            "cryptographically_verified": true,
+            "signed_decision_evidence_verified": true,
+            "embedded_policy_chain_verified": true,
             "offline": true,
             "network_accessed": false,
             "identity_unlocked": false,
@@ -98,8 +109,16 @@ fn verified_output(verified: &VerifiedWitnessReceipt) -> Result<CommandOutput, C
         lines: vec![
             "Receipt evidence verified offline".to_owned(),
             format!(
-                "Outcome: {:?}; reason: {:?}",
-                verified.outcome, verified.reason
+                "Outcome from signed quorum evidence: {:?}",
+                verified.outcome
+            ),
+            format!(
+                "Collector-reported reason: {:?}; receipt core endpoint-authenticated: {}",
+                verified.reported_reason, verified.receipt_core_endpoint_authenticated
+            ),
+            format!(
+                "Trust root: embedded policy chain verified; retained checkpoint matched: {}",
+                verified.retained_checkpoint_matched
             ),
             format!(
                 "Counted identities: {} approver; {} witness",

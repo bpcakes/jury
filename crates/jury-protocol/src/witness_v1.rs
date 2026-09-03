@@ -2835,7 +2835,9 @@ impl WitnessReceiptV1 {
             || !strictly_sorted_unique(&self.counted_approver_ids, |left, right| left < right)
             || !strictly_sorted_unique(&self.counted_witness_ids, |left, right| left < right)
             || self.issued_at_ms == 0
-            || self.expires_at_ms <= self.issued_at_ms
+            || self.expires_at_ms == 0
+            || (self.outcome == ReceiptOutcomeV1::Approved
+                && self.expires_at_ms <= self.issued_at_ms)
             || !outcome_matches
         {
             return Err(invalid_format());

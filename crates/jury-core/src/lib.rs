@@ -23,6 +23,7 @@ pub mod transfer;
 pub mod witness_engine;
 pub mod witness_operations;
 pub mod witness_receipt;
+mod witness_validation;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";

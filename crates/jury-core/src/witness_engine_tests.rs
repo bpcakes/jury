@@ -40,6 +40,7 @@ use crate::{
         verify_witness_policy_rotation,
     },
     witness_receipt::verify_witness_receipt_with_policy,
+    witness_validation::{RequestPolicyError, validate_request_policy},
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -3084,6 +3085,8 @@ fn complete_receipt_verification_rejects_bit_and_field_substitution_mutations() 
     );
     assert!(!verified.endpoint_acknowledged);
     assert!(!verified.endpoint_completion_recorded);
+    assert!(!verified.receipt_core_endpoint_authenticated);
+    assert!(verified.retained_checkpoint_matched);
 
     let mut mutations = Vec::new();
     let mut changed_request_digest = receipt.clone();
@@ -3173,6 +3176,7 @@ fn complete_receipt_verification_rejects_bit_and_field_substitution_mutations() 
         verify_witness_receipt_with_policy(&endpoint_records, &fixture.policy, None)?;
     assert!(verified_records.endpoint_acknowledged);
     assert!(verified_records.endpoint_completion_recorded);
+    assert!(verified_records.receipt_core_endpoint_authenticated);
 
     let mut identity_random = TestRandom::new(0xaaaa_9999_8888_7777);
     let UnlockedIdentity::Witness(replacement) =
@@ -3183,5 +3187,85 @@ fn complete_receipt_verification_rejects_bit_and_field_substitution_mutations() 
     let (_next_policy, _next_checkpoint) =
         descendant_policy_and_checkpoint_with_replacement(&fixture, Some(&replacement))?;
     assert!(verify_witness_receipt_with_policy(&receipt, &fixture.policy, None).is_ok());
+    Ok(())
+}
+
+#[test]
+fn shared_request_policy_validation_rejects_role_and_lifetime_drift() -> TestResult {
+    let fixture = fixture()?;
+
+    let mut wrong_role = fixture.request.clone();
+    wrong_role.requested_access_role = AccessRole::Reader;
+    wrong_role.client_signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&wrong_role.signature_preimage()?)?;
+    assert!(matches!(
+        validate_request_policy(&fixture.policy, &wrong_role),
+        Err(RequestPolicyError::PolicyDenied)
+    ));
+
+    let mut overlong = fixture.request.clone();
+    overlong.expires_at_ms = overlong.expires_at_ms.saturating_add(1);
+    overlong.client_signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&overlong.signature_preimage()?)?;
+    assert!(matches!(
+        validate_request_policy(&fixture.policy, &overlong),
+        Err(RequestPolicyError::StalePolicy)
+    ));
+    Ok(())
+}
+
+#[test]
+fn receipt_accepts_engine_compatible_skew_and_shorter_decision_expiry() -> TestResult {
+    let fixture = fixture()?;
+    let mut receipt = complete_receipt(&fixture)?;
+    let earlier = fixture.request.issued_at_ms.saturating_sub(30_000);
+
+    receipt.approval_decisions[0].issued_at_ms = earlier;
+    receipt.approval_decisions[0].expires_at_ms = fixture.request.expires_at_ms - 1;
+    receipt.approval_decisions[0].signature = fixture.actors.approvers[0]
+        .sign_validated_approval(&receipt.approval_decisions[0].signature_preimage()?)?;
+    receipt.witness_decisions[0].issued_at_ms = earlier;
+    receipt.witness_decisions[0].expires_at_ms = fixture.request.expires_at_ms - 1;
+    receipt.witness_decisions[0].signature = fixture.actors.witnesses[0]
+        .sign_validated_decision(&receipt.witness_decisions[0].signature_preimage()?)?;
+
+    verify_witness_receipt_with_policy(&receipt, &fixture.policy, None)?;
+    Ok(())
+}
+
+#[test]
+fn expired_denial_reports_unauthenticated_collector_reason() -> TestResult {
+    let fixture = fixture()?;
+    let mut receipt = complete_receipt(&fixture)?;
+    let mut denial = receipt.witness_decisions.remove(0);
+    denial.decision = WitnessDecisionKindV1::Deny;
+    denial.reason = WitnessReasonV1::Expired;
+    denial.issued_at_ms = fixture.request.expires_at_ms.saturating_add(1);
+    denial.contribution_digest = None;
+    denial.share_index = None;
+    denial.share_commitment = None;
+    denial.signature =
+        fixture.actors.witnesses[0].sign_validated_decision(&denial.signature_preimage()?)?;
+    receipt.witness_decisions = vec![denial];
+    receipt.counted_witness_ids.clear();
+    receipt.outcome = ReceiptOutcomeV1::Denied;
+    receipt.reason = WitnessReasonV1::Expired;
+    receipt.issued_at_ms = fixture.request.expires_at_ms.saturating_add(2);
+
+    let verified =
+        verify_witness_receipt_with_policy(&receipt, &fixture.policy, Some(&fixture.checkpoint))?;
+    assert_eq!(verified.outcome, ReceiptOutcomeV1::Denied);
+    assert_eq!(verified.reported_reason, WitnessReasonV1::Expired);
+    assert!(!verified.receipt_core_endpoint_authenticated);
+    assert!(verified.retained_checkpoint_matched);
+
+    receipt.reason = WitnessReasonV1::Unavailable;
+    let relabelled = verify_witness_receipt_with_policy(&receipt, &fixture.policy, None)?;
+    assert_eq!(relabelled.reported_reason, WitnessReasonV1::Unavailable);
+    assert!(!relabelled.receipt_core_endpoint_authenticated);
     Ok(())
 }

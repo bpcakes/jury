@@ -10,32 +10,32 @@ use std::{collections::BTreeMap, fmt};
 
 use jury_protocol::{
     vault_v1::{
-        BoundedBytes, Digest32, PrincipalDescriptorV1, PrincipalId, PrincipalKind, RequestId,
-        ResponseId, Signature64, VaultId, WitnessShareCapsuleV1,
+        BoundedBytes, Digest32, PrincipalDescriptorV1, PrincipalId, RequestId, ResponseId,
+        Signature64, VaultId, WitnessShareCapsuleV1,
     },
     witness_v1::{
         ACCEPTED_CLOCK_SKEW_MS, ActionManifestV1, ApprovalBytes, ApprovalDecisionKindV1,
-        ApprovalDecisionV1, CancellationBytes, CancellerRoleV1, IntendedWitnessV1,
-        MAX_RECORDED_APPROVALS, MAX_REPLAY_RECORDS_PER_SERVICE, MAX_REPLAY_RECORDS_PER_VAULT,
-        PolicyMaterialBytes, REPLAY_RETENTION_MS, RegistrationBytes, ReplayStateV1,
-        RequestCancellationV1, VaultHighWatermarkV1, VaultPolicyCheckpointV1,
-        WitnessCheckpointAcknowledgementV1, WitnessContributionEnvelopeV1, WitnessDatabaseStateV1,
-        WitnessDecisionKindV1, WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1,
-        WitnessReceiptMaterialV1, WitnessReplayRecordV1, WitnessResponseV1, WitnessStateAnchorV1,
-        WitnessVaultStateV1, signing_key_fingerprint,
+        ApprovalDecisionV1, CancellationBytes, CancellerRoleV1, MAX_RECORDED_APPROVALS,
+        MAX_REPLAY_RECORDS_PER_SERVICE, MAX_REPLAY_RECORDS_PER_VAULT, PolicyMaterialBytes,
+        REPLAY_RETENTION_MS, RegistrationBytes, ReplayStateV1, RequestCancellationV1,
+        VaultHighWatermarkV1, VaultPolicyCheckpointV1, WitnessCheckpointAcknowledgementV1,
+        WitnessContributionEnvelopeV1, WitnessDatabaseStateV1, WitnessDecisionKindV1,
+        WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1, WitnessReceiptMaterialV1,
+        WitnessReplayRecordV1, WitnessResponseV1, WitnessStateAnchorV1, WitnessVaultStateV1,
+        signing_key_fingerprint,
     },
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     crypto,
-    domain::Capability,
     entropy::RandomSource,
     identity::{WitnessContributionTarget, WitnessIdentity},
     policy::{
-        DescriptorStatus, PolicyError, PolicyErrorKind, PolicyState, WitnessAccessRule,
-        WitnessPolicy, core_operation, platform_assurance_tag, protocol_approval_mode,
+        DescriptorStatus, PolicyState, WitnessAccessRule, WitnessPolicy, platform_assurance_tag,
+        protocol_approval_mode,
     },
+    witness_validation::{RequestPolicyError, validate_request_policy},
 };
 
 const ZERO_DIGEST: Digest32 = Digest32::new([0; 32]);
@@ -1306,134 +1306,28 @@ where
         if request.policy_checkpoint_digest != checkpoint_digest {
             return Err(refused(WitnessReasonV1::StalePolicy));
         }
-        if request.vault_id != policy.vault_id()
-            || request.genesis_fingerprint != *policy.genesis_fingerprint()
-            || request.vault_policy_sequence != policy.sequence()
-            || request.vault_policy_hash != *policy.terminal_revision_hash()
-        {
-            return Err(refused(WitnessReasonV1::StalePolicy));
-        }
-
         validate_request_time(request, now_ms)?;
-        let request_lifetime = request
-            .expires_at_ms
-            .checked_sub(request.issued_at_ms)
-            .ok_or_else(|| refused(WitnessReasonV1::Invalid))?;
-        let operation = core_operation(request.operation);
-        let rule = policy
-            .witness_access_rule(&request.item_id, operation)
-            .map_err(map_witness_rule_error)?;
-        if request.witness_policy_id != rule.policy_id
-            || request.witness_policy_revision != rule.policy_revision
-            || request.witness_policy_digest != rule.policy_digest
-            || request_lifetime > rule.allowed_request_lifetime_ms
-        {
-            return Err(refused(WitnessReasonV1::StalePolicy));
-        }
-        if manifest.timeout_ms > rule.max_timeout_ms
-            || manifest.output_limit_bytes > rule.max_output_bytes
-            || manifest.approval_target.entries.len() > usize::from(rule.max_target_count)
+        let validated =
+            validate_request_policy(policy, request).map_err(map_request_policy_error)?;
+        if manifest.timeout_ms > validated.rule.max_timeout_ms
+            || manifest.output_limit_bytes > validated.rule.max_output_bytes
+            || manifest.approval_target.entries.len() > usize::from(validated.rule.max_target_count)
             || manifest.platform_assurance.tag()
-                < platform_assurance_tag(rule.required_platform_assurance)
+                < platform_assurance_tag(validated.rule.required_platform_assurance)
         {
             return Err(refused(WitnessReasonV1::WorkloadExceeded));
         }
-        validate_automatic_rule(manifest, &rule)?;
+        validate_automatic_rule(manifest, &validated.rule)?;
 
-        let capability = operation_capability(request.operation);
-        let access = policy.access(
-            &request.item_id,
-            &request.requester_principal_id,
-            capability,
-        );
-        if !access.allowed || access.effective_role != Some(request.requested_access_role) {
-            return Err(refused(WitnessReasonV1::PolicyDenied));
-        }
-        let requester = policy
-            .principal(&request.requester_principal_id)
-            .ok_or_else(|| refused(WitnessReasonV1::PolicyDenied))?;
-        if matches!(
-            requester.descriptor.principal_kind,
-            PrincipalKind::Approver | PrincipalKind::Witness
-        ) || request.requester_signing_key_epoch != 1
-            || request.requester_signing_key_fingerprint
-                != signing_key_fingerprint(
-                    1,
-                    &request.requester_principal_id,
-                    1,
-                    &requester.descriptor.verification_public_key,
-                )
-        {
-            return Err(refused(WitnessReasonV1::InvalidSignature));
-        }
-        crypto::verify_bytes(
-            &requester.descriptor.verification_public_key,
-            &request
-                .signature_preimage()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?,
-            &request.client_signature,
-        )
-        .map_err(|_| refused(WitnessReasonV1::InvalidSignature))?;
-
-        let witness_policy = policy
-            .witness_policy(&request.witness_policy_digest)
-            .ok_or_else(|| refused(WitnessReasonV1::StalePolicy))?
-            .clone();
-        let expected_witnesses = witness_policy
-            .witness_descriptors
-            .iter()
-            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
-            .map(|descriptor| IntendedWitnessV1 {
-                witness_id: descriptor.witness_id,
-                share_index: descriptor.share_index,
-                signing_key_fingerprint: descriptor.signing_key_fingerprint.clone(),
-                contribution_key_fingerprint: descriptor.contribution_key_fingerprint.clone(),
-            })
-            .collect::<Vec<_>>();
-        if request.intended_witness_set != expected_witnesses
-            || request
-                .intended_witness_set_digest()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?
-                != policy
-                    .intended_witness_set_digest(&request.item_id)
-                    .map_err(|_| refused(WitnessReasonV1::StalePolicy))?
-        {
-            return Err(refused(WitnessReasonV1::WrongScope));
-        }
-
-        let item = policy
-            .item(&request.item_id)
-            .ok_or_else(|| refused(WitnessReasonV1::WrongScope))?;
-        if item.key_epoch != request.key_epoch
-            || item.access_mode() != Some(request.item_access_mode)
-        {
-            return Err(refused(WitnessReasonV1::WrongScope));
-        }
-        let slot = item
-            .witnessed_state
-            .as_ref()
-            .and_then(|witnessed| {
-                witnessed.slots.iter().find(|slot| {
-                    slot.slot_id == request.slot_id
-                        && slot.content_role == request.content_role
-                        && slot.revision == request.revision
-                        && slot.revision_seal_id == request.revision_seal_id
-                        && slot.key_epoch == request.key_epoch
-                        && slot.item_access_mode == request.item_access_mode
-                        && slot.vault_policy_sequence == request.vault_policy_sequence
-                        && slot.witness_policy_id == request.witness_policy_id
-                        && slot.witness_policy_revision == request.witness_policy_revision
-                        && slot.witness_policy_digest == request.witness_policy_digest
-                })
-            })
-            .ok_or_else(|| refused(WitnessReasonV1::WrongScope))?;
-        let capsule = slot
+        let capsule = validated
+            .slot
             .capsules
             .iter()
             .find(|capsule| capsule.witness_id == self.identity.principal_id())
             .ok_or_else(|| refused(WitnessReasonV1::PolicyDenied))?
             .clone();
-        let witness_descriptor = witness_policy
+        let witness_descriptor = validated
+            .policy
             .witness_descriptors
             .iter()
             .find(|descriptor| {
@@ -1451,16 +1345,14 @@ where
             || witness_descriptor.share_index != capsule.share_index
             || witness_descriptor.contribution_key_fingerprint
                 != capsule.contribution_key_fingerprint
-            || slot.threshold != rule.witness_threshold
-            || usize::from(slot.member_count) != expected_witnesses.len()
         {
             return Err(refused(WitnessReasonV1::PolicyDenied));
         }
         Ok(ValidatedRequest {
-            rule,
-            policy: witness_policy,
+            rule: validated.rule,
+            policy: validated.policy,
             capsule,
-            capsule_set_digest: slot.capsule_set_digest.clone(),
+            capsule_set_digest: validated.slot.capsule_set_digest,
         })
     }
 
@@ -1471,9 +1363,6 @@ where
         request: &jury_protocol::witness_v1::WitnessRequestV1,
         now_ms: u64,
     ) -> Result<(), WitnessEngineError> {
-        request
-            .validate_shape()
-            .map_err(|_| refused(WitnessReasonV1::Invalid))?;
         validate_request_time(request, now_ms)?;
         let registered = state
             .logical
@@ -1486,35 +1375,12 @@ where
                 .current_checkpoint
                 .digest()
                 .map_err(|_| refused(WitnessReasonV1::Invalid))?
-            || request.vault_id != policy.vault_id()
-            || request.genesis_fingerprint != *policy.genesis_fingerprint()
-            || request.vault_policy_sequence != policy.sequence()
-            || request.vault_policy_hash != *policy.terminal_revision_hash()
         {
             return Err(refused(WitnessReasonV1::StalePolicy));
         }
-        let requester = policy
-            .principal(&request.requester_principal_id)
-            .ok_or_else(|| refused(WitnessReasonV1::PolicyDenied))?;
-        if request.requester_signing_key_epoch != 1
-            || request.requester_signing_key_fingerprint
-                != signing_key_fingerprint(
-                    1,
-                    &request.requester_principal_id,
-                    1,
-                    &requester.descriptor.verification_public_key,
-                )
-        {
-            return Err(refused(WitnessReasonV1::InvalidSignature));
-        }
-        crypto::verify_bytes(
-            &requester.descriptor.verification_public_key,
-            &request
-                .signature_preimage()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?,
-            &request.client_signature,
-        )
-        .map_err(|_| refused(WitnessReasonV1::InvalidSignature))
+        validate_request_policy(policy, request)
+            .map(|_| ())
+            .map_err(map_request_policy_error)
     }
 
     fn denial_response(
@@ -2046,21 +1912,6 @@ fn random_response_id(source: &mut impl RandomSource) -> Result<ResponseId, Witn
     ResponseId::from_bytes(bytes).map_err(|_| refused(WitnessReasonV1::InternalFailure))
 }
 
-const fn operation_capability(operation: WitnessOperationV1) -> Capability {
-    match operation {
-        WitnessOperationV1::ReadStdout
-        | WitnessOperationV1::TemplateInjection
-        | WitnessOperationV1::ChildEnvironment
-        | WitnessOperationV1::ChildStdin => Capability::Read,
-        WitnessOperationV1::WritePrivateFile
-        | WitnessOperationV1::ItemMutation
-        | WitnessOperationV1::Backup => Capability::Write,
-        WitnessOperationV1::Recovery | WitnessOperationV1::AdministrativeRekey => {
-            Capability::Administer
-        }
-    }
-}
-
 fn validate_public_request(
     policy: &PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
@@ -2068,7 +1919,7 @@ fn validate_public_request(
     manifest: &ActionManifestV1,
 ) -> Result<ValidatedPublicRequest, WitnessEngineError> {
     validate_request_manifest(request, manifest)?;
-    let witness_policy = validate_checkpoint_public(policy, checkpoint)?.clone();
+    validate_checkpoint_public(policy, checkpoint)?;
     let checkpoint_digest = checkpoint
         .digest()
         .map_err(|_| refused(WitnessReasonV1::Invalid))?;
@@ -2084,119 +1935,20 @@ fn validate_public_request(
         return Err(refused(WitnessReasonV1::WrongScope));
     }
 
-    let request_lifetime = request
-        .expires_at_ms
-        .checked_sub(request.issued_at_ms)
-        .ok_or_else(|| refused(WitnessReasonV1::Invalid))?;
-    let rule = policy
-        .witness_access_rule(&request.item_id, core_operation(request.operation))
-        .map_err(map_witness_rule_error)?;
-    if request.witness_policy_id != rule.policy_id
-        || request.witness_policy_revision != rule.policy_revision
-        || request.witness_policy_digest != rule.policy_digest
-        || request_lifetime > rule.allowed_request_lifetime_ms
-    {
-        return Err(refused(WitnessReasonV1::StalePolicy));
-    }
-    if manifest.timeout_ms > rule.max_timeout_ms
-        || manifest.output_limit_bytes > rule.max_output_bytes
-        || manifest.approval_target.entries.len() > usize::from(rule.max_target_count)
+    let validated = validate_request_policy(policy, request).map_err(map_request_policy_error)?;
+    if manifest.timeout_ms > validated.rule.max_timeout_ms
+        || manifest.output_limit_bytes > validated.rule.max_output_bytes
+        || manifest.approval_target.entries.len() > usize::from(validated.rule.max_target_count)
         || manifest.platform_assurance.tag()
-            < platform_assurance_tag(rule.required_platform_assurance)
+            < platform_assurance_tag(validated.rule.required_platform_assurance)
     {
         return Err(refused(WitnessReasonV1::WorkloadExceeded));
     }
-    validate_automatic_rule(manifest, &rule)?;
-
-    let access = policy.access(
-        &request.item_id,
-        &request.requester_principal_id,
-        operation_capability(request.operation),
-    );
-    if !access.allowed || access.effective_role != Some(request.requested_access_role) {
-        return Err(refused(WitnessReasonV1::PolicyDenied));
-    }
-    let requester = policy
-        .principal(&request.requester_principal_id)
-        .ok_or_else(|| refused(WitnessReasonV1::PolicyDenied))?;
-    if matches!(
-        requester.descriptor.principal_kind,
-        PrincipalKind::Approver | PrincipalKind::Witness
-    ) || request.requester_signing_key_epoch != 1
-        || request.requester_signing_key_fingerprint
-            != signing_key_fingerprint(
-                1,
-                &request.requester_principal_id,
-                1,
-                &requester.descriptor.verification_public_key,
-            )
-    {
-        return Err(refused(WitnessReasonV1::InvalidSignature));
-    }
-    crypto::verify_bytes(
-        &requester.descriptor.verification_public_key,
-        &request
-            .signature_preimage()
-            .map_err(|_| refused(WitnessReasonV1::Invalid))?,
-        &request.client_signature,
-    )
-    .map_err(|_| refused(WitnessReasonV1::InvalidSignature))?;
-
-    let expected_witnesses = witness_policy
-        .witness_descriptors
-        .iter()
-        .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
-        .map(|descriptor| IntendedWitnessV1 {
-            witness_id: descriptor.witness_id,
-            share_index: descriptor.share_index,
-            signing_key_fingerprint: descriptor.signing_key_fingerprint.clone(),
-            contribution_key_fingerprint: descriptor.contribution_key_fingerprint.clone(),
-        })
-        .collect::<Vec<_>>();
-    if request.intended_witness_set != expected_witnesses
-        || request
-            .intended_witness_set_digest()
-            .map_err(|_| refused(WitnessReasonV1::Invalid))?
-            != policy
-                .intended_witness_set_digest(&request.item_id)
-                .map_err(|_| refused(WitnessReasonV1::StalePolicy))?
-    {
-        return Err(refused(WitnessReasonV1::WrongScope));
-    }
-
-    let item = policy
-        .item(&request.item_id)
-        .ok_or_else(|| refused(WitnessReasonV1::WrongScope))?;
-    if item.key_epoch != request.key_epoch || item.access_mode() != Some(request.item_access_mode) {
-        return Err(refused(WitnessReasonV1::WrongScope));
-    }
-    let slot = item
-        .witnessed_state
-        .as_ref()
-        .and_then(|witnessed| {
-            witnessed.slots.iter().find(|slot| {
-                slot.slot_id == request.slot_id
-                    && slot.content_role == request.content_role
-                    && slot.revision == request.revision
-                    && slot.revision_seal_id == request.revision_seal_id
-                    && slot.key_epoch == request.key_epoch
-                    && slot.item_access_mode == request.item_access_mode
-                    && slot.vault_policy_sequence == request.vault_policy_sequence
-                    && slot.witness_policy_id == request.witness_policy_id
-                    && slot.witness_policy_revision == request.witness_policy_revision
-                    && slot.witness_policy_digest == request.witness_policy_digest
-            })
-        })
-        .ok_or_else(|| refused(WitnessReasonV1::WrongScope))?;
-    if slot.threshold != rule.witness_threshold
-        || usize::from(slot.member_count) != expected_witnesses.len()
-    {
-        return Err(refused(WitnessReasonV1::WrongScope));
-    }
+    validate_automatic_rule(manifest, &validated.rule)?;
     Ok(ValidatedPublicRequest {
-        rule,
-        policy: witness_policy,
-        slot: slot.clone(),
+        rule: validated.rule,
+        policy: validated.policy,
+        slot: validated.slot,
     })
 }
 
@@ -2394,12 +2146,13 @@ pub fn validate_receipt_material(
     Ok(())
 }
 
-fn map_witness_rule_error(error: PolicyError) -> WitnessEngineError {
-    match error.kind() {
-        PolicyErrorKind::UnknownItem => refused(WitnessReasonV1::WrongScope),
-        PolicyErrorKind::Unauthorized => refused(WitnessReasonV1::WrongOperation),
-        PolicyErrorKind::MissingWitnessPolicy => refused(WitnessReasonV1::StalePolicy),
-        _ => refused(WitnessReasonV1::PolicyDenied),
+const fn map_request_policy_error(error: RequestPolicyError) -> WitnessEngineError {
+    match error {
+        RequestPolicyError::Invalid => refused(WitnessReasonV1::Invalid),
+        RequestPolicyError::InvalidSignature => refused(WitnessReasonV1::InvalidSignature),
+        RequestPolicyError::PolicyDenied => refused(WitnessReasonV1::PolicyDenied),
+        RequestPolicyError::StalePolicy => refused(WitnessReasonV1::StalePolicy),
+        RequestPolicyError::WrongScope => refused(WitnessReasonV1::WrongScope),
     }
 }
 

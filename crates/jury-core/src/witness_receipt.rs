@@ -7,12 +7,14 @@
 use std::fmt;
 
 use jury_protocol::{
-    vault_v1::{Digest32, PolicyJournalV1, PrincipalId, ReceiptId, RequestId},
+    vault_v1::{
+        Digest32, PolicyJournalV1, PrincipalId, ReceiptId, RequestId, VaultId, WitnessPolicyId,
+    },
     witness_v1::{
-        ApprovalDecisionKindV1, ApprovalDecisionV1, PolicyMaterialBytes, PublicReceiptScopeV1,
-        ReceiptOutcomeV1, RequestBytes, VaultPolicyCheckpointV1, WitnessDecisionKindV1,
-        WitnessDecisionV1, WitnessReasonV1, WitnessReceiptV1, WitnessRequestV1,
-        signing_key_fingerprint,
+        ACCEPTED_CLOCK_SKEW_MS, ApprovalDecisionKindV1, ApprovalDecisionV1, PolicyMaterialBytes,
+        PublicReceiptScopeV1, ReceiptOutcomeV1, RequestBytes, VaultPolicyCheckpointV1,
+        WitnessDecisionKindV1, WitnessDecisionV1, WitnessReasonV1, WitnessReceiptV1,
+        WitnessRequestV1, signing_key_fingerprint,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -23,6 +25,7 @@ use crate::{
         ApprovalMode, DescriptorStatus, PolicyState, WitnessPolicy, core_operation,
         replay_policy_with_witness_policies,
     },
+    witness_validation::{RequestPolicyError, validate_request_policy},
 };
 
 /// Exact public policy bundle embedded by the self-hosted witness protocol.
@@ -113,9 +116,19 @@ pub struct VerifiedWitnessReceipt {
     pub receipt_core_digest: Digest32,
     pub request_id: RequestId,
     pub request_digest: Digest32,
+    pub vault_id: VaultId,
+    pub genesis_fingerprint: Digest32,
+    pub vault_policy_sequence: u64,
+    pub vault_policy_hash: Digest32,
+    pub witness_policy_id: WitnessPolicyId,
+    pub witness_policy_revision: u64,
+    pub witness_policy_digest: Digest32,
     pub policy_checkpoint_digest: Digest32,
     pub outcome: ReceiptOutcomeV1,
-    pub reason: WitnessReasonV1,
+    pub reported_reason: WitnessReasonV1,
+    pub reported_issued_at_ms: u64,
+    pub receipt_core_endpoint_authenticated: bool,
+    pub retained_checkpoint_matched: bool,
     pub counted_approver_ids: Vec<PrincipalId>,
     pub counted_witness_ids: Vec<PrincipalId>,
     pub witness_generations: Vec<VerifiedWitnessGeneration>,
@@ -239,11 +252,11 @@ pub fn verify_witness_receipt(
     verify_witness_receipt_with_policy(receipt, &policy, checkpoint)
 }
 
-/// Verifies a receipt against policy state that the caller has already
-/// authenticated from the exact retained journal material. This entry point
-/// exists for applications that retain that material separately; it performs
-/// the same offline checks but never treats an unauthenticated policy as valid.
-pub fn verify_witness_receipt_with_policy(
+/// Internal evidence verifier used after the caller has authenticated the
+/// exact policy material. Production callers must enter through
+/// [`verify_witness_receipt`], which parses and replays the embedded material;
+/// this narrower seam exists for assembly and crate-level invariant tests.
+pub(crate) fn verify_witness_receipt_with_policy(
     receipt: &WitnessReceiptV1,
     policy: &PolicyState,
     checkpoint: Option<&VaultPolicyCheckpointV1>,
@@ -269,22 +282,17 @@ pub fn verify_witness_receipt_with_policy(
         || receipt.public_scope
             != jury_protocol::witness_v1::PublicReceiptScopeV1::from_request(&request)
         || receipt.expires_at_ms != request.expires_at_ms
-        || receipt.issued_at_ms < request.issued_at_ms
-        || receipt.issued_at_ms > request.expires_at_ms
+        || receipt.issued_at_ms.saturating_add(ACCEPTED_CLOCK_SKEW_MS) < request.issued_at_ms
+        || (receipt.outcome == ReceiptOutcomeV1::Approved
+            && receipt.issued_at_ms >= request.expires_at_ms)
     {
         return Err(invalid(ReceiptVerificationErrorKind::InvalidScope));
     }
 
-    validate_request_policy(policy, &request)?;
-    let witness_policy = policy
-        .witness_policy(&request.witness_policy_digest)
-        .ok_or_else(|| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
+    let validated = validate_request_policy(policy, &request).map_err(map_request_policy_error)?;
+    let witness_policy = &validated.policy;
     validate_checkpoint(policy, witness_policy, &request, &receipt.policy_checkpoint)?;
-    validate_request_signature(policy, &request)?;
-
-    let rule = policy
-        .witness_access_rule(&request.item_id, core_operation(request.operation))
-        .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
+    let rule = &validated.rule;
     if receipt.approval_threshold != rule.approval_threshold
         || receipt.witness_threshold != rule.witness_threshold
     {
@@ -320,6 +328,8 @@ pub fn verify_witness_receipt_with_policy(
     }
 
     validate_endpoint_records(receipt, &request, policy)?;
+    let receipt_core_endpoint_authenticated =
+        receipt.endpoint_acknowledgement.is_some() || receipt.endpoint_completion.is_some();
     Ok(VerifiedWitnessReceipt {
         receipt_digest: receipt
             .digest()
@@ -329,12 +339,22 @@ pub fn verify_witness_receipt_with_policy(
             .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidDigest))?,
         request_id: request.request_id,
         request_digest,
+        vault_id: request.vault_id,
+        genesis_fingerprint: request.genesis_fingerprint,
+        vault_policy_sequence: request.vault_policy_sequence,
+        vault_policy_hash: request.vault_policy_hash,
+        witness_policy_id: request.witness_policy_id,
+        witness_policy_revision: request.witness_policy_revision,
+        witness_policy_digest: request.witness_policy_digest,
         policy_checkpoint_digest: receipt
             .policy_checkpoint
             .digest()
             .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidDigest))?,
         outcome: receipt.outcome,
-        reason: receipt.reason,
+        reported_reason: receipt.reason,
+        reported_issued_at_ms: receipt.issued_at_ms,
+        receipt_core_endpoint_authenticated,
+        retained_checkpoint_matched: checkpoint.is_some(),
         counted_approver_ids: counted_approvers,
         counted_witness_ids: counted_witnesses,
         witness_generations,
@@ -355,40 +375,6 @@ fn parse_policy_material(
         return Err(invalid(ReceiptVerificationErrorKind::InvalidPolicy));
     }
     Ok(material)
-}
-
-fn validate_request_policy(
-    policy: &PolicyState,
-    request: &WitnessRequestV1,
-) -> Result<(), ReceiptVerificationError> {
-    if policy.vault_id() != request.vault_id
-        || policy.genesis_fingerprint() != &request.genesis_fingerprint
-        || policy.sequence() != request.vault_policy_sequence
-        || policy.terminal_revision_hash() != &request.vault_policy_hash
-    {
-        return Err(invalid(ReceiptVerificationErrorKind::InvalidPolicy));
-    }
-    let item = policy
-        .item(&request.item_id)
-        .ok_or_else(|| invalid(ReceiptVerificationErrorKind::InvalidScope))?;
-    let slot_matches = item.witnessed_state.as_ref().is_some_and(|state| {
-        state.slots.iter().any(|slot| {
-            slot.slot_id == request.slot_id
-                && slot.content_role == request.content_role
-                && slot.revision == request.revision
-                && slot.revision_seal_id == request.revision_seal_id
-                && slot.key_epoch == request.key_epoch
-                && slot.item_access_mode == request.item_access_mode
-                && slot.vault_policy_sequence == request.vault_policy_sequence
-                && slot.witness_policy_id == request.witness_policy_id
-                && slot.witness_policy_revision == request.witness_policy_revision
-                && slot.witness_policy_digest == request.witness_policy_digest
-        })
-    });
-    if item.access_mode() != Some(request.item_access_mode) || !slot_matches {
-        return Err(invalid(ReceiptVerificationErrorKind::InvalidScope));
-    }
-    Ok(())
 }
 
 fn validate_checkpoint(
@@ -442,34 +428,6 @@ fn validate_checkpoint(
     .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidSignature))
 }
 
-fn validate_request_signature(
-    policy: &PolicyState,
-    request: &WitnessRequestV1,
-) -> Result<(), ReceiptVerificationError> {
-    let requester = policy
-        .principal(&request.requester_principal_id)
-        .ok_or_else(|| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
-    if request.requester_signing_key_epoch != 1
-        || request.requester_signing_key_fingerprint
-            != signing_key_fingerprint(
-                1,
-                &request.requester_principal_id,
-                1,
-                &requester.descriptor.verification_public_key,
-            )
-    {
-        return Err(invalid(ReceiptVerificationErrorKind::InvalidSignature));
-    }
-    crypto::verify_bytes(
-        &requester.descriptor.verification_public_key,
-        &request
-            .signature_preimage()
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidFormat))?,
-        &request.client_signature,
-    )
-    .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidSignature))
-}
-
 fn validate_approvals(
     receipt: &WitnessReceiptV1,
     request: &WitnessRequestV1,
@@ -487,9 +445,8 @@ fn validate_approvals(
             || decision.witness_policy_id != request.witness_policy_id
             || decision.witness_policy_revision != request.witness_policy_revision
             || decision.witness_policy_digest != request.witness_policy_digest
-            || decision.expires_at_ms != request.expires_at_ms
-            || decision.issued_at_ms < request.issued_at_ms
-            || decision.issued_at_ms > receipt.issued_at_ms
+            || decision.expires_at_ms > request.expires_at_ms
+            || decision.issued_at_ms.saturating_add(ACCEPTED_CLOCK_SKEW_MS) < request.issued_at_ms
             || decision.intended_witness_set_digest != intended_digest
         {
             return Err(invalid(ReceiptVerificationErrorKind::InvalidScope));
@@ -551,9 +508,8 @@ fn validate_witness_decisions(
             || decision.witness_policy_revision != request.witness_policy_revision
             || decision.witness_policy_digest != request.witness_policy_digest
             || decision.policy_checkpoint_digest != request.policy_checkpoint_digest
-            || decision.expires_at_ms != request.expires_at_ms
-            || decision.issued_at_ms < request.issued_at_ms
-            || decision.issued_at_ms > receipt.issued_at_ms
+            || decision.expires_at_ms > request.expires_at_ms
+            || decision.issued_at_ms.saturating_add(ACCEPTED_CLOCK_SKEW_MS) < request.issued_at_ms
         {
             return Err(invalid(ReceiptVerificationErrorKind::InvalidScope));
         }
@@ -649,6 +605,19 @@ fn validate_endpoint_records(
         .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidSignature))?;
     }
     Ok(())
+}
+
+const fn map_request_policy_error(error: RequestPolicyError) -> ReceiptVerificationError {
+    match error {
+        RequestPolicyError::Invalid => invalid(ReceiptVerificationErrorKind::InvalidFormat),
+        RequestPolicyError::InvalidSignature => {
+            invalid(ReceiptVerificationErrorKind::InvalidSignature)
+        }
+        RequestPolicyError::PolicyDenied | RequestPolicyError::WrongScope => {
+            invalid(ReceiptVerificationErrorKind::InvalidScope)
+        }
+        RequestPolicyError::StalePolicy => invalid(ReceiptVerificationErrorKind::InvalidPolicy),
+    }
 }
 
 const fn invalid(kind: ReceiptVerificationErrorKind) -> ReceiptVerificationError {
