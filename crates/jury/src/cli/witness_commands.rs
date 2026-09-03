@@ -16,25 +16,25 @@ pub(super) fn witness_policy_material(
         witness_policies: catalog.witness_policies,
     };
     let policy = material.replay().map_err(|_| invalid_policy_material())?;
-    let bytes = serde_json::to_vec(&material).map_err(|_| invalid_policy_material())?;
-    PolicyMaterialBytes::new(bytes.clone()).map_err(|_| {
+    let encoded = material.encode().map_err(|_| {
         CliError::new(
             CliErrorKind::Conflict,
             "witness-policy-material-capacity-exhausted",
             "the public witness policy material exceeds the protocol capacity",
         )
     })?;
+    let bytes = encoded.as_bytes();
     let destination = preview_public_file(&arguments.output).map_err(map_filesystem_error)?;
     let publication = PreparedPublicFile::prepare_bounded_if_unchanged(
         destination,
-        &bytes,
+        bytes,
         MAX_RECEIPT_JSON_BYTES,
         false,
     )
     .map_err(map_filesystem_error)?
     .publish()
     .map_err(map_filesystem_error)?;
-    let digest = Digest32::new(Sha256::digest(&bytes).into());
+    let digest = Digest32::new(Sha256::digest(bytes).into());
     Ok(CommandOutput::Safe {
         operation: "witness-policy-material",
         fields: serde_json::json!({
@@ -61,8 +61,10 @@ pub(super) fn witness_policy_status(
 ) -> Result<CommandOutput, CliError> {
     let material_bytes = read_public_file(&arguments.policy_material, MAX_RECEIPT_JSON_BYTES)
         .map_err(map_filesystem_error)?;
-    let material = serde_json::from_slice::<ReceiptPolicyMaterialV1>(&material_bytes)
-        .map_err(|_| invalid_policy_material())?;
+    let encoded =
+        PolicyMaterialBytes::new(material_bytes).map_err(|_| invalid_policy_material())?;
+    let material =
+        ReceiptPolicyMaterialV1::decode(&encoded).map_err(|_| invalid_policy_material())?;
     let policy = material.replay().map_err(|_| invalid_policy_material())?;
     let checkpoint = read_checkpoint(&arguments.checkpoint)?;
     let acknowledgements = arguments

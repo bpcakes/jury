@@ -7,7 +7,10 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
 use jury_core::witness_receipt::ReceiptPolicyMaterialV1;
-use jury_protocol::vault_v1::{PolicyOperationV1, VaultFileV1};
+use jury_protocol::{
+    vault_v1::{PolicyOperationV1, VaultFileV1},
+    witness_v1::PolicyMaterialBytes,
+};
 
 use self::support::*;
 

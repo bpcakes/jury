@@ -47,6 +47,28 @@ impl ReceiptPolicyMaterialV1 {
         replay_policy_with_witness_policies(&self.journal, &self.witness_policies)
             .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))
     }
+
+    /// Encodes the one frozen v1 compact-JSON representation after replaying
+    /// every owner-signed policy invariant.
+    pub fn encode(&self) -> Result<PolicyMaterialBytes, ReceiptVerificationError> {
+        self.replay()?;
+        let bytes = serde_json::to_vec(self)
+            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
+        PolicyMaterialBytes::new(bytes)
+            .map_err(|_| invalid(ReceiptVerificationErrorKind::CapacityExhausted))
+    }
+
+    /// Parses only the exact bytes produced by [`Self::encode`]. JSON that is
+    /// semantically equivalent but reordered or padded is not canonical v1
+    /// policy material.
+    pub fn decode(encoded: &PolicyMaterialBytes) -> Result<Self, ReceiptVerificationError> {
+        let material: Self = serde_json::from_slice(encoded.as_bytes())
+            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
+        if material.encode()?.as_bytes() != encoded.as_bytes() {
+            return Err(invalid(ReceiptVerificationErrorKind::InvalidPolicy));
+        }
+        Ok(material)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +80,7 @@ pub enum ReceiptVerificationErrorKind {
     InvalidSignature,
     InvalidQuorum,
     CheckpointMismatch,
+    CapacityExhausted,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -94,6 +117,9 @@ impl fmt::Display for ReceiptVerificationError {
             ReceiptVerificationErrorKind::InvalidQuorum => "receipt quorum evidence is invalid",
             ReceiptVerificationErrorKind::CheckpointMismatch => {
                 "receipt checkpoint differs from the supplied checkpoint"
+            }
+            ReceiptVerificationErrorKind::CapacityExhausted => {
+                "receipt public material exceeds the protocol capacity"
             }
         })
     }
@@ -162,13 +188,8 @@ pub fn assemble_witness_receipt(
     checkpoint: VaultPolicyCheckpointV1,
     mut evidence: WitnessReceiptEvidence,
 ) -> Result<WitnessReceiptV1, ReceiptVerificationError> {
-    let embedded: ReceiptPolicyMaterialV1 =
-        serde_json::from_slice(evidence.policy_material.as_bytes())
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
-    if embedded.replay()? != *policy
-        || serde_json::to_vec(&embedded).ok().as_deref()
-            != Some(evidence.policy_material.as_bytes())
-    {
+    let embedded = ReceiptPolicyMaterialV1::decode(&evidence.policy_material)?;
+    if embedded.replay()? != *policy {
         return Err(invalid(ReceiptVerificationErrorKind::InvalidPolicy));
     }
     let rule = policy
@@ -261,8 +282,8 @@ pub(crate) fn verify_witness_receipt_with_policy(
     policy: &PolicyState,
     checkpoint: Option<&VaultPolicyCheckpointV1>,
 ) -> Result<VerifiedWitnessReceipt, ReceiptVerificationError> {
-    receipt
-        .validate_shape()
+    let (receipt_core_digest, receipt_digest) = receipt
+        .validated_digests()
         .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidFormat))?;
     if checkpoint.is_some_and(|expected| expected != &receipt.policy_checkpoint) {
         return Err(invalid(ReceiptVerificationErrorKind::CheckpointMismatch));
@@ -331,12 +352,8 @@ pub(crate) fn verify_witness_receipt_with_policy(
     let receipt_core_endpoint_authenticated =
         receipt.endpoint_acknowledgement.is_some() || receipt.endpoint_completion.is_some();
     Ok(VerifiedWitnessReceipt {
-        receipt_digest: receipt
-            .digest()
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidDigest))?,
-        receipt_core_digest: receipt
-            .core_digest()
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidDigest))?,
+        receipt_digest,
+        receipt_core_digest,
         request_id: request.request_id,
         request_digest,
         vault_id: request.vault_id,
@@ -366,15 +383,7 @@ pub(crate) fn verify_witness_receipt_with_policy(
 fn parse_policy_material(
     receipt: &WitnessReceiptV1,
 ) -> Result<ReceiptPolicyMaterialV1, ReceiptVerificationError> {
-    let material: ReceiptPolicyMaterialV1 =
-        serde_json::from_slice(receipt.witness_policy_material.as_bytes())
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
-    if serde_json::to_vec(&material).ok().as_deref()
-        != Some(receipt.witness_policy_material.as_bytes())
-    {
-        return Err(invalid(ReceiptVerificationErrorKind::InvalidPolicy));
-    }
-    Ok(material)
+    ReceiptPolicyMaterialV1::decode(&receipt.witness_policy_material)
 }
 
 fn validate_checkpoint(

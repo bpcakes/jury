@@ -10,21 +10,20 @@ pub struct PublicPolicyMaterialV1(ReceiptPolicyMaterialV1);
 
 impl PublicPolicyMaterialV1 {
     pub fn encode(&self) -> Result<PolicyMaterialBytes, AdapterError> {
-        self.replay()?;
-        let encoded = serde_json::to_vec(self)
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidPolicyMaterial))?;
-        PolicyMaterialBytes::new(encoded)
-            .map_err(|_| AdapterError::new(AdapterErrorKind::CapacityExhausted))
+        self.0.encode().map_err(|error| {
+            AdapterError::new(match error.kind() {
+                jury_core::witness_receipt::ReceiptVerificationErrorKind::CapacityExhausted => {
+                    AdapterErrorKind::CapacityExhausted
+                }
+                _ => AdapterErrorKind::InvalidPolicyMaterial,
+            })
+        })
     }
 
     pub fn decode(encoded: &PolicyMaterialBytes) -> Result<Self, AdapterError> {
-        let material: Self = serde_json::from_slice(encoded.as_bytes())
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidPolicyMaterial))?;
-        if serde_json::to_vec(&material).ok().as_deref() != Some(encoded.as_bytes()) {
-            return Err(AdapterError::new(AdapterErrorKind::InvalidPolicyMaterial));
-        }
-        material.replay()?;
-        Ok(material)
+        ReceiptPolicyMaterialV1::decode(encoded)
+            .map(Self)
+            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidPolicyMaterial))
     }
 
     pub fn replay(&self) -> Result<PolicyState, AdapterError> {

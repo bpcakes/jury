@@ -838,6 +838,13 @@ fn complete_receipt_matches_the_frozen_vector_and_round_trips_json() -> TestResu
         receipt.digest()?,
         digest_hex(&corpus, "witness_receipt", "digest_hex")?
     );
+    assert_eq!(
+        receipt.validated_digests()?,
+        (
+            digest_hex(&corpus, "receipt_core", "digest_hex")?,
+            digest_hex(&corpus, "witness_receipt", "digest_hex")?,
+        )
+    );
     let encoded = receipt.to_json_bytes()?;
     assert_eq!(WitnessReceiptV1::parse_json(&encoded)?, receipt);
     Ok(())

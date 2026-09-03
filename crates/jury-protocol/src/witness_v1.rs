@@ -2766,17 +2766,20 @@ impl WitnessReceiptV1 {
     }
 
     pub fn core_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
-        self.validate_shape()?;
-        self.core_bytes_unchecked()
+        self.validated_core().map(|(bytes, _)| bytes)
     }
 
     pub fn core_digest(&self) -> Result<Digest32, WitnessProtocolError> {
-        hash_bytes("jury-witness-v1/receipt/core-hash", &self.core_bytes()?)
+        self.validated_core().map(|(_, digest)| digest)
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, WitnessProtocolError> {
-        self.validate_shape()?;
-        let mut output = self.core_bytes_unchecked()?;
+        let (mut output, _) = self.validated_core()?;
+        self.append_endpoint_records(&mut output)?;
+        Ok(output)
+    }
+
+    fn append_endpoint_records(&self, output: &mut Vec<u8>) -> Result<(), WitnessProtocolError> {
         let acknowledgement = self
             .endpoint_acknowledgement
             .as_ref()
@@ -2787,13 +2790,23 @@ impl WitnessReceiptV1 {
             .as_ref()
             .map(ReceiptCompletionV1::canonical_bytes)
             .transpose()?;
-        optional_bytes(&mut output, acknowledgement.as_deref())?;
-        optional_bytes(&mut output, completion.as_deref())?;
-        Ok(output)
+        optional_bytes(output, acknowledgement.as_deref())?;
+        optional_bytes(output, completion.as_deref())?;
+        Ok(())
     }
 
     pub fn digest(&self) -> Result<Digest32, WitnessProtocolError> {
-        hash_bytes("jury-witness-v1/receipt/hash", &self.canonical_bytes()?)
+        self.validated_digests().map(|(_, digest)| digest)
+    }
+
+    /// Validates and encodes the receipt once, returning `(core, complete)`
+    /// digests. Verification paths use this method to avoid repeatedly
+    /// serializing maximum-size embedded policy material.
+    pub fn validated_digests(&self) -> Result<(Digest32, Digest32), WitnessProtocolError> {
+        let (mut complete, core_digest) = self.validated_core()?;
+        self.append_endpoint_records(&mut complete)?;
+        let complete_digest = hash_bytes("jury-witness-v1/receipt/hash", &complete)?;
+        Ok((core_digest, complete_digest))
     }
 
     pub fn parse_json(bytes: &[u8]) -> Result<Self, WitnessProtocolError> {
@@ -2812,6 +2825,10 @@ impl WitnessReceiptV1 {
     }
 
     pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
+        self.validated_core().map(|_| ())
+    }
+
+    fn validated_core(&self) -> Result<(Vec<u8>, Digest32), WitnessProtocolError> {
         let outcome_matches = match self.outcome {
             ReceiptOutcomeV1::Approved => self.reason == WitnessReasonV1::None,
             ReceiptOutcomeV1::Denied => self.reason != WitnessReasonV1::None,
@@ -2842,18 +2859,8 @@ impl WitnessReceiptV1 {
         {
             return Err(invalid_format());
         }
-        self.public_scope.canonical_bytes()?;
-        self.policy_checkpoint.canonical_bytes()?;
-        for decision in &self.approval_decisions {
-            decision.canonical_bytes()?;
-        }
-        for decision in &self.witness_decisions {
-            decision.canonical_bytes()?;
-        }
-        let core_digest = hash_bytes(
-            "jury-witness-v1/receipt/core-hash",
-            &self.core_bytes_unchecked()?,
-        )?;
+        let core_bytes = self.core_bytes_unchecked()?;
+        let core_digest = hash_bytes("jury-witness-v1/receipt/core-hash", &core_bytes)?;
         if let Some(acknowledgement) = &self.endpoint_acknowledgement {
             acknowledgement.validate_shape()?;
             if acknowledgement.receipt_id != self.receipt_id
@@ -2883,7 +2890,7 @@ impl WitnessReceiptV1 {
                 ));
             }
         }
-        Ok(())
+        Ok((core_bytes, core_digest))
     }
 }
 

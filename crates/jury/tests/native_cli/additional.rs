@@ -278,13 +278,18 @@ fn commit_witnessed_policy(
     )?)?;
     assert_eq!(exported["operation"], "witness-policy-material");
     assert_eq!(exported["contains_private_material"], false);
-    let material: ReceiptPolicyMaterialV1 = serde_json::from_slice(&fs::read(&material_path)?)?;
+    let material_bytes = fs::read(&material_path)?;
+    let encoded_material = PolicyMaterialBytes::new(material_bytes.clone())?;
+    let material = ReceiptPolicyMaterialV1::decode(&encoded_material)?;
     let replayed = material.replay()?;
     assert_eq!(
         Some(replayed.sequence()),
         exported["policy_sequence"].as_u64()
     );
     assert_eq!(material.witness_policies.len(), 1);
+    let mut padded_material = vec![b'\n'];
+    padded_material.extend_from_slice(&material_bytes);
+    assert!(ReceiptPolicyMaterialV1::decode(&PolicyMaterialBytes::new(padded_material)?).is_err());
 
     let vault = VaultFileV1::parse(&fs::read(vault_path)?)?;
     let (direct_slots, witnessed_state) = vault
