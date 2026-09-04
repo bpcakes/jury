@@ -4,7 +4,7 @@ mod model;
 mod publication;
 
 pub(super) use model::RestorePublicationPoint;
-use model::{RestoreMarker, RestoreRequest, RestoredInstallation};
+use model::{RestoreIdentityTarget, RestoreMarker, RestoreRequest, RestoredInstallation};
 use publication::{
     marker_bytes, marker_name, parse_marker, publish_recovered_state,
     restore_additional_role_identity, validate_restored_state_publication, vault_target_label,
@@ -39,17 +39,20 @@ pub(super) fn backup_restore_with_observer(
     observer: &mut dyn FnMut(RestorePublicationPoint) -> Result<(), CliError>,
 ) -> Result<CommandOutput, CliError> {
     let mut target_home = selected_home(cli, environment, current)?;
-    let identity_target = arguments
-        .identity_out
-        .as_deref()
-        .or(arguments.reuse_identity.as_deref())
-        .ok_or_else(|| {
-            CliError::new(
+    let identity_target = match (
+        arguments.identity_out.as_deref(),
+        arguments.reuse_identity.as_deref(),
+    ) {
+        (Some(path), None) => RestoreIdentityTarget::Create(path),
+        (None, Some(path)) => RestoreIdentityTarget::Reuse(path),
+        _ => {
+            return Err(CliError::new(
                 CliErrorKind::InvalidArguments,
                 "identity-restore-target-required",
                 "select either an absent identity output or an exact existing identity",
-            )
-        })?;
+            ));
+        }
+    };
     let state_root = match &arguments.state_out {
         Some(path) => path.clone(),
         None => resolve_linux_state_root(
@@ -68,7 +71,6 @@ pub(super) fn backup_restore_with_observer(
             identity_target,
             approver_identity_target: arguments.approver_identity_out.as_deref(),
             witness_identity_target: arguments.witness_identity_out.as_deref(),
-            reuse_identity: arguments.reuse_identity.is_some(),
             identity_profile: arguments.identity_kdf_profile.into(),
             state_root: &state_root,
             require_absent_state_root: false,
@@ -89,7 +91,7 @@ pub(super) fn backup_restore_with_observer(
         &restored.coverage,
         serde_json::json!({
             "committed": true,
-            "identity_reused": arguments.reuse_identity.is_some(),
+            "identity_reused": identity_target.is_reuse(),
             "restored_direct_access_validated": false,
             "transaction_marker_removed": restored.marker_removed,
             "local_state_published": true,
@@ -115,10 +117,9 @@ pub(in crate::cli) fn backup_drill(
         input: &arguments.input,
         target_home: &mut target_home,
         source_home: Some(&source_home),
-        identity_target: &arguments.identity_out,
+        identity_target: RestoreIdentityTarget::Create(&arguments.identity_out),
         approver_identity_target: arguments.approver_identity_out.as_deref(),
         witness_identity_target: arguments.witness_identity_out.as_deref(),
-        reuse_identity: false,
         identity_profile: arguments.identity_kdf_profile.into(),
         state_root: &arguments.state_out,
         require_absent_state_root: true,
@@ -194,10 +195,12 @@ fn restore_archive_with_observer(
     let envelope = BackupEnvelopeV1::parse(&archive_bytes).map_err(|_| invalid_backup())?;
     let identity_parent = request
         .identity_target
+        .path()
         .parent()
         .ok_or_else(filesystem_error)?;
     let identity_name = request
         .identity_target
+        .path()
         .file_name()
         .ok_or_else(filesystem_error)?;
     let identity_root = open_restore_root(identity_parent, &request)?;
@@ -242,7 +245,7 @@ fn restore_archive_with_observer(
         transaction_id: hex(recovered.header().backup_id.as_bytes()),
         backup_id: hex(recovered.header().backup_id.as_bytes()),
         vault_target,
-        identity_target: direct_utf8_path(request.identity_target)?,
+        identity_target: direct_utf8_path(request.identity_target.path())?,
         state_root: direct_utf8_path(request.state_root)?,
         vault_id: hex(recovered.header().vault_id.as_bytes()),
         genesis_fingerprint: hex(recovered.header().genesis_fingerprint.as_bytes()),
@@ -251,8 +254,8 @@ fn restore_archive_with_observer(
             Some(marker) => marker.timestamp_ms,
             None => timestamp_ms()?,
         },
-        identity_reused: request.reuse_identity,
-        identity_published: request.reuse_identity,
+        identity_reused: request.identity_target.is_reuse(),
+        identity_published: request.identity_target.is_reuse(),
         approver_identity_target: request
             .approver_identity_target
             .map(direct_utf8_path)
@@ -297,13 +300,13 @@ fn restore_archive_with_observer(
     }
 
     if marker.identity_published
-        && !request.reuse_identity
+        && !request.identity_target.is_reuse()
         && !identity_preview.destination_exists()
     {
         return Err(restore_partial_conflict());
     }
 
-    let identity_environment = if request.reuse_identity {
+    let identity_environment = if request.identity_target.is_reuse() {
         request.environment.jury_identity_passphrase.as_deref()
     } else {
         request.environment.jury_new_passphrase.as_deref()
@@ -311,8 +314,8 @@ fn restore_archive_with_observer(
     let identity_passphrase = secret_input::capture_named_or_environment(
         request.protection,
         request.cli.passphrase_stdin,
-        !request.reuse_identity,
-        if request.reuse_identity {
+        !request.identity_target.is_reuse(),
+        if request.identity_target.is_reuse() {
             "Identity passphrase"
         } else {
             "New identity passphrase"
@@ -320,7 +323,7 @@ fn restore_archive_with_observer(
         identity_environment.map(Vec::as_slice),
     )
     .map_err(map_secret_error)?;
-    if !request.reuse_identity
+    if !request.identity_target.is_reuse()
         && backup_passphrase
             .matches(&identity_passphrase)
             .map_err(map_secret_error)?
@@ -338,7 +341,7 @@ fn restore_archive_with_observer(
             .identity()
             .matches_unlocked(&unlocked)
             .map_err(|error| map_identity_error(error.kind()))?
-            || (!request.reuse_identity && prior_marker_bytes.is_none())
+            || (!request.identity_target.is_reuse() && prior_marker_bytes.is_none())
         {
             return Err(CliError::new(
                 CliErrorKind::Conflict,
@@ -348,7 +351,7 @@ fn restore_archive_with_observer(
         }
         (file, false)
     } else {
-        if request.reuse_identity {
+        if request.identity_target.is_reuse() {
             return Err(CliError::new(
                 CliErrorKind::NotFound,
                 "reuse-identity-not-found",
@@ -515,13 +518,17 @@ fn restore_archive_with_observer(
 }
 
 fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(), CliError> {
-    let mut paths = vec![request.input, request.identity_target, request.state_root];
+    let mut paths = vec![
+        request.input,
+        request.identity_target.path(),
+        request.state_root,
+    ];
     paths.extend(request.approver_identity_target);
     paths.extend(request.witness_identity_target);
     for path in paths {
         direct_utf8_path(path)?;
     }
-    let mut identity_targets = vec![request.identity_target];
+    let mut identity_targets = vec![request.identity_target.path()];
     identity_targets.extend(request.approver_identity_target);
     identity_targets.extend(request.witness_identity_target);
     identity_targets.sort_unstable();
@@ -557,7 +564,7 @@ fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(), CliError> 
             .map(RepositoryLocation::worktree_path)
             .or_else(|| source_home.detached_path())
             .ok_or_else(containment_error)?;
-        let mut output_paths = vec![request.identity_target, request.state_root];
+        let mut output_paths = vec![request.identity_target.path(), request.state_root];
         output_paths.extend(request.approver_identity_target);
         output_paths.extend(request.witness_identity_target);
         output_paths.extend(request.target_home.detached_path());
@@ -675,7 +682,7 @@ fn preflight_new_restore_targets(
     identity_exists: bool,
     envelope: &BackupEnvelopeV1,
 ) -> Result<(), CliError> {
-    if identity_exists != request.reuse_identity {
+    if identity_exists != request.identity_target.is_reuse() {
         return Err(if identity_exists {
             CliError::new(
                 CliErrorKind::Conflict,

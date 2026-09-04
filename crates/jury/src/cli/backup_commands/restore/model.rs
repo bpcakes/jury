@@ -28,16 +28,33 @@ pub(super) struct RestoreRequest<'a> {
     pub(super) input: &'a Path,
     pub(super) target_home: &'a mut VaultHomeLocation,
     pub(super) source_home: Option<&'a VaultHomeLocation>,
-    pub(super) identity_target: &'a Path,
+    pub(super) identity_target: RestoreIdentityTarget<'a>,
     pub(super) approver_identity_target: Option<&'a Path>,
     pub(super) witness_identity_target: Option<&'a Path>,
-    pub(super) reuse_identity: bool,
     pub(super) identity_profile: KdfProfile,
     pub(super) state_root: &'a Path,
     pub(super) require_absent_state_root: bool,
     pub(super) environment: &'a Environment,
     pub(super) protection: ProtectionPolicy,
     pub(super) validate_access: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RestoreIdentityTarget<'a> {
+    Create(&'a Path),
+    Reuse(&'a Path),
+}
+
+impl<'a> RestoreIdentityTarget<'a> {
+    pub(super) const fn path(self) -> &'a Path {
+        match self {
+            Self::Create(path) | Self::Reuse(path) => path,
+        }
+    }
+
+    pub(super) const fn is_reuse(self) -> bool {
+        matches!(self, Self::Reuse(_))
+    }
 }
 
 pub(super) struct RestoredInstallation {
