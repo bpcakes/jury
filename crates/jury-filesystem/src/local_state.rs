@@ -241,7 +241,7 @@ impl LockedVaultState<'_> {
         maximum_bytes: usize,
     ) -> Result<Vec<u8>, FilesystemError> {
         read_state_file(
-            &principal_root(&self.directory.root, principal_id)?,
+            &principal_root_existing(&self.directory.root, principal_id)?,
             file.name(),
             maximum_bytes.min(file.maximum_bytes()),
         )

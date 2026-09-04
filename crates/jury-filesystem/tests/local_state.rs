@@ -8,7 +8,8 @@ use std::path::Path;
 
 use jury_filesystem::{
     FilesystemErrorKind, LockError, MAX_RECEIPTS_BYTES, PrincipalStateDirectory,
-    PrincipalStateFile, RepositoryLocation, StatePathError, resolve_linux_state_root,
+    PrincipalStateFile, RepositoryLocation, StatePathError, VaultStateDirectory,
+    resolve_linux_state_root,
 };
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 
@@ -132,6 +133,28 @@ fn scoped_state_is_private_locked_atomic_and_shared_across_clones() -> Result<()
 
     drop(locked);
     assert!(duplicate.try_lock().is_ok());
+    Ok(())
+}
+
+#[test]
+fn locked_vault_read_does_not_create_an_absent_principal() -> Result<(), Box<dyn Error>> {
+    let temporary = tempfile::tempdir()?;
+    let state_path = temporary.path().join("state");
+    let directory =
+        VaultStateDirectory::open_or_create(&state_path, &[0x11; 32], &[0x12; 32], &[], &[])?;
+    let absent_principal = [0x13; 32];
+    let absent_path = state_path
+        .join("11".repeat(32))
+        .join("12".repeat(32))
+        .join("13".repeat(32));
+
+    let locked = directory.try_lock()?;
+    let error = locked
+        .read(&absent_principal, PrincipalStateFile::Audit)
+        .err()
+        .ok_or("absent principal read unexpectedly succeeded")?;
+    assert_eq!(error.kind(), FilesystemErrorKind::NotFound);
+    assert!(!absent_path.exists());
     Ok(())
 }
 
