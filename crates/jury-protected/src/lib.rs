@@ -12,8 +12,8 @@ mod secret;
 mod streaming_redaction;
 
 pub use memory::{
-    MAX_LARGE_PROTECTED_BYTES, MAX_PROTECTED_BYTES, MemoryError, MemoryErrorKind, ProtectedMemory,
-    ProtectionPolicy, ProtectionStatus, RuntimeControlStatus,
+    MAX_EXTENDED_PROTECTED_BYTES, MAX_LARGE_PROTECTED_BYTES, MAX_PROTECTED_BYTES, MemoryError,
+    MemoryErrorKind, ProtectedMemory, ProtectionPolicy, ProtectionStatus, RuntimeControlStatus,
 };
 pub use process_protection::{
     CaptureError, CaptureErrorKind, ProtectedCapture, capture_after_process_protection,

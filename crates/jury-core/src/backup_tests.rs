@@ -38,6 +38,30 @@ fn protected_passphrase(value: &[u8]) -> TestResult<ProtectedMemory> {
     )?)
 }
 
+#[test]
+fn every_large_backup_bucket_fits_the_format_owned_protected_ceiling() -> TestResult {
+    for bucket_id in [4, 5] {
+        let plaintext_length = jury_protocol::backup_v1::bucket_bytes(bucket_id)?
+            - jury_protocol::backup_v1::BACKUP_PREFIX_BYTES
+            - jury_protocol::backup_v1::AEAD_TAG_BYTES;
+        let padded = ProtectedMemory::initialize_with_ceiling(
+            plaintext_length,
+            MAX_BACKUP_ENVELOPE_BYTES,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            |bytes| {
+                bytes[0] = bucket_id;
+                bytes[bytes.len() - 1] = bucket_id;
+                Ok::<usize, ()>(bytes.len())
+            },
+        )?;
+        assert_eq!(padded.capacity(), plaintext_length);
+        assert!(
+            padded.expose(|bytes| bytes[0] == bucket_id && bytes[bytes.len() - 1] == bucket_id)?
+        );
+    }
+    Ok(())
+}
+
 fn fixture() -> TestResult<(VaultPrincipalIdentity, VaultFileV1)> {
     let principal_id = PrincipalId::from_bytes([0x21; 32])?;
     let UnlockedIdentity::VaultPrincipal(owner) =

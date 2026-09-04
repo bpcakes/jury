@@ -1,7 +1,10 @@
 use std::error::Error;
 
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
-use jury_protocol::vault_v1::{Encapsulation1120, Nonce12};
+use jury_protocol::{
+    backup_v1::{AEAD_TAG_BYTES, BACKUP_PREFIX_BYTES, bucket_bytes},
+    vault_v1::{Encapsulation1120, Nonce12},
+};
 use serde_json::Value;
 
 use super::*;
@@ -108,5 +111,44 @@ fn frozen_storage_hkdf_and_signature_vectors_match_wrappers() -> Result<(), Box<
         sign_bytes(&signing_seed, &message)?.as_bytes().as_slice(),
         decode(&signature_vector["signature_hex"])?.as_slice()
     );
+    Ok(())
+}
+
+#[test]
+fn backup_sized_open_requires_an_explicit_format_ceiling() -> Result<(), Box<dyn Error>> {
+    let plaintext_length = bucket_bytes(4)? - BACKUP_PREFIX_BYTES - AEAD_TAG_BYTES;
+    let key = protected(&[0x11; 32])?;
+    let nonce = Nonce12::new([0x22; 12]);
+    let plaintext = ProtectedMemory::initialize_with_ceiling(
+        plaintext_length,
+        jury_protocol::backup_v1::MAX_BACKUP_ENVELOPE_BYTES,
+        ProtectionPolicy::EmergencyAllowDegraded,
+        |bytes| {
+            bytes[0] = 0x5a;
+            bytes[bytes.len() - 1] = 0xa5;
+            Ok::<usize, ()>(bytes.len())
+        },
+    )?;
+    let ciphertext = seal(&key, &nonce, b"backup-sized-test", &plaintext)?;
+    assert_eq!(
+        open(
+            &key,
+            &nonce,
+            b"backup-sized-test",
+            &ciphertext,
+            plaintext_length,
+        )
+        .map(|_| ()),
+        Err(CryptoError::MemoryProtection)
+    );
+    let opened = open_with_ceiling(
+        &key,
+        &nonce,
+        b"backup-sized-test",
+        &ciphertext,
+        plaintext_length,
+        jury_protocol::backup_v1::MAX_BACKUP_ENVELOPE_BYTES,
+    )?;
+    assert!(opened.expose(|bytes| bytes[0] == 0x5a && bytes[bytes.len() - 1] == 0xa5)?);
     Ok(())
 }

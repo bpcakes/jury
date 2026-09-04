@@ -11,7 +11,7 @@ use hpke::{
     kem::XWing, rand_core::SeedableRng, single_shot_open, single_shot_seal_with_rng,
 };
 use jury_protected::{
-    MemoryErrorKind, ProtectedMemory, ProtectionPolicy, RandomSource,
+    MAX_LARGE_PROTECTED_BYTES, MemoryErrorKind, ProtectedMemory, ProtectionPolicy, RandomSource,
     capture_after_process_protection, protected_random,
 };
 use jury_protocol::{
@@ -258,6 +258,24 @@ pub(crate) fn open(
     ciphertext: &[u8],
     plaintext_length: usize,
 ) -> Result<ProtectedMemory, CryptoError> {
+    open_with_ceiling(
+        key,
+        nonce,
+        aad,
+        ciphertext,
+        plaintext_length,
+        MAX_LARGE_PROTECTED_BYTES,
+    )
+}
+
+pub(crate) fn open_with_ceiling(
+    key: &ProtectedMemory,
+    nonce: &Nonce12,
+    aad: &[u8],
+    ciphertext: &[u8],
+    plaintext_length: usize,
+    maximum_plaintext_length: usize,
+) -> Result<ProtectedMemory, CryptoError> {
     if ciphertext.len() != plaintext_length.saturating_add(16) {
         return Err(CryptoError::ProviderFailure);
     }
@@ -282,8 +300,12 @@ pub(crate) fn open(
         opened?;
         Ok::<usize, ()>(destination.len())
     };
-    let result =
-        ProtectedMemory::initialize_supported(plaintext_length, key.status().policy(), initialize);
+    let result = ProtectedMemory::initialize_with_ceiling(
+        plaintext_length,
+        maximum_plaintext_length,
+        key.status().policy(),
+        initialize,
+    );
     result.map_err(|error| match error.kind() {
         MemoryErrorKind::Initializer => initializer_error,
         _ => CryptoError::MemoryProtection,

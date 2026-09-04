@@ -12,6 +12,13 @@ pub const MAX_PROTECTED_BYTES: usize = 1024 * 1024;
 /// Hard ceiling for an explicitly requested large protected allocation.
 pub const MAX_LARGE_PROTECTED_BYTES: usize = 16 * 1024 * 1024;
 
+/// Absolute ceiling for a format-owned protected allocation.
+///
+/// Callers must opt into this larger range with an explicit, narrower format
+/// ceiling; ordinary large allocations remain bounded by
+/// [`MAX_LARGE_PROTECTED_BYTES`].
+pub const MAX_EXTENDED_PROTECTED_BYTES: usize = 64 * 1024 * 1024;
+
 /// Caller-selected runtime protection policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -191,7 +198,7 @@ impl std::error::Error for MemoryError {}
 /// The provider type and raw mapping never cross this boundary. Bytes are
 /// visible only during checked callbacks.
 pub struct ProtectedMemory {
-    inner: BoundedGuardedSecretVec<MAX_LARGE_PROTECTED_BYTES>,
+    inner: BoundedGuardedSecretVec<MAX_EXTENDED_PROTECTED_BYTES>,
     logical_capacity: usize,
     status: ProtectionStatus,
 }
@@ -235,6 +242,23 @@ impl ProtectedMemory {
         }
     }
 
+    /// Allocates a protected value under a caller-owned format ceiling.
+    ///
+    /// This is reserved for authenticated formats whose public maximum is
+    /// larger than [`MAX_LARGE_PROTECTED_BYTES`]. The requested ceiling must
+    /// itself fit within [`MAX_EXTENDED_PROTECTED_BYTES`].
+    pub fn initialize_with_ceiling<E>(
+        capacity: usize,
+        maximum: usize,
+        policy: ProtectionPolicy,
+        initializer: impl FnOnce(&mut [u8]) -> Result<usize, E>,
+    ) -> Result<Self, MemoryError> {
+        if maximum == 0 || maximum > MAX_EXTENDED_PROTECTED_BYTES {
+            return Err(MemoryError::new(MemoryErrorKind::Capacity));
+        }
+        Self::initialize_bounded(capacity, maximum, policy, initializer)
+    }
+
     fn initialize_bounded<E>(
         capacity: usize,
         maximum: usize,
@@ -245,7 +269,7 @@ impl ProtectedMemory {
             return Err(MemoryError::new(MemoryErrorKind::Capacity));
         }
         let request = request(policy);
-        let inner = BoundedGuardedSecretVec::<MAX_LARGE_PROTECTED_BYTES>::try_from_capacity_with_protection(
+        let inner = BoundedGuardedSecretVec::<MAX_EXTENDED_PROTECTED_BYTES>::try_from_capacity_with_protection(
             capacity,
             request,
             initializer,
@@ -425,6 +449,52 @@ mod tests {
         assert!(matches!(
             ProtectedMemory::initialize_supported(
                 MAX_LARGE_PROTECTED_BYTES + 1,
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |bytes| Ok::<usize, ()>(bytes.len()),
+            ),
+            Err(error) if error.kind() == MemoryErrorKind::Capacity
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn format_owned_ceiling_is_explicit_and_preserves_the_ordinary_large_bound()
+    -> Result<(), MemoryError> {
+        let format_capacity = MAX_LARGE_PROTECTED_BYTES + 1;
+        assert!(matches!(
+            ProtectedMemory::initialize_supported(
+                format_capacity,
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |bytes| Ok::<usize, ()>(bytes.len()),
+            ),
+            Err(error) if error.kind() == MemoryErrorKind::Capacity
+        ));
+
+        let extended = ProtectedMemory::initialize_with_ceiling(
+            format_capacity,
+            MAX_EXTENDED_PROTECTED_BYTES,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            |bytes| {
+                bytes[0] = 0x5a;
+                bytes[bytes.len() - 1] = 0xa5;
+                Ok::<usize, ()>(bytes.len())
+            },
+        )?;
+        assert_eq!(extended.capacity(), format_capacity);
+        assert!(extended.expose(|bytes| bytes[0] == 0x5a && bytes[bytes.len() - 1] == 0xa5)?);
+        assert!(matches!(
+            ProtectedMemory::initialize_with_ceiling(
+                MAX_EXTENDED_PROTECTED_BYTES + 1,
+                MAX_EXTENDED_PROTECTED_BYTES,
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |bytes| Ok::<usize, ()>(bytes.len()),
+            ),
+            Err(error) if error.kind() == MemoryErrorKind::Capacity
+        ));
+        assert!(matches!(
+            ProtectedMemory::initialize_with_ceiling(
+                1,
+                MAX_EXTENDED_PROTECTED_BYTES + 1,
                 ProtectionPolicy::EmergencyAllowDegraded,
                 |bytes| Ok::<usize, ()>(bytes.len()),
             ),

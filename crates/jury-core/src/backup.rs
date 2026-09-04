@@ -8,7 +8,10 @@ use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::{
-    backup_v1::{BackupEnvelopeV1, BackupFormatError, BackupHeaderV1, smallest_bucket_id},
+    backup_v1::{
+        BackupEnvelopeV1, BackupFormatError, BackupHeaderV1, MAX_BACKUP_ENVELOPE_BYTES,
+        smallest_bucket_id,
+    },
     identity_v1::{IdentityHeaderV1, KdfProfile},
     vault_v1::{
         ContentRole, Digest32, ItemAccessMode, ItemId, Nonce12, PrincipalId, PrincipalKind,
@@ -424,8 +427,11 @@ impl<R: RandomSource> BackupCreator<R> {
             .checked_sub(jury_protocol::backup_v1::AEAD_TAG_BYTES)
             .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
         let policy_memory = request.backup_passphrase.status().policy();
-        let padded =
-            ProtectedMemory::initialize_supported(plaintext_length, policy_memory, |output| {
+        let padded = ProtectedMemory::initialize_with_ceiling(
+            plaintext_length,
+            MAX_BACKUP_ENVELOPE_BYTES,
+            policy_memory,
+            |output| {
                 output.fill(0);
                 output[..4]
                     .copy_from_slice(&u32::try_from(logical_length).map_err(|_| ())?.to_be_bytes());
@@ -436,8 +442,9 @@ impl<R: RandomSource> BackupCreator<R> {
                     &prepared,
                 )?;
                 Ok::<usize, ()>(output.len())
-            })
-            .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))?;
+            },
+        )
+        .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))?;
         let payload_digest = padded
             .expose(|bytes| crypto::sha256(&bytes[4..4 + logical_length]))
             .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))?;
@@ -507,7 +514,7 @@ pub fn open(
     .map_err(map_crypto_error)?;
     let key =
         crypto::derive_hkdf_key(&derived, &envelope.header.kdf_info()).map_err(map_crypto_error)?;
-    let plaintext = crypto::open(
+    let plaintext = crypto::open_with_ceiling(
         &key,
         &envelope.header.nonce,
         &envelope.header.aad().map_err(map_format_error)?,
@@ -516,6 +523,7 @@ pub fn open(
             .header
             .plaintext_capacity()
             .map_err(map_format_error)?,
+        MAX_BACKUP_ENVELOPE_BYTES,
     )
     .map_err(map_crypto_error)?;
     let policy_memory = passphrase.status().policy();
