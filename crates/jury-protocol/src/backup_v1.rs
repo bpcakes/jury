@@ -270,7 +270,13 @@ impl BackupEnvelopeV1 {
         if bytes.len() != bucket_bytes(header.target_bucket_id)? {
             return Err(BackupFormatError::InvalidBucket);
         }
-        Self::new(header, bytes[BACKUP_PREFIX_BYTES..].to_vec())
+        let ciphertext_bytes = &bytes[BACKUP_PREFIX_BYTES..];
+        let mut ciphertext = Vec::new();
+        ciphertext
+            .try_reserve_exact(ciphertext_bytes.len())
+            .map_err(|_| BackupFormatError::ResourceUnavailable)?;
+        ciphertext.extend_from_slice(ciphertext_bytes);
+        Self::new(header, ciphertext)
     }
 }
 

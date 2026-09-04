@@ -124,6 +124,18 @@ pub(super) fn backup_create(
             "backup and identity passphrases match; deliberate reuse requires --reuse-identity-passphrase",
         ));
     }
+    let protection_degraded = any_protection_degraded(
+        [
+            context.protection_degraded,
+            backup_passphrase.protection_degraded(),
+        ]
+        .into_iter()
+        .chain(
+            additional_passphrases
+                .iter()
+                .map(secret_input::CapturedPassphrase::protection_degraded),
+        ),
+    );
     drop(identity_passphrase);
     drop(additional_passphrases);
     let (owner_local_state, additional_local_state) = local_state_snapshots
@@ -212,7 +224,7 @@ pub(super) fn backup_create(
             "durability": durability(publication),
             "local_creation_receipt_recorded": local_receipt_recorded,
             "identity_passphrase_reused": passphrases_match,
-            "protection_degraded": context.protection_degraded || backup_passphrase.protection_degraded(),
+            "protection_degraded": protection_degraded,
         }),
         lines,
     ))
@@ -408,6 +420,10 @@ pub(super) fn backup_status(
 
 struct AdditionalBackupIdentity {
     identity: UnlockedIdentity,
+}
+
+fn any_protection_degraded(states: impl IntoIterator<Item = bool>) -> bool {
+    states.into_iter().any(std::convert::identity)
 }
 
 struct LocalStateSnapshot {

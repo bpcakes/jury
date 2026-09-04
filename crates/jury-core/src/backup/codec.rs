@@ -134,8 +134,8 @@ fn parse_payload(bytes: &[u8], protection: ProtectionPolicy) -> Result<ParsedPay
     {
         return Err(BackupError::new(BackupErrorKind::InvalidFormat));
     }
-    let vault_bytes = cursor.sized(16 * 1024 * 1024)?.to_vec();
-    let catalog_bytes = cursor.sized(MAX_CATALOG_BYTES)?.to_vec();
+    let vault_bytes = copy_from_payload(cursor.sized(16 * 1024 * 1024)?)?;
+    let catalog_bytes = copy_from_payload(cursor.sized(MAX_CATALOG_BYTES)?)?;
     let count = usize::from(cursor.u8()?);
     if !(1..=3).contains(&count) {
         return Err(BackupError::new(BackupErrorKind::InvalidFormat));
@@ -170,13 +170,9 @@ fn parse_payload(bytes: &[u8], protection: ProtectionPolicy) -> Result<ParsedPay
             return Err(BackupError::new(BackupErrorKind::IdentityMismatch));
         }
         let local_state = RecoveredLocalState {
-            audit: cursor.sized(crate::local_state::MAX_AUDIT_BYTES)?.to_vec(),
-            checkpoint: cursor
-                .sized(crate::local_state::MAX_CHECKPOINT_BYTES)?
-                .to_vec(),
-            receipts: cursor
-                .sized(crate::local_state::MAX_RECEIPTS_BYTES)?
-                .to_vec(),
+            audit: copy_from_payload(cursor.sized(crate::local_state::MAX_AUDIT_BYTES)?)?,
+            checkpoint: copy_from_payload(cursor.sized(crate::local_state::MAX_CHECKPOINT_BYTES)?)?,
+            receipts: copy_from_payload(cursor.sized(crate::local_state::MAX_RECEIPTS_BYTES)?)?,
         };
         identities.push(RecoveredRoleIdentity {
             role,
@@ -192,6 +188,15 @@ fn parse_payload(bytes: &[u8], protection: ProtectionPolicy) -> Result<ParsedPay
         catalog_bytes,
         identities,
     })
+}
+
+fn copy_from_payload(bytes: &[u8]) -> Result<Vec<u8>, BackupError> {
+    let mut copied = Vec::new();
+    copied
+        .try_reserve_exact(bytes.len())
+        .map_err(|_| BackupError::new(BackupErrorKind::ResourceUnavailable))?;
+    copied.extend_from_slice(bytes);
+    Ok(copied)
 }
 
 struct WriteCursor<'a> {

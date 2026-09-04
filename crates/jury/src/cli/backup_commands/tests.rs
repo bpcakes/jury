@@ -71,6 +71,13 @@ fn backup_local_state_budget_rejects_oversized_audit_before_reading_it() -> Test
     Ok(())
 }
 
+#[test]
+fn backup_protection_summary_includes_every_optional_identity() {
+    assert!(!any_protection_degraded([false, false, false, false]));
+    assert!(any_protection_degraded([false, false, true, false]));
+    assert!(any_protection_degraded([false, false, false, true]));
+}
+
 fn write_owner_backup(path: &Path) -> TestResult<Vec<u8>> {
     let identity_passphrase = protected(b"ExampleIdentityPassphrase")?;
     let created_identity = IdentityCreator::new().create(

@@ -257,8 +257,8 @@ fn seal_bytes(
     buffer
         .try_reserve_exact(ciphertext_length)
         .map_err(|_| CryptoError::ResourceUnavailable)?;
-    let mut ciphertext = Zeroizing::new(buffer);
-    ciphertext.extend_from_slice(plaintext);
+    let mut ciphertext = SensitiveBuffer::new(buffer);
+    ciphertext.bytes_mut()?.extend_from_slice(plaintext);
     let tag = key
         .expose(|key_bytes| {
             let cipher = Aes256GcmSiv::new_from_slice(key_bytes)
@@ -269,12 +269,40 @@ fn seal_bytes(
                 .try_into()
                 .map_err(|_| CryptoError::ProviderFailure)?;
             cipher
-                .encrypt_inout_detached(provider_nonce, aad, ciphertext.as_mut_slice().into())
+                .encrypt_inout_detached(
+                    provider_nonce,
+                    aad,
+                    ciphertext.bytes_mut()?.as_mut_slice().into(),
+                )
                 .map_err(|_| CryptoError::ProviderFailure)
         })
         .map_err(|_| CryptoError::MemoryProtection)??;
-    ciphertext.extend_from_slice(tag.as_slice());
-    Ok(ciphertext.to_vec())
+    ciphertext.bytes_mut()?.extend_from_slice(tag.as_slice());
+    ciphertext.release()
+}
+
+struct SensitiveBuffer(Option<Vec<u8>>);
+
+impl SensitiveBuffer {
+    const fn new(bytes: Vec<u8>) -> Self {
+        Self(Some(bytes))
+    }
+
+    fn bytes_mut(&mut self) -> Result<&mut Vec<u8>, CryptoError> {
+        self.0.as_mut().ok_or(CryptoError::ResourceUnavailable)
+    }
+
+    fn release(mut self) -> Result<Vec<u8>, CryptoError> {
+        self.0.take().ok_or(CryptoError::ResourceUnavailable)
+    }
+}
+
+impl Drop for SensitiveBuffer {
+    fn drop(&mut self) {
+        if let Some(bytes) = &mut self.0 {
+            bytes.zeroize();
+        }
+    }
 }
 
 pub(crate) fn open(
