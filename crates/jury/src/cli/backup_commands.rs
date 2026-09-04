@@ -41,14 +41,14 @@ pub(super) fn backup_create(
         path.parent().ok_or_else(invalid_restore_target)
     })
     .collect::<Result<Vec<_>, _>>()?;
-    if overlaps(output_parent, &identity_home)
-        || overlaps(output_parent, owner_identity_parent)
-        || overlaps(output_parent, &state_home)
-        || additional_identity_parents
-            .iter()
-            .any(|parent| overlaps(output_parent, parent))
-    {
-        return Err(containment_error());
+    let mut private_boundaries = vec![identity_home.as_path(), owner_identity_parent, &state_home];
+    private_boundaries.extend(additional_identity_parents.iter().copied());
+    if let Some(repository) = home.repository() {
+        private_boundaries.push(repository.worktree_path());
+    }
+    private_boundaries.extend(home.detached_path());
+    for boundary in private_boundaries {
+        validate_path_separation(&[output_parent, boundary]).map_err(map_filesystem_error)?;
     }
     let output_name = arguments.out.file_name().ok_or_else(filesystem_error)?;
     let destination = output_root

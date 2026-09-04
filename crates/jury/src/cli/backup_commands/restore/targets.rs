@@ -18,47 +18,29 @@ pub(super) fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(),
     if identity_targets.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(invalid_restore_target());
     }
-    let identity_parents = identity_targets
+    let mut identity_parents = identity_targets
         .iter()
         .map(|target| target.parent().ok_or_else(invalid_restore_target))
         .collect::<Result<Vec<_>, _>>()?;
-    if request.input.starts_with(request.state_root)
-        || identity_targets
-            .iter()
-            .any(|target| target.starts_with(request.state_root))
-        || identity_parents.iter().any(|parent| {
-            request.input.starts_with(parent) || request.state_root.starts_with(parent)
-        })
-    {
-        return Err(containment_error());
+    identity_parents.sort_unstable();
+    identity_parents.dedup();
+    let mut boundaries = vec![
+        request.input.to_path_buf(),
+        request.state_root.to_path_buf(),
+    ];
+    boundaries.extend(identity_parents.into_iter().map(Path::to_path_buf));
+    if let Some(repository) = request.target_home.repository() {
+        boundaries.push(repository.worktree_path().to_path_buf());
     }
-    if let Some(vault) = request.target_home.detached_path()
-        && (overlaps(vault, request.state_root)
-            || request.input.starts_with(vault)
-            || identity_parents
-                .iter()
-                .any(|parent| overlaps(vault, parent)))
-    {
-        return Err(containment_error());
-    }
+    boundaries.extend(request.target_home.detached_path().map(Path::to_path_buf));
     if let Some(source_home) = request.mode.source_home() {
-        let source_root = source_home
-            .repository()
-            .map(RepositoryLocation::worktree_path)
-            .or_else(|| source_home.detached_path())
-            .ok_or_else(containment_error)?;
-        let mut output_paths = vec![request.identity_target.path(), request.state_root];
-        output_paths.extend(request.approver_identity_target);
-        output_paths.extend(request.witness_identity_target);
-        output_paths.extend(request.target_home.detached_path());
-        if output_paths
-            .into_iter()
-            .any(|output| overlaps(source_root, output))
-        {
-            return Err(containment_error());
+        if let Some(repository) = source_home.repository() {
+            boundaries.push(repository.worktree_path().to_path_buf());
         }
+        boundaries.extend(source_home.detached_path().map(Path::to_path_buf));
     }
-    Ok(())
+    let boundaries = boundaries.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+    validate_path_separation(&boundaries).map_err(map_filesystem_error)
 }
 
 pub(super) fn restore_repository_refs<'a>(
