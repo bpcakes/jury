@@ -8,10 +8,7 @@ use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::{
-    backup_v1::{
-        BackupEnvelopeV1, BackupFormatError, BackupHeaderV1, MAX_BACKUP_ENVELOPE_BYTES,
-        smallest_bucket_id,
-    },
+    backup_v1::{BackupEnvelopeV1, BackupHeaderV1, MAX_BACKUP_ENVELOPE_BYTES, smallest_bucket_id},
     identity_v1::{IdentityHeaderV1, KdfProfile},
     vault_v1::{
         ContentRole, Digest32, ItemAccessMode, ItemId, Nonce12, PrincipalId, PrincipalKind,
@@ -20,10 +17,10 @@ use jury_protocol::{
 };
 
 use crate::{
-    crypto::{self, CryptoError},
+    crypto,
     identity::{
-        ApproverIdentity, IdentityError, IdentityErrorKind, RecoveredIdentity,
-        VaultPrincipalIdentity, WitnessIdentity, validate_passphrase,
+        ApproverIdentity, RecoveredIdentity, VaultPrincipalIdentity, WitnessIdentity,
+        validate_passphrase,
     },
     local_state::{CheckpointCandidate, CheckpointRelation, PrincipalLocalState},
     policy::{PolicyState, replay_policy_with_witness_policies},
@@ -31,10 +28,13 @@ use crate::{
 };
 
 mod codec;
+mod error;
 
 use codec::{
     ParsedPayload, PreparedIdentity, encode_payload, encoded_payload_len, parse_padded_payload,
 };
+pub use error::{BackupError, BackupErrorKind};
+use error::{map_crypto_error, map_format_error, map_identity_error};
 
 const RECOVERY_PAYLOAD_MAGIC: &[u8; 16] = b"JURY-RECOVERY-V1";
 const RECOVERY_PAYLOAD_VERSION: u16 = 1;
@@ -756,127 +756,12 @@ fn role_for_kind(kind: PrincipalKind) -> Result<RecoveryRole, BackupError> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BackupErrorKind {
-    InvalidFormat,
-    InvalidVault,
-    InvalidCatalog,
-    InvalidLocalState,
-    AuthenticationFailed,
-    InvalidPassphrase,
-    IdentityMismatch,
-    UnauthorizedOwner,
-    OwnerRequired,
-    DuplicateRole,
-    DirectRecoveryUnavailable,
-    StaleCheckpoint,
-    NonCanonicalPadding,
-    EntropyUnavailable,
-    ProtectionUnavailable,
-    ResourceUnavailable,
-    CapacityExhausted,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct BackupError {
-    kind: BackupErrorKind,
-}
-
-impl BackupError {
-    const fn new(kind: BackupErrorKind) -> Self {
-        Self { kind }
-    }
-
-    #[must_use]
-    pub const fn kind(self) -> BackupErrorKind {
-        self.kind
-    }
-}
-
-impl fmt::Debug for BackupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BackupError")
-            .field("kind", &self.kind)
-            .finish()
-    }
-}
-
-impl fmt::Display for BackupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self.kind {
-            BackupErrorKind::InvalidFormat => "backup recovery payload is invalid",
-            BackupErrorKind::InvalidVault => "backup vault state is invalid",
-            BackupErrorKind::InvalidCatalog => "backup policy catalog is invalid",
-            BackupErrorKind::InvalidLocalState => "backup local state is invalid",
-            BackupErrorKind::AuthenticationFailed => "backup authentication failed",
-            BackupErrorKind::InvalidPassphrase => {
-                "backup passphrase does not meet the exact profile"
-            }
-            BackupErrorKind::IdentityMismatch => {
-                "backup identity differs from authenticated policy"
-            }
-            BackupErrorKind::UnauthorizedOwner => "backup creator is not an active owner",
-            BackupErrorKind::OwnerRequired => "backup requires one active vault-principal owner",
-            BackupErrorKind::DuplicateRole => "backup role selection is duplicated",
-            BackupErrorKind::DirectRecoveryUnavailable => {
-                "owner direct recovery material is incomplete"
-            }
-            BackupErrorKind::StaleCheckpoint => "backup checkpoint is not current",
-            BackupErrorKind::NonCanonicalPadding => "backup padding is invalid",
-            BackupErrorKind::EntropyUnavailable => "backup entropy was unavailable",
-            BackupErrorKind::ProtectionUnavailable => {
-                "backup private-memory protection is unavailable"
-            }
-            BackupErrorKind::ResourceUnavailable => {
-                "backup cryptographic resources are unavailable"
-            }
-            BackupErrorKind::CapacityExhausted => "backup exceeds a hard capacity",
-        })
-    }
-}
-
-impl std::error::Error for BackupError {}
-
 fn fill_public<const N: usize>(source: &mut impl RandomSource) -> Result<[u8; N], BackupError> {
     let mut output = [0_u8; N];
     source
         .fill(&mut output)
         .map_err(|_| BackupError::new(BackupErrorKind::EntropyUnavailable))?;
     Ok(output)
-}
-
-const fn map_format_error(error: BackupFormatError) -> BackupError {
-    BackupError::new(match error {
-        BackupFormatError::ArtifactTooLarge | BackupFormatError::ResourceUnavailable => {
-            BackupErrorKind::CapacityExhausted
-        }
-        BackupFormatError::UnsupportedProfile => BackupErrorKind::InvalidFormat,
-        _ => BackupErrorKind::InvalidFormat,
-    })
-}
-
-const fn map_identity_error(error: IdentityError) -> BackupError {
-    BackupError::new(match error.kind() {
-        IdentityErrorKind::InvalidPassphrase => BackupErrorKind::InvalidPassphrase,
-        IdentityErrorKind::AuthenticationFailed => BackupErrorKind::AuthenticationFailed,
-        IdentityErrorKind::EntropyUnavailable | IdentityErrorKind::RetryExhausted => {
-            BackupErrorKind::EntropyUnavailable
-        }
-        IdentityErrorKind::ResourceUnavailable => BackupErrorKind::ResourceUnavailable,
-        IdentityErrorKind::ProtectionUnavailable => BackupErrorKind::ProtectionUnavailable,
-        _ => BackupErrorKind::InvalidFormat,
-    })
-}
-
-const fn map_crypto_error(error: CryptoError) -> BackupError {
-    BackupError::new(match error {
-        CryptoError::EntropyUnavailable => BackupErrorKind::EntropyUnavailable,
-        CryptoError::MemoryProtection => BackupErrorKind::ProtectionUnavailable,
-        CryptoError::ResourceUnavailable => BackupErrorKind::ResourceUnavailable,
-        CryptoError::AuthenticationFailed => BackupErrorKind::AuthenticationFailed,
-        CryptoError::ProviderFailure => BackupErrorKind::InvalidFormat,
-    })
 }
 
 #[cfg(test)]
