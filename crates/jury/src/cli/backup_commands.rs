@@ -292,21 +292,21 @@ pub(super) fn backup_status(
     let current_revision = context.policy.terminal_revision_hash();
     let creation_state = match &receipts.backup {
         None => "unknown",
-        Some(receipt) if &receipt.captured_public_revision_hash == current_revision => "current",
+        Some(receipt) if receipt.captured_public_revision_hash() == current_revision => "current",
         Some(_) => "stale",
     };
     let matching_verification = receipts.backup.as_ref().and_then(|backup| {
         receipts.verification.as_ref().filter(|verification| {
-            verification.backup_id == backup.backup_id
-                && verification.payload_digest == backup.payload_digest
-                && verification.captured_public_revision_hash
-                    == backup.captured_public_revision_hash
+            &verification.backup_id == backup.backup_id()
+                && &verification.payload_digest == backup.payload_digest()
+                && &verification.captured_public_revision_hash
+                    == backup.captured_public_revision_hash()
         })
     });
     let matching_drill = receipts.backup.as_ref().and_then(|backup| {
         receipts.drill.as_ref().filter(|drill| {
-            drill.backup_id == backup.backup_id
-                && drill.captured_public_revision_hash == backup.captured_public_revision_hash
+            &drill.backup_id == backup.backup_id()
+                && &drill.captured_public_revision_hash == backup.captured_public_revision_hash()
         })
     });
     let verified = matching_verification.is_some();
@@ -315,43 +315,33 @@ pub(super) fn backup_status(
     let age_ms = receipts
         .backup
         .as_ref()
-        .map(|receipt| now.saturating_sub(receipt.timestamp_ms));
-    let role_names = receipts.backup.as_ref().map_or_else(Vec::new, |receipt| {
-        role_names_from_mask(receipt.identity_role_mask)
-    });
-    let direct_items = receipts.backup.as_ref().map_or_else(Vec::new, |receipt| {
-        receipt
+        .map(|receipt| now.saturating_sub(receipt.timestamp_ms()));
+    let coverage = receipts.backup.as_ref().and_then(BackupReceipt::coverage);
+    let role_names = coverage.map(|coverage| role_names_from_mask(coverage.identity_role_mask));
+    let direct_items = coverage.map(|coverage| {
+        coverage
             .direct_item_ids
             .iter()
             .map(|id| hex(id.as_bytes()))
-            .collect()
+            .collect::<Vec<_>>()
     });
-    let witnessed_items = receipts.backup.as_ref().map_or_else(Vec::new, |receipt| {
-        receipt
+    let witnessed_items = coverage.map(|coverage| {
+        coverage
             .witnessed_item_ids
             .iter()
             .map(|id| hex(id.as_bytes()))
-            .collect()
+            .collect::<Vec<_>>()
     });
-    let unavailable_witnessed_items = receipts.backup.as_ref().map_or_else(Vec::new, |receipt| {
-        receipt
+    let unavailable_witnessed_items = coverage.map(|coverage| {
+        coverage
             .unavailable_witnessed_item_ids
             .iter()
             .map(|id| hex(id.as_bytes()))
-            .collect()
+            .collect::<Vec<_>>()
     });
-    let external_required = receipts
-        .backup
-        .as_ref()
-        .is_some_and(|receipt| receipt.external_witness_recovery_required);
-    let has_approver = receipts
-        .backup
-        .as_ref()
-        .is_some_and(|receipt| receipt.identity_role_mask & 2 != 0);
-    let has_witness = receipts
-        .backup
-        .as_ref()
-        .is_some_and(|receipt| receipt.identity_role_mask & 4 != 0);
+    let external_required = coverage.map(|coverage| coverage.external_witness_recovery_required);
+    let has_approver = coverage.is_some_and(|coverage| coverage.identity_role_mask & 2 != 0);
+    let has_witness = coverage.is_some_and(|coverage| coverage.identity_role_mask & 4 != 0);
     let mut create_command = String::from("jury backup create --out ABSOLUTE_FILE");
     let mut drill_command = String::from(
         "jury backup drill --in ABSOLUTE_FILE --vault-out ABSENT_PATH --identity-out ABSENT_PATH --state-out ABSENT_PATH",
@@ -364,18 +354,19 @@ pub(super) fn backup_status(
         create_command.push_str(" --witness-identity-file FILE");
         drill_command.push_str(" --witness-identity-out ABSENT_PATH");
     }
-    let next_command = if receipts.backup.is_none() || creation_state == "stale" {
-        create_command
-    } else if !verified {
-        "jury backup verify --in ABSOLUTE_FILE".to_owned()
-    } else if !drilled {
-        drill_command
-    } else if external_required {
-        "complete the separate J23 witness-service recovery path before witnessed private use"
-            .to_owned()
-    } else {
-        "none".to_owned()
-    };
+    let next_command =
+        if receipts.backup.is_none() || creation_state == "stale" || coverage.is_none() {
+            create_command
+        } else if !verified {
+            "jury backup verify --in ABSOLUTE_FILE".to_owned()
+        } else if !drilled {
+            drill_command
+        } else if external_required == Some(true) {
+            "complete the separate J23 witness-service recovery path before witnessed private use"
+                .to_owned()
+        } else {
+            "none".to_owned()
+        };
     Ok(CommandOutput::Safe {
         operation: "backup-status",
         fields: serde_json::json!({
@@ -383,15 +374,16 @@ pub(super) fn backup_status(
             "verification": if verified { "recorded" } else { "unknown" },
             "real_restore_drill": if drilled { "recorded" } else { "unknown" },
             "current_public_revision": hex(current_revision.as_bytes()),
-            "captured_public_revision": receipts.backup.as_ref().map(|receipt| hex(receipt.captured_public_revision_hash.as_bytes())),
+            "captured_public_revision": receipts.backup.as_ref().map(|receipt| hex(receipt.captured_public_revision_hash().as_bytes())),
             "backup_age_ms": age_ms,
             "last_full_verification_at_ms": matching_verification.map(|receipt| receipt.timestamp_ms),
             "included_identity_roles": role_names,
             "direct_item_ids": direct_items,
             "witnessed_item_ids": witnessed_items,
             "unavailable_witnessed_item_ids": unavailable_witnessed_items,
-            "local_verification_state_included": receipts.backup.as_ref().is_some_and(|receipt| receipt.checkpoints_current),
+            "local_verification_state_included": coverage.map(|coverage| coverage.checkpoints_current),
             "external_witness_recovery_required": external_required,
+            "coverage_metadata": if coverage.is_some() { "recorded" } else { "unknown" },
             "backup_file_exists_or_readable": "unknown",
             "recovers_juryd_replay_state": false,
             "recovers_external_anchors": false,
@@ -1808,19 +1800,21 @@ fn backup_receipt(
     header: &jury_protocol::backup_v1::BackupHeaderV1,
     coverage: &RecoveryCoverage,
 ) -> BackupReceipt {
-    BackupReceipt {
-        backup_id: digest_from_recovery_id(&header.backup_id),
-        captured_public_revision_hash: header.source_public_revision_hash.clone(),
-        timestamp_ms: header.created_at_ms,
-        payload_digest: header.payload_digest.clone(),
-        owner_descriptor_fingerprint: header.owner_descriptor_fingerprint.clone(),
-        identity_role_mask: role_mask(&coverage.identity_roles),
-        direct_item_ids: coverage.direct_item_ids.clone(),
-        witnessed_item_ids: coverage.witnessed_item_ids.clone(),
-        unavailable_witnessed_item_ids: coverage.unavailable_witnessed_item_ids.clone(),
-        checkpoints_current: coverage.checkpoints_current,
-        external_witness_recovery_required: coverage.external_witness_recovery_required,
-    }
+    BackupReceipt::with_coverage(
+        digest_from_recovery_id(&header.backup_id),
+        header.source_public_revision_hash.clone(),
+        header.created_at_ms,
+        header.payload_digest.clone(),
+        BackupReceiptCoverage {
+            owner_descriptor_fingerprint: header.owner_descriptor_fingerprint.clone(),
+            identity_role_mask: role_mask(&coverage.identity_roles),
+            direct_item_ids: coverage.direct_item_ids.clone(),
+            witnessed_item_ids: coverage.witnessed_item_ids.clone(),
+            unavailable_witnessed_item_ids: coverage.unavailable_witnessed_item_ids.clone(),
+            checkpoints_current: coverage.checkpoints_current,
+            external_witness_recovery_required: coverage.external_witness_recovery_required,
+        },
+    )
 }
 
 fn digest_from_recovery_id(id: &jury_protocol::vault_v1::RecoveryId) -> Digest32 {

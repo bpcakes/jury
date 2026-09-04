@@ -18,8 +18,8 @@ pub use audit::{
 };
 pub use checkpoint::{CheckpointCandidate, CheckpointRelation, LocalCheckpoint};
 pub use receipts::{
-    BackupReceipt, BackupVerificationReceipt, LocalReceipts, ReceiptUpdate, RestoreDrillReceipt,
-    TransferReceipt,
+    BackupReceipt, BackupReceiptCoverage, BackupVerificationReceipt, LocalReceipts, ReceiptUpdate,
+    RestoreDrillReceipt, TransferReceipt,
 };
 
 use crate::canonical::jce_v1 as jce;
@@ -395,7 +395,7 @@ impl PrincipalLocalState {
                 }
             }
             ReceiptUpdate::Backup(receipt) => {
-                if &receipt.captured_public_revision_hash
+                if receipt.captured_public_revision_hash()
                     != state.checkpoint.accepted_public_revision_hash()
                 {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
@@ -405,9 +405,10 @@ impl PrincipalLocalState {
                 let Some(backup) = state.receipts.latest_backup() else {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
                 };
-                if receipt.backup_id != backup.backup_id
-                    || receipt.captured_public_revision_hash != backup.captured_public_revision_hash
-                    || receipt.payload_digest != backup.payload_digest
+                if &receipt.backup_id != backup.backup_id()
+                    || &receipt.captured_public_revision_hash
+                        != backup.captured_public_revision_hash()
+                    || &receipt.payload_digest != backup.payload_digest()
                 {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
                 }
@@ -416,8 +417,9 @@ impl PrincipalLocalState {
                 let Some(backup) = state.receipts.latest_backup() else {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
                 };
-                if receipt.backup_id != backup.backup_id
-                    || receipt.captured_public_revision_hash != backup.captured_public_revision_hash
+                if &receipt.backup_id != backup.backup_id()
+                    || &receipt.captured_public_revision_hash
+                        != backup.captured_public_revision_hash()
                 {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
                 }

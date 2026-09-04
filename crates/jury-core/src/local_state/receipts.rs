@@ -1,6 +1,6 @@
 use jury_protected::ProtectedMemory;
 use jury_protocol::vault_v1::{Digest32, ItemId};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest as _, Sha256};
 
 use super::{
@@ -21,13 +21,23 @@ pub struct TransferReceipt {
     pub output_digest: Digest32,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupReceipt {
-    pub backup_id: Digest32,
-    pub captured_public_revision_hash: Digest32,
-    pub timestamp_ms: u64,
-    pub payload_digest: Digest32,
+    backup_id: Digest32,
+    captured_public_revision_hash: Digest32,
+    timestamp_ms: u64,
+    payload_digest: Digest32,
+    details: BackupReceiptDetails,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BackupReceiptDetails {
+    LegacyV1,
+    CoverageV1(BackupReceiptCoverage),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackupReceiptCoverage {
     pub owner_descriptor_fingerprint: Digest32,
     /// Bit 0 is vault-principal, bit 1 approver, and bit 2 witness-client.
     pub identity_role_mask: u8,
@@ -36,6 +46,147 @@ pub struct BackupReceipt {
     pub unavailable_witnessed_item_ids: Vec<ItemId>,
     pub checkpoints_current: bool,
     pub external_witness_recovery_required: bool,
+}
+
+impl BackupReceipt {
+    #[must_use]
+    pub const fn with_coverage(
+        backup_id: Digest32,
+        captured_public_revision_hash: Digest32,
+        timestamp_ms: u64,
+        payload_digest: Digest32,
+        coverage: BackupReceiptCoverage,
+    ) -> Self {
+        Self {
+            backup_id,
+            captured_public_revision_hash,
+            timestamp_ms,
+            payload_digest,
+            details: BackupReceiptDetails::CoverageV1(coverage),
+        }
+    }
+
+    #[must_use]
+    pub const fn backup_id(&self) -> &Digest32 {
+        &self.backup_id
+    }
+
+    #[must_use]
+    pub const fn captured_public_revision_hash(&self) -> &Digest32 {
+        &self.captured_public_revision_hash
+    }
+
+    #[must_use]
+    pub const fn timestamp_ms(&self) -> u64 {
+        self.timestamp_ms
+    }
+
+    #[must_use]
+    pub const fn payload_digest(&self) -> &Digest32 {
+        &self.payload_digest
+    }
+
+    #[must_use]
+    pub const fn coverage(&self) -> Option<&BackupReceiptCoverage> {
+        match &self.details {
+            BackupReceiptDetails::LegacyV1 => None,
+            BackupReceiptDetails::CoverageV1(coverage) => Some(coverage),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BackupReceiptWire {
+    backup_id: Digest32,
+    captured_public_revision_hash: Digest32,
+    timestamp_ms: u64,
+    payload_digest: Digest32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_descriptor_fingerprint: Option<Digest32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity_role_mask: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    direct_item_ids: Option<Vec<ItemId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    witnessed_item_ids: Option<Vec<ItemId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unavailable_witnessed_item_ids: Option<Vec<ItemId>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checkpoints_current: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    external_witness_recovery_required: Option<bool>,
+}
+
+impl Serialize for BackupReceipt {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let coverage = self.coverage();
+        BackupReceiptWire {
+            backup_id: self.backup_id.clone(),
+            captured_public_revision_hash: self.captured_public_revision_hash.clone(),
+            timestamp_ms: self.timestamp_ms,
+            payload_digest: self.payload_digest.clone(),
+            owner_descriptor_fingerprint: coverage
+                .map(|coverage| coverage.owner_descriptor_fingerprint.clone()),
+            identity_role_mask: coverage.map(|coverage| coverage.identity_role_mask),
+            direct_item_ids: coverage.map(|coverage| coverage.direct_item_ids.clone()),
+            witnessed_item_ids: coverage.map(|coverage| coverage.witnessed_item_ids.clone()),
+            unavailable_witnessed_item_ids: coverage
+                .map(|coverage| coverage.unavailable_witnessed_item_ids.clone()),
+            checkpoints_current: coverage.map(|coverage| coverage.checkpoints_current),
+            external_witness_recovery_required: coverage
+                .map(|coverage| coverage.external_witness_recovery_required),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BackupReceipt {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = BackupReceiptWire::deserialize(deserializer)?;
+        let details = match (
+            wire.owner_descriptor_fingerprint,
+            wire.identity_role_mask,
+            wire.direct_item_ids,
+            wire.witnessed_item_ids,
+            wire.unavailable_witnessed_item_ids,
+            wire.checkpoints_current,
+            wire.external_witness_recovery_required,
+        ) {
+            (None, None, None, None, None, None, None) => BackupReceiptDetails::LegacyV1,
+            (
+                Some(owner_descriptor_fingerprint),
+                Some(identity_role_mask),
+                Some(direct_item_ids),
+                Some(witnessed_item_ids),
+                Some(unavailable_witnessed_item_ids),
+                Some(checkpoints_current),
+                Some(external_witness_recovery_required),
+            ) => BackupReceiptDetails::CoverageV1(BackupReceiptCoverage {
+                owner_descriptor_fingerprint,
+                identity_role_mask,
+                direct_item_ids,
+                witnessed_item_ids,
+                unavailable_witnessed_item_ids,
+                checkpoints_current,
+                external_witness_recovery_required,
+            }),
+            _ => return Err(D::Error::custom("partial backup receipt coverage")),
+        };
+        Ok(Self {
+            backup_id: wire.backup_id,
+            captured_public_revision_hash: wire.captured_public_revision_hash,
+            timestamp_ms: wire.timestamp_ms,
+            payload_digest: wire.payload_digest,
+            details,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -118,8 +269,8 @@ impl LocalReceipts {
             }
             ReceiptUpdate::Backup(receipt) => {
                 ensure_newer(
-                    self.latest_backup.as_ref().map(|prior| prior.timestamp_ms),
-                    receipt.timestamp_ms,
+                    self.latest_backup.as_ref().map(BackupReceipt::timestamp_ms),
+                    receipt.timestamp_ms(),
                 )?;
                 validate_backup(&receipt)?;
                 self.latest_backup = Some(receipt);
@@ -270,10 +421,13 @@ impl ReceiptEntry {
     fn from_backup(receipt: &BackupReceipt) -> Self {
         Self {
             kind: 2,
-            operation_id: receipt.backup_id.clone(),
-            captured_public_revision_hash: receipt.captured_public_revision_hash.clone(),
-            timestamp_ms: receipt.timestamp_ms,
-            output_digest: backup_coverage_digest(receipt),
+            operation_id: receipt.backup_id().clone(),
+            captured_public_revision_hash: receipt.captured_public_revision_hash().clone(),
+            timestamp_ms: receipt.timestamp_ms(),
+            output_digest: receipt.coverage().map_or_else(
+                || receipt.payload_digest().clone(),
+                |coverage| backup_coverage_digest(receipt.payload_digest(), coverage),
+            ),
             verification_state: 1,
         }
     }
@@ -301,16 +455,24 @@ impl ReceiptEntry {
     }
 }
 
-fn backup_coverage_digest(receipt: &BackupReceipt) -> Digest32 {
+fn backup_coverage_digest(
+    payload_digest: &Digest32,
+    coverage_receipt: &BackupReceiptCoverage,
+) -> Digest32 {
     let mut coverage = jce("jury-v1/receipt/backup-coverage");
-    coverage.extend_from_slice(receipt.payload_digest.as_bytes());
-    coverage.extend_from_slice(receipt.owner_descriptor_fingerprint.as_bytes());
-    coverage.push(receipt.identity_role_mask);
-    coverage.push(u8::from(receipt.checkpoints_current));
-    coverage.push(u8::from(receipt.external_witness_recovery_required));
-    append_item_ids(&mut coverage, &receipt.direct_item_ids);
-    append_item_ids(&mut coverage, &receipt.witnessed_item_ids);
-    append_item_ids(&mut coverage, &receipt.unavailable_witnessed_item_ids);
+    coverage.extend_from_slice(payload_digest.as_bytes());
+    coverage.extend_from_slice(coverage_receipt.owner_descriptor_fingerprint.as_bytes());
+    coverage.push(coverage_receipt.identity_role_mask);
+    coverage.push(u8::from(coverage_receipt.checkpoints_current));
+    coverage.push(u8::from(
+        coverage_receipt.external_witness_recovery_required,
+    ));
+    append_item_ids(&mut coverage, &coverage_receipt.direct_item_ids);
+    append_item_ids(&mut coverage, &coverage_receipt.witnessed_item_ids);
+    append_item_ids(
+        &mut coverage,
+        &coverage_receipt.unavailable_witnessed_item_ids,
+    );
     Digest32::new(Sha256::digest(coverage).into())
 }
 
@@ -357,23 +519,26 @@ fn validate_transfer(receipt: &TransferReceipt) -> Result<(), LocalStateError> {
 
 fn validate_backup(receipt: &BackupReceipt) -> Result<(), LocalStateError> {
     validate_common(
-        &receipt.backup_id,
-        &receipt.captured_public_revision_hash,
-        receipt.timestamp_ms,
-        &receipt.payload_digest,
+        receipt.backup_id(),
+        receipt.captured_public_revision_hash(),
+        receipt.timestamp_ms(),
+        receipt.payload_digest(),
     )?;
-    if digest_is_zero(&receipt.owner_descriptor_fingerprint)
-        || receipt.identity_role_mask & 1 == 0
-        || receipt.identity_role_mask & !0b111 != 0
-        || !receipt.checkpoints_current
-        || !strictly_sorted_unique(&receipt.direct_item_ids)
-        || !strictly_sorted_unique(&receipt.witnessed_item_ids)
-        || !strictly_sorted_unique(&receipt.unavailable_witnessed_item_ids)
-        || receipt.external_witness_recovery_required != !receipt.witnessed_item_ids.is_empty()
-        || receipt
+    let Some(coverage) = receipt.coverage() else {
+        return Ok(());
+    };
+    if digest_is_zero(&coverage.owner_descriptor_fingerprint)
+        || coverage.identity_role_mask & 1 == 0
+        || coverage.identity_role_mask & !0b111 != 0
+        || !coverage.checkpoints_current
+        || !strictly_sorted_unique(&coverage.direct_item_ids)
+        || !strictly_sorted_unique(&coverage.witnessed_item_ids)
+        || !strictly_sorted_unique(&coverage.unavailable_witnessed_item_ids)
+        || coverage.external_witness_recovery_required != !coverage.witnessed_item_ids.is_empty()
+        || coverage
             .unavailable_witnessed_item_ids
             .iter()
-            .any(|item_id| !receipt.witnessed_item_ids.contains(item_id))
+            .any(|item_id| !coverage.witnessed_item_ids.contains(item_id))
     {
         return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
     }

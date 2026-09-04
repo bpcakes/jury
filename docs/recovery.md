@@ -49,7 +49,10 @@ matching `--approver-identity-out` or `--witness-identity-out` absent target.
 `backup verify` fully decrypts and validates the archive without publishing a
 restore. `backup status` reports authenticated local creation, verification,
 and drill receipts. A receipt does not prove that the archive still exists or
-is readable, so verify the specific retained file.
+is readable, so verify the specific retained file. Authenticated receipts made
+before coverage metadata was added remain readable; their coverage fields are
+reported as unknown, and `backup status` recommends creating a fresh backup
+instead of inferring which identities or items the older archive contains.
 
 ## Restore to an absent installation
 

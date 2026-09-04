@@ -119,19 +119,21 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
     )?;
     context.record_receipt(
         &mut state,
-        ReceiptUpdate::Backup(BackupReceipt {
-            backup_id: digest(0x63),
-            captured_public_revision_hash: digest(0x12),
-            timestamp_ms: 62,
-            payload_digest: digest(0x64),
-            owner_descriptor_fingerprint: digest(0x66),
-            identity_role_mask: 1,
-            direct_item_ids: Vec::new(),
-            witnessed_item_ids: Vec::new(),
-            unavailable_witnessed_item_ids: Vec::new(),
-            checkpoints_current: true,
-            external_witness_recovery_required: false,
-        }),
+        ReceiptUpdate::Backup(BackupReceipt::with_coverage(
+            digest(0x63),
+            digest(0x12),
+            62,
+            digest(0x64),
+            BackupReceiptCoverage {
+                owner_descriptor_fingerprint: digest(0x66),
+                identity_role_mask: 1,
+                direct_item_ids: Vec::new(),
+                witnessed_item_ids: Vec::new(),
+                unavailable_witnessed_item_ids: Vec::new(),
+                checkpoints_current: true,
+                external_witness_recovery_required: false,
+            },
+        )),
     )?;
     context.record_receipt(
         &mut state,
@@ -233,11 +235,82 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
         verified
             .receipts()
             .latest_backup()
-            .map(|receipt| &receipt.backup_id),
+            .map(BackupReceipt::backup_id),
         Some(&digest(0x63))
     );
     assert!(verified.receipts().latest_backup_verification().is_some());
     assert!(verified.receipts().latest_restore_drill().is_some());
+    Ok(())
+}
+
+#[test]
+fn legacy_backup_receipt_fixture_verifies_and_retains_its_original_mac_contract()
+-> Result<(), Box<dyn std::error::Error>> {
+    const LEGACY_RECEIPTS: &[u8] = br#"{
+  "version": 1,
+  "scope": {
+    "vault_id": "1111111111111111111111111111111111111111111111111111111111111111",
+    "genesis_fingerprint": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=",
+    "principal_id": "1313131313131313131313131313131313131313131313131313131313131313"
+  },
+  "latest_transfer": null,
+  "latest_backup": {
+    "backup_id": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M=",
+    "captured_public_revision_hash": "EhISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhI=",
+    "timestamp_ms": 62,
+    "payload_digest": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ="
+  },
+  "latest_backup_verification": null,
+  "latest_restore_drill": null,
+  "mac": "Vx7kpb2x8Qzaw/nQ5vLzsWYJbjweKHfZuP/ONycR74g="
+}
+"#;
+
+    let context = context();
+    let legacy =
+        receipts::LocalReceipts::parse(LEGACY_RECEIPTS, context.scope(), &context.receipts_key)?;
+    let backup = legacy.latest_backup().ok_or("legacy backup absent")?;
+    assert_eq!(backup.backup_id(), &digest(0x63));
+    assert_eq!(backup.payload_digest(), &digest(0x64));
+    assert!(backup.coverage().is_none());
+    assert_eq!(legacy.to_bytes()?, LEGACY_RECEIPTS);
+
+    let candidate = candidate(context.scope(), &[(0, 0x12)]);
+    let mut state = context.initialize(&candidate, 1)?;
+    state.receipts = legacy;
+    context.record_receipt(
+        &mut state,
+        ReceiptUpdate::BackupVerification(BackupVerificationReceipt {
+            backup_id: digest(0x63),
+            captured_public_revision_hash: digest(0x12),
+            timestamp_ms: 63,
+            payload_digest: digest(0x64),
+        }),
+    )?;
+    let files = context.serialize(&state)?;
+    let verified = context.verify_files(
+        Some(files.audit()),
+        Some(files.checkpoint()),
+        Some(files.receipts()),
+    )?;
+    assert!(
+        verified
+            .receipts()
+            .latest_backup()
+            .is_some_and(|receipt| receipt.coverage().is_none())
+    );
+    assert!(verified.receipts().latest_backup_verification().is_some());
+
+    let mut partial: Value = serde_json::from_slice(LEGACY_RECEIPTS)?;
+    partial["latest_backup"]["identity_role_mask"] = Value::from(1);
+    assert!(matches!(
+        receipts::LocalReceipts::parse(
+            &pretty_json(&partial)?,
+            context.scope(),
+            &context.receipts_key,
+        ),
+        Err(error) if error.kind() == LocalStateErrorKind::InvalidFormat
+    ));
     Ok(())
 }
 

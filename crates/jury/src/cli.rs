@@ -26,8 +26,8 @@ use jury_core::item::{
 };
 use jury_core::local_state::{
     AuditAction, AuditEventDraft, AuditItemScope, AuditOutcome, BackupReceipt,
-    BackupVerificationReceipt, CheckpointCandidate, CheckpointRelation, LocalStateFiles,
-    PrincipalLocalState, ReceiptUpdate, RestoreDrillReceipt, TransferReceipt,
+    BackupReceiptCoverage, BackupVerificationReceipt, CheckpointCandidate, CheckpointRelation,
+    LocalStateFiles, PrincipalLocalState, ReceiptUpdate, RestoreDrillReceipt, TransferReceipt,
 };
 use jury_core::mutation::{DirectDowngradeAcknowledgement, MutationKind, VaultMutationPlan};
 use jury_core::policy::{
