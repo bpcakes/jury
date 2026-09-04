@@ -11,12 +11,12 @@ After this work, a small backup succeeds under the default strict memory policy 
 - [x] (2026-09-04T15:14:40Z) Reproduce and source-check every merged-review finding.
 - [x] (2026-09-04T15:14:40Z) Resolve the four open design questions from the master plan, recovery guide, prior ExecPlans, implementation commits, and CLI contract.
 - [x] (2026-09-04T15:14:40Z) Create and claim `jury-qv4.2.16`; start this Jig session at baseline `abcaa931ffdda0e07200add6dd0e48fa29ebdeee`.
-- [ ] Replace format-sized `ProtectedMemory` with bounded zeroizing bulk bytes and preserve encoding/resource error classes.
-- [ ] Enforce a cumulative local-state budget during hardened reads and report exact capacity classes from core encoding.
-- [ ] Make `LockedVaultState::read` use the existing-only principal capability.
-- [ ] Replace create-new hard-link publication with an atomic no-replace rename and remove the unreconcilable cleanup outcome.
-- [ ] Represent restore identity creation versus reuse as a typed strategy and aggregate degraded-protection status into restore/drill output.
-- [ ] Run focused tests after each slice, then formatting, clippy, the full test suite, plan-aware checks, and required gates; close the bead and work session.
+- [x] (2026-09-04T15:20:07Z) Replace format-sized `ProtectedMemory` with bounded zeroizing bulk bytes and preserve encoding/resource error classes; 28 protected-memory tests and 8 focused core backup/crypto tests pass.
+- [x] (2026-09-04T15:28:01Z) Enforce a cumulative local-state budget during hardened reads and report exact capacity classes from core encoding; filesystem, 9 core backup/crypto, sparse-audit, and all 4 in-process backup command tests pass.
+- [x] (2026-09-04T15:29:10Z) Make `LockedVaultState::read` use the existing-only principal capability; all 34 filesystem tests pass, including the absent-principal no-side-effect regression.
+- [x] (2026-09-04T15:34:02Z) Replace create-new hard-link publication with an atomic no-replace rename and remove the unreconcilable cleanup outcome; all 34 filesystem tests and 7 mutation-commit tests pass.
+- [x] (2026-09-04T15:42:35Z) Represent restore identity creation versus reuse as a typed strategy and aggregate degraded-protection status into restore/drill output; the all-role in-process restore and native create/verify/drill/restore workflow pass.
+- [x] (2026-09-04T17:03:06Z) Run focused tests after each slice, formatting, clippy, the full test suite, and plan-aware checks; all five required gates pass under batch receipt `receipt_01M1PN4T5YSM20ZKTHG1SHTR5M`.
 
 ## Surprises & Discoveries
 
@@ -26,6 +26,14 @@ After this work, a small backup succeeds under the default strict memory policy 
   Evidence: `crates/jury-protected/src/secret.rs` zeroizes on drop and refuses reallocation during extension.
 - Observation: `jury-filesystem` already depends on pinned safe `rustix`; enabling its filesystem feature permits capability-relative `renameat2(RENAME_NOREPLACE)` without adding unsafe Jury code.
   Evidence: `crates/jury-filesystem/Cargo.toml` pins `rustix = 1.1.4`, and the provider exposes `fs::renameat_with` plus `RenameFlags::NOREPLACE`.
+- Observation: Switching the shared backup-test passphrase helper from emergency degradation to `ProtectionPolicy::Strict` passes without changing any backup fixture.
+  Evidence: `cargo test -p jury-core backup --all-targets` passed all 8 selected backup and bulk-crypto tests after the padded archive moved to `SecretBytes`.
+- Observation: The existing CLI-focused command in the initial plan used `--bin jury`, but backup unit tests live in the package library target.
+  Evidence: `cargo test -p jury --bin jury cli::backup_commands` selected zero tests; the corrected `cargo test -p jury cli::backup_commands::tests --lib` passed all 4 tests in 196.62 seconds.
+- Observation: The first repository clippy pass rejected one new test's `expect_err` under the workspace's panic-free lint policy.
+  Evidence: `scripts/jig check clippy` reported `clippy::expect-used` in `backup_tests.rs`; commit `53d2693` changed the assertion to an explicit `Result` match, after which clippy passed.
+- Observation: The first plan-aware check found that the accumulated review repair pushed `backup_commands.rs` and `restore.rs` above the 800-line hard limit.
+  Evidence: `jig.rust_file_loc` reported 819 and 809 LOC. Commit `747744a` extracted recovery output and restore-target boundary modules; the gate then passed with the files at 757 and 532 LOC and the new modules at 65 and 289 LOC.
 
 ## Decision Log
 
@@ -50,7 +58,9 @@ After this work, a small backup succeeds under the default strict memory policy 
 
 ## Outcomes & Retrospective
 
-Work is in progress. This section will record the final behavior, verification receipts, commits, and any remaining limitations.
+All product slices are implemented in isolated commits. The wire buckets are unchanged, archive plaintext is fallibly allocated and zeroized through `SecretBytes`, compact protected memory has no format-sized escape hatch, codec failure is no longer translated into memory-protection failure, raw local-state reads stop at a cumulative archive budget, exact encoder errors retain their metadata class, and locked observation no longer creates absent principal state. Create-new publication now has one atomic namespace transition, restore strategy is a sum type, and restore/drill report the aggregate passphrase-protection state.
+
+Validation is complete. The final standalone `scripts/jig check test` passed in 709.6 seconds after the module extraction. The final plan-scoped batch then passed `jig.contract_check`, `jig.rust_file_loc`, `jig.fmt_check`, `jig.clippy`, and `jig.test`; its test target passed in 851.8 seconds. No wire format, cryptographic primitive, persisted-state contract, or command-scoped `JURY_NEW_PASSPHRASE` behavior changed.
 
 ## Context and Orientation
 
@@ -87,12 +97,12 @@ For capacity and read behavior, run:
 
     cargo test -p jury-filesystem --all-targets
     cargo test -p jury-core backup --all-targets
-    cargo test -p jury --bin jury cli::backup_commands -- --nocapture
+    cargo test -p jury cli::backup_commands::tests --lib -- --nocapture
 
 For publication and restore behavior, run:
 
     cargo test -p jury-filesystem --all-targets
-    cargo test -p jury --bin jury cli::backup_commands -- --nocapture
+    cargo test -p jury cli::backup_commands::tests --lib -- --nocapture
     cargo test -p jury --test native_cli backup -- --nocapture
 
 After integration, run:
@@ -129,3 +139,13 @@ The comprehensive review fingerprint was `0348ab00a465092d67abc7c837e079727bb5a2
 `jury_protected::SecretBytes` will expose a fallible zeroed constructor and mutable slice without exposing provider handles. `jury_core::backup::BackupCapacityClass` will be a value-free public enum available through `BackupError::capacity_class()`. `LockedVaultState::read_bounded` will accept a caller maximum no greater than the file-kind maximum. `PublicationOutcome` will retain only `PublishedAndSynced` and `PublishedButParentUnsynced`. `RestoreIdentityTarget` remains private to the CLI restore model. No new cryptographic primitive, wire field, runtime Jig dependency, secret output, or real credential is introduced.
 
 Revision note (2026-09-04): Replaced the initial one-line plan body with the researched, self-contained implementation and validation plan because the open design questions are now resolved.
+
+Revision note (2026-09-04): Recorded completion and focused evidence for the bulk zeroizing-memory slice.
+
+Revision note (2026-09-04): Recorded capacity-budget completion and corrected the library-target command discovered during validation.
+
+Revision note (2026-09-04): Recorded the completed non-creating locked-read slice and its filesystem regression evidence.
+
+Revision note (2026-09-04): Recorded the atomic-publication, typed-restore-target, and degraded-protection reporting commits and their focused regression evidence.
+
+Revision note (2026-09-04): Recorded the clippy correction, structural module extraction, final full-suite result, and fresh five-gate batch receipt.
