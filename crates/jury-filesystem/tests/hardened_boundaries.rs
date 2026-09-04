@@ -596,6 +596,22 @@ fn worktree_api_can_publish_only_the_fixed_encrypted_artifact_leaf() -> Result<(
 }
 
 #[test]
+fn retained_repository_refuses_publication_after_git_marker_disappears()
+-> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let mut repository = repository(&worktree)?;
+    fs::remove_dir_all(worktree.join(".git"))?;
+    let error = repository
+        .create_jury_directory()
+        .err()
+        .ok_or("missing Git marker should fail")?;
+    assert_eq!(error.kind(), FilesystemErrorKind::InvalidMarker);
+    assert!(!worktree.join(".jury").exists());
+    Ok(())
+}
+
+#[test]
 fn errors_are_value_and_path_free() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let state = HardenedStateRoot::open_or_create(&temp.path().join("state"), &[])?;

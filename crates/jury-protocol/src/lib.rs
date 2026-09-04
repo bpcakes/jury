@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod artifact;
+pub mod backup_v1;
 mod canonical;
 pub mod identity_v1;
 pub mod transfer_v1;

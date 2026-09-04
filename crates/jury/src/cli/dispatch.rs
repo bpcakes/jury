@@ -59,6 +59,21 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::Transfer {
             command: TransferCommand::Status,
         } => transfer_status(&cli, &environment, &current, protection),
+        Command::Backup {
+            command: BackupCommand::Create(arguments),
+        } => backup_create(&cli, arguments, &environment, &current, protection),
+        Command::Backup {
+            command: BackupCommand::Status,
+        } => backup_status(&cli, &environment, &current, protection),
+        Command::Backup {
+            command: BackupCommand::Verify(arguments),
+        } => backup_verify(&cli, arguments, &environment, &current, protection),
+        Command::Backup {
+            command: BackupCommand::Restore(arguments),
+        } => backup_restore(&cli, arguments, &environment, &current, protection),
+        Command::Backup {
+            command: BackupCommand::Drill(arguments),
+        } => backup_drill(&cli, arguments, &environment, &current, protection),
         Command::Receipt {
             command: ReceiptCommand::Inspect(arguments),
         } => receipt_inspect(arguments),

@@ -51,6 +51,10 @@ impl CapturedPassphrase {
     pub fn protection_degraded(&self) -> bool {
         self.process_status.is_degraded() || memory_controls_degraded(self.memory.status())
     }
+
+    pub fn matches(&self, other: &Self) -> Result<bool, SecretInputError> {
+        secrets_match(&self.memory, &other.memory)
+    }
 }
 
 pub fn capture(
@@ -58,6 +62,41 @@ pub fn capture(
     passphrase_stdin: bool,
     confirmation: bool,
 ) -> Result<CapturedPassphrase, SecretInputError> {
+    capture_named(policy, passphrase_stdin, confirmation, "Passphrase")
+}
+
+pub fn capture_named(
+    policy: ProtectionPolicy,
+    passphrase_stdin: bool,
+    confirmation: bool,
+    label: &str,
+) -> Result<CapturedPassphrase, SecretInputError> {
+    capture_named_or_environment(policy, passphrase_stdin, confirmation, label, None)
+}
+
+pub fn capture_named_or_environment(
+    policy: ProtectionPolicy,
+    passphrase_stdin: bool,
+    confirmation: bool,
+    label: &str,
+    environment: Option<&[u8]>,
+) -> Result<CapturedPassphrase, SecretInputError> {
+    if let Some(value) = environment {
+        if value.len() > MAX_PASSPHRASE_BYTES {
+            return Err(SecretInputError::InputTooLong);
+        }
+        let process_status = establish_process_protection(policy)?;
+        let capacity = value.len().max(1);
+        let memory = ProtectedMemory::initialize(capacity, policy, |destination| {
+            destination[..value.len()].copy_from_slice(value);
+            Ok::<usize, ()>(value.len())
+        })
+        .map_err(|_| SecretInputError::ProtectionUnavailable)?;
+        return Ok(CapturedPassphrase {
+            memory,
+            process_status,
+        });
+    }
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     if !terminal && !passphrase_stdin {
@@ -66,23 +105,18 @@ pub fn capture(
 
     // Establish dump suppression and the requested memory controls before the
     // first secret byte is accepted from the terminal or pipe.
-    let sentinel = ProtectedMemory::initialize(1, policy, |destination| {
-        destination[0] = 0;
-        Ok::<usize, ()>(1)
-    })
-    .map_err(|_| SecretInputError::ProtectionUnavailable)?;
-    let process_status = capture_after_process_protection(policy, sentinel.status().clone(), || ())
-        .map_err(|_| SecretInputError::ProtectionUnavailable)?
-        .status;
+    let process_status = establish_process_protection(policy)?;
 
-    let first = read_one(&stdin, terminal, "Passphrase: ", policy)?;
+    let first_prompt = format!("{label}: ");
+    let first = read_one(&stdin, terminal, &first_prompt, policy)?;
     if !confirmation {
         return Ok(CapturedPassphrase {
             memory: first,
             process_status,
         });
     }
-    let second = read_one(&stdin, terminal, "Confirm passphrase: ", policy)?;
+    let second_prompt = format!("Confirm {label}: ");
+    let second = read_one(&stdin, terminal, &second_prompt, policy)?;
     if secrets_match(&first, &second)? {
         Ok(CapturedPassphrase {
             memory: first,
@@ -91,6 +125,21 @@ pub fn capture(
     } else {
         Err(SecretInputError::ConfirmationMismatch)
     }
+}
+
+fn establish_process_protection(
+    policy: ProtectionPolicy,
+) -> Result<ProtectionStatus, SecretInputError> {
+    let sentinel = ProtectedMemory::initialize(1, policy, |destination| {
+        destination[0] = 0;
+        Ok::<usize, ()>(1)
+    })
+    .map_err(|_| SecretInputError::ProtectionUnavailable)?;
+    Ok(
+        capture_after_process_protection(policy, sentinel.status().clone(), || ())
+            .map_err(|_| SecretInputError::ProtectionUnavailable)?
+            .status,
+    )
 }
 
 fn memory_controls_degraded(status: &ProtectionStatus) -> bool {
@@ -283,6 +332,42 @@ mod tests {
             &secret(b"ExamplePass1234")?,
             &secret(b"ExamplePass12345")?
         )?);
+        Ok(())
+    }
+
+    #[test]
+    fn environment_capture_preserves_exact_utf8_bytes_and_the_1024_byte_ceiling()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let value = "Exact-例-Backup-Passphrase".as_bytes();
+        let captured = capture_named_or_environment(
+            ProtectionPolicy::EmergencyAllowDegraded,
+            false,
+            true,
+            "Backup passphrase",
+            Some(value),
+        )?;
+        assert!(captured.memory().expose(|bytes| bytes == value)?);
+
+        let maximum = vec![b'x'; 1_024];
+        let captured = capture_named_or_environment(
+            ProtectionPolicy::EmergencyAllowDegraded,
+            false,
+            true,
+            "Backup passphrase",
+            Some(&maximum),
+        )?;
+        assert_eq!(captured.memory().len(), 1_024);
+        let oversized = vec![b'x'; 1_025];
+        assert!(matches!(
+            capture_named_or_environment(
+                ProtectionPolicy::EmergencyAllowDegraded,
+                false,
+                true,
+                "Backup passphrase",
+                Some(&oversized),
+            ),
+            Err(SecretInputError::InputTooLong)
+        ));
         Ok(())
     }
 }

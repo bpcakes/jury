@@ -26,6 +26,7 @@ The native Linux CLI currently handles:
 - signed portable-ciphertext export, inspection, and strict import;
 - public witness-policy export and per-witness checkpoint propagation status;
 - bounded offline inspection and verification of witnessed-decision receipts;
+- owner backup creation, full verification, absent-target restore, and real recovery drills;
 - public history and capacity status.
 
 Representative commands:
@@ -226,6 +227,8 @@ See [docs/architecture.md](docs/architecture.md) for the initial boundaries and
 [docs/naming.md](docs/naming.md) for the deliberately limited product metaphor.
 The standalone witness and independent external-anchor deployment are documented
 in [docs/self-hosting-juryd.md](docs/self-hosting-juryd.md).
+The pre-alpha owner backup, restore, and `ExampleVault` drill procedure is in
+[docs/recovery.md](docs/recovery.md).
 The implementation sequence and security decisions live in
 [docs/jury-v1-master-plan.md](docs/jury-v1-master-plan.md). The downstream Jig
 integration remains separate in

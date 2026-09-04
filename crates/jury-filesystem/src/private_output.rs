@@ -153,6 +153,43 @@ impl fmt::Debug for PreparedPublicFile {
 }
 
 impl PreparedPrivateFile {
+    /// Prepares bounded non-plaintext bytes for an owner-only destination.
+    /// This is used for already-encrypted large archives which must not become
+    /// world-readable but need not consume protected-memory capacity.
+    pub fn prepare_bounded_private_bytes_if_unchanged(
+        precondition: PrivateFilePrecondition,
+        contents: &[u8],
+        maximum_bytes: usize,
+        allow_replace: bool,
+    ) -> Result<Self, FilesystemError> {
+        if contents.len() > maximum_bytes {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Prepare,
+                FilesystemErrorKind::HardLinkOrSize,
+            ));
+        }
+        if precondition.destination_exists() && !allow_replace {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Prepare,
+                FilesystemErrorKind::AlreadyExists,
+            ));
+        }
+        validate_expected(
+            &precondition.parent,
+            &precondition.destination,
+            precondition.state,
+        )?;
+        let replace = precondition.destination_exists();
+        write_prepared(
+            precondition.parent,
+            precondition.destination,
+            PreparedContents::Public(contents),
+            precondition.state,
+            replace,
+            FileVisibility::OwnerOnly,
+        )
+    }
+
     /// Prepares private state below the separate hardened state root.
     pub fn prepare_state(
         state_root: &HardenedStateRoot,
@@ -327,6 +364,7 @@ fn preview_with_visibility(
 ) -> Result<PrivateFilePrecondition, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Preview)?;
     let state = destination_state(parent, &destination, FilesystemOperation::Preview)?;
+    validate_existing_visibility(parent, &destination, state, visibility)?;
     Ok(PrivateFilePrecondition {
         parent: parent.try_clone().map_err(|_| {
             FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io)
@@ -367,6 +405,7 @@ fn prepare(
 ) -> Result<PreparedPrivateFile, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Prepare)?;
     let expected = destination_state(&parent, &destination, FilesystemOperation::Prepare)?;
+    validate_existing_visibility(&parent, &destination, expected, visibility)?;
     let replace = match (policy, expected) {
         (PublicationPolicy::CreateNew, DestinationState::Absent) => false,
         (PublicationPolicy::CreateNew, DestinationState::Existing(_)) => {
@@ -391,6 +430,45 @@ fn prepare(
         replace,
         visibility,
     )
+}
+
+fn validate_existing_visibility(
+    parent: &Dir,
+    destination: &OsStr,
+    state: DestinationState,
+    visibility: FileVisibility,
+) -> Result<(), FilesystemError> {
+    let DestinationState::Existing(_) = state else {
+        return Ok(());
+    };
+    #[cfg(not(unix))]
+    {
+        let _ = (parent, destination, visibility);
+        return Err(FilesystemError::new(
+            FilesystemOperation::Preview,
+            FilesystemErrorKind::Unsupported,
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let metadata = parent.symlink_metadata(destination).map_err(|_| {
+            FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io)
+        })?;
+        let mode = metadata.permissions().mode();
+        let invalid_mode = match visibility {
+            FileVisibility::OwnerOnly => mode & 0o077 != 0,
+            FileVisibility::PublicEncryptedArtifact => mode & 0o022 != 0,
+        };
+        if invalid_mode
+            || cap_std::fs::MetadataExt::uid(&metadata) != rustix::process::geteuid().as_raw()
+        {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Preview,
+                FilesystemErrorKind::Permission,
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn write_prepared(
@@ -576,6 +654,7 @@ fn sync_parent(parent: &Dir) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use jury_protected::ProtectionPolicy;
+    use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
     fn reports_publication_when_parent_sync_fails() -> Result<(), Box<dyn std::error::Error>> {
@@ -597,6 +676,46 @@ mod tests {
             std::fs::read(temporary.path().join("state/value.bin"))?,
             b"ExampleSecret123"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_encrypted_archive_is_owner_only_and_never_replaces_by_default()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let state = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+        let bytes = vec![0x91; 2 * 1024 * 1024];
+        let preview = state.preview_private_file(Path::new("backup.jury"))?;
+        PreparedPrivateFile::prepare_bounded_private_bytes_if_unchanged(
+            preview,
+            &bytes,
+            4 * 1024 * 1024,
+            false,
+        )?
+        .publish()?;
+        let path = temporary.path().join("state/backup.jury");
+        let metadata = std::fs::metadata(&path)?;
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::os::unix::fs::MetadataExt::nlink(&metadata), 1);
+        let preview = state.preview_private_file(Path::new("backup.jury"))?;
+        assert!(matches!(
+            PreparedPrivateFile::prepare_bounded_private_bytes_if_unchanged(
+                preview,
+                b"replacement",
+                4 * 1024 * 1024,
+                false,
+            ),
+            Err(error) if error.kind() == FilesystemErrorKind::AlreadyExists
+        ));
+        assert_eq!(std::fs::read(path)?, bytes);
+
+        let loose = temporary.path().join("state/loose.jury");
+        std::fs::write(&loose, b"existing")?;
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644))?;
+        assert!(matches!(
+            state.preview_private_file(Path::new("loose.jury")),
+            Err(error) if error.kind() == FilesystemErrorKind::Permission
+        ));
         Ok(())
     }
 }

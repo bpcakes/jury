@@ -24,7 +24,9 @@ pub use receipts::{
 
 use crate::canonical::jce_v1 as jce;
 use crate::crypto;
-use crate::identity::{ApproverIdentity, VaultPrincipalIdentity, WitnessIdentity};
+use crate::identity::{
+    ApproverIdentity, RecoveredIdentity, VaultPrincipalIdentity, WitnessIdentity,
+};
 
 pub const MAX_AUDIT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_AUDIT_EVENT_BYTES: usize = 4 * 1024;
@@ -191,6 +193,14 @@ impl PrincipalLocalState {
 
     pub fn for_witness(
         identity: &WitnessIdentity,
+        vault_id: VaultId,
+        genesis_fingerprint: Digest32,
+    ) -> Result<Self, LocalStateError> {
+        Self::from_source(identity, vault_id, genesis_fingerprint)
+    }
+
+    pub fn for_recovered_identity(
+        identity: &RecoveredIdentity,
         vault_id: VaultId,
         genesis_fingerprint: Digest32,
     ) -> Result<Self, LocalStateError> {
@@ -566,6 +576,7 @@ macro_rules! local_key_source {
 local_key_source!(VaultPrincipalIdentity);
 local_key_source!(ApproverIdentity);
 local_key_source!(WitnessIdentity);
+local_key_source!(RecoveredIdentity);
 
 fn key_info(domain: &str, scope: &LocalStateScope) -> Vec<u8> {
     let mut info = jce(domain);

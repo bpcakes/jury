@@ -1,6 +1,7 @@
 use jury_protected::ProtectedMemory;
-use jury_protocol::vault_v1::Digest32;
+use jury_protocol::vault_v1::{Digest32, ItemId};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 use super::{
     LocalStateError, LocalStateErrorKind, LocalStateScope, MAX_RECEIPTS_BYTES,
@@ -27,6 +28,14 @@ pub struct BackupReceipt {
     pub captured_public_revision_hash: Digest32,
     pub timestamp_ms: u64,
     pub payload_digest: Digest32,
+    pub owner_descriptor_fingerprint: Digest32,
+    /// Bit 0 is vault-principal, bit 1 approver, and bit 2 witness-client.
+    pub identity_role_mask: u8,
+    pub direct_item_ids: Vec<ItemId>,
+    pub witnessed_item_ids: Vec<ItemId>,
+    pub unavailable_witnessed_item_ids: Vec<ItemId>,
+    pub checkpoints_current: bool,
+    pub external_witness_recovery_required: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -264,7 +273,7 @@ impl ReceiptEntry {
             operation_id: receipt.backup_id.clone(),
             captured_public_revision_hash: receipt.captured_public_revision_hash.clone(),
             timestamp_ms: receipt.timestamp_ms,
-            output_digest: receipt.payload_digest.clone(),
+            output_digest: backup_coverage_digest(receipt),
             verification_state: 1,
         }
     }
@@ -289,6 +298,26 @@ impl ReceiptEntry {
             output_digest: receipt.output_digest.clone(),
             verification_state: 3,
         }
+    }
+}
+
+fn backup_coverage_digest(receipt: &BackupReceipt) -> Digest32 {
+    let mut coverage = jce("jury-v1/receipt/backup-coverage");
+    coverage.extend_from_slice(receipt.payload_digest.as_bytes());
+    coverage.extend_from_slice(receipt.owner_descriptor_fingerprint.as_bytes());
+    coverage.push(receipt.identity_role_mask);
+    coverage.push(u8::from(receipt.checkpoints_current));
+    coverage.push(u8::from(receipt.external_witness_recovery_required));
+    append_item_ids(&mut coverage, &receipt.direct_item_ids);
+    append_item_ids(&mut coverage, &receipt.witnessed_item_ids);
+    append_item_ids(&mut coverage, &receipt.unavailable_witnessed_item_ids);
+    Digest32::new(Sha256::digest(coverage).into())
+}
+
+fn append_item_ids(output: &mut Vec<u8>, item_ids: &[ItemId]) {
+    output.extend_from_slice(&(item_ids.len() as u32).to_be_bytes());
+    for item_id in item_ids {
+        output.extend_from_slice(item_id.as_bytes());
     }
 }
 
@@ -332,7 +361,27 @@ fn validate_backup(receipt: &BackupReceipt) -> Result<(), LocalStateError> {
         &receipt.captured_public_revision_hash,
         receipt.timestamp_ms,
         &receipt.payload_digest,
-    )
+    )?;
+    if digest_is_zero(&receipt.owner_descriptor_fingerprint)
+        || receipt.identity_role_mask & 1 == 0
+        || receipt.identity_role_mask & !0b111 != 0
+        || !receipt.checkpoints_current
+        || !strictly_sorted_unique(&receipt.direct_item_ids)
+        || !strictly_sorted_unique(&receipt.witnessed_item_ids)
+        || !strictly_sorted_unique(&receipt.unavailable_witnessed_item_ids)
+        || receipt.external_witness_recovery_required != !receipt.witnessed_item_ids.is_empty()
+        || receipt
+            .unavailable_witnessed_item_ids
+            .iter()
+            .any(|item_id| !receipt.witnessed_item_ids.contains(item_id))
+    {
+        return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
+    }
+    Ok(())
+}
+
+fn strictly_sorted_unique(ids: &[ItemId]) -> bool {
+    ids.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 fn validate_backup_verification(

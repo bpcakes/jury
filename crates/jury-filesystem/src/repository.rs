@@ -22,6 +22,11 @@ pub struct RepositoryLocation {
 }
 
 impl RepositoryLocation {
+    #[must_use]
+    pub fn worktree_path(&self) -> &Path {
+        &self.worktree.absolute
+    }
+
     /// Whether an already syntax-validated absolute path names this
     /// repository's shared Jury artifact. Used to reject transfer self-aliases
     /// before any credential capture.
@@ -66,6 +71,7 @@ impl RepositoryLocation {
 
     /// Explicitly creates the encrypted shared-artifact directory owner-only.
     pub fn create_jury_directory(&mut self) -> Result<(), FilesystemError> {
+        self.revalidate_worktree()?;
         if self.jury_dir.is_some() {
             return Ok(());
         }
@@ -239,6 +245,7 @@ impl RepositoryLocation {
     }
 
     pub(crate) fn jury_dir_clone(&self) -> Result<Dir, FilesystemError> {
+        self.revalidate_worktree()?;
         self.jury_dir
             .as_ref()
             .ok_or(FilesystemError::new(
@@ -247,6 +254,36 @@ impl RepositoryLocation {
             ))?
             .try_clone()
             .map_err(|_| FilesystemError::new(FilesystemOperation::Open, FilesystemErrorKind::Io))
+    }
+
+    fn revalidate_worktree(&self) -> Result<(), FilesystemError> {
+        let worktree_metadata = self.worktree.dir.dir_metadata().map_err(|_| {
+            FilesystemError::new(
+                FilesystemOperation::DiscoverRepository,
+                FilesystemErrorKind::IdentityChanged,
+            )
+        })?;
+        if crate::capability::FileIdentity::from_metadata(&worktree_metadata)
+            != self.worktree.identity
+        {
+            return Err(FilesystemError::new(
+                FilesystemOperation::DiscoverRepository,
+                FilesystemErrorKind::IdentityChanged,
+            ));
+        }
+        let git_dir = open_git_marker(&self.worktree)?.ok_or_else(|| {
+            FilesystemError::new(
+                FilesystemOperation::DiscoverRepository,
+                FilesystemErrorKind::InvalidMarker,
+            )
+        })?;
+        if git_dir.identity != self._git_dir.identity {
+            return Err(FilesystemError::new(
+                FilesystemOperation::DiscoverRepository,
+                FilesystemErrorKind::IdentityChanged,
+            ));
+        }
+        Ok(())
     }
 }
 

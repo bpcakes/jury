@@ -124,6 +124,13 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
             captured_public_revision_hash: digest(0x12),
             timestamp_ms: 62,
             payload_digest: digest(0x64),
+            owner_descriptor_fingerprint: digest(0x66),
+            identity_role_mask: 1,
+            direct_item_ids: Vec::new(),
+            witnessed_item_ids: Vec::new(),
+            unavailable_witnessed_item_ids: Vec::new(),
+            checkpoints_current: true,
+            external_witness_recovery_required: false,
         }),
     )?;
     context.record_receipt(
@@ -189,6 +196,18 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
                 Some(files.audit()),
                 Some(files.checkpoint()),
                 Some(&pretty_json(&changed_receipts)?)
+            )
+            .is_err()
+    );
+
+    let mut changed_coverage: Value = serde_json::from_slice(files.receipts())?;
+    changed_coverage["latest_backup"]["identity_role_mask"] = Value::from(3);
+    assert!(
+        context
+            .verify_files(
+                Some(files.audit()),
+                Some(files.checkpoint()),
+                Some(&pretty_json(&changed_coverage)?)
             )
             .is_err()
     );

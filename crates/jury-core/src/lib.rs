@@ -6,6 +6,7 @@
 
 pub mod access_provider;
 pub mod adapter;
+pub mod backup;
 mod canonical;
 mod crypto;
 pub mod domain;

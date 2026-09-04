@@ -150,6 +150,42 @@ pub(super) fn record_transfer_receipt(
     receipt: TransferReceipt,
     protection: ProtectionPolicy,
 ) -> Result<(), CliError> {
+    record_local_receipt(context, ReceiptUpdate::Transfer(receipt), protection)
+}
+
+pub(super) fn record_backup_receipt(
+    context: &VaultPrincipalContext,
+    receipt: BackupReceipt,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    record_local_receipt(context, ReceiptUpdate::Backup(receipt), protection)
+}
+
+pub(super) fn record_backup_verification_receipt(
+    context: &VaultPrincipalContext,
+    receipt: BackupVerificationReceipt,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    record_local_receipt(
+        context,
+        ReceiptUpdate::BackupVerification(receipt),
+        protection,
+    )
+}
+
+pub(super) fn record_restore_drill_receipt(
+    context: &VaultPrincipalContext,
+    receipt: RestoreDrillReceipt,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
+    record_local_receipt(context, ReceiptUpdate::RestoreDrill(receipt), protection)
+}
+
+fn record_local_receipt(
+    context: &VaultPrincipalContext,
+    update: ReceiptUpdate,
+    protection: ProtectionPolicy,
+) -> Result<(), CliError> {
     let locked = context.state.try_lock().map_err(|_| local_state_error())?;
     let principal_id = context.identity.principal_id();
     let audit = locked
@@ -167,7 +203,7 @@ pub(super) fn record_transfer_receipt(
         .map_err(|_| local_state_error())?;
     context
         .local
-        .record_receipt(&mut verified, ReceiptUpdate::Transfer(receipt))
+        .record_receipt(&mut verified, update)
         .map_err(|_| local_state_error())?;
     let files = context
         .local
@@ -186,6 +222,39 @@ pub(super) fn record_transfer_receipt(
     } else {
         Err(local_state_error())
     }
+}
+
+pub(super) struct RecoveryReceipts {
+    pub(super) backup: Option<BackupReceipt>,
+    pub(super) verification: Option<BackupVerificationReceipt>,
+    pub(super) drill: Option<RestoreDrillReceipt>,
+}
+
+pub(super) fn recovery_receipts(
+    context: &VaultPrincipalContext,
+) -> Result<RecoveryReceipts, CliError> {
+    let principal_id = context.identity.principal_id();
+    let audit = context
+        .state
+        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Audit)
+        .map_err(map_filesystem_error)?;
+    let checkpoint = context
+        .state
+        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Checkpoint)
+        .map_err(map_filesystem_error)?;
+    let receipts = context
+        .state
+        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Receipts)
+        .map_err(map_filesystem_error)?;
+    let verified = context
+        .local
+        .verify_files(Some(&audit), Some(&checkpoint), Some(&receipts))
+        .map_err(|_| local_state_error())?;
+    Ok(RecoveryReceipts {
+        backup: verified.receipts().latest_backup().cloned(),
+        verification: verified.receipts().latest_backup_verification().cloned(),
+        drill: verified.receipts().latest_restore_drill().cloned(),
+    })
 }
 
 pub(super) fn latest_transfer_receipt(

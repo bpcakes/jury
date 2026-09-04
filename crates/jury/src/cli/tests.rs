@@ -136,6 +136,67 @@ fn transfer_commands_require_artifact_path_options() {
 }
 
 #[test]
+fn backup_surface_requires_explicit_sensitive_artifacts_and_drill_state() {
+    assert!(matches!(
+        Cli::try_parse_from([
+            "jury",
+            "backup",
+            "create",
+            "--out",
+            "/tmp/ExampleRecovery.jury",
+            "--kdf-profile",
+            "hardened",
+        ]),
+        Ok(Cli {
+            command: Command::Backup {
+                command: BackupCommand::Create(BackupCreateArgs {
+                    kdf_profile: KdfProfileArg::Hardened,
+                    ..
+                })
+            },
+            ..
+        })
+    ));
+    assert!(Cli::try_parse_from(["jury", "backup", "verify"]).is_err());
+    assert!(
+        Cli::try_parse_from([
+            "jury",
+            "backup",
+            "restore",
+            "--in",
+            "/tmp/ExampleRecovery.jury"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "jury",
+            "backup",
+            "drill",
+            "--in",
+            "/tmp/ExampleRecovery.jury",
+            "--vault-out",
+            "/tmp/ExampleVaultCopy",
+            "--identity-out",
+            "/tmp/ExampleIdentityCopy.json",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn backup_help_states_the_private_recovery_power() -> Result<(), Box<dyn std::error::Error>> {
+    let error = Cli::try_parse_from(["jury", "backup", "create", "--help"])
+        .err()
+        .ok_or("backup help unexpectedly parsed")?;
+    let help = error.to_string();
+    assert!(help.contains("more sensitive than a transfer"));
+    assert!(help.contains("recover the included owner identity"));
+    assert!(help.contains("current direct-access item"));
+    Ok(())
+}
+
+#[test]
 fn receipt_and_witness_operations_require_explicit_public_artifacts() {
     assert!(matches!(
         Cli::try_parse_from([

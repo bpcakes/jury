@@ -743,7 +743,7 @@ const fn identity_not_registered() -> CliError {
     )
 }
 
-fn sha256_digest(bytes: &[u8]) -> Digest32 {
+pub(super) fn sha256_digest(bytes: &[u8]) -> Digest32 {
     Digest32::new(Sha256::digest(bytes).into())
 }
 

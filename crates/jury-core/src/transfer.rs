@@ -271,7 +271,7 @@ impl TransferPublicCatalogV1 {
         Ok(())
     }
 
-    fn validate_for_policy(
+    pub(crate) fn validate_for_policy(
         &self,
         vault: &VaultFileV1,
         policy: &PolicyState,

@@ -17,6 +17,9 @@ use self::support::*;
 #[path = "native_cli/additional.rs"]
 mod native_cli_additional;
 
+#[path = "native_cli/backup.rs"]
+mod native_cli_backup;
+
 #[path = "native_cli/execution.rs"]
 mod native_cli_execution;
 

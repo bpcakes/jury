@@ -3886,7 +3886,8 @@ identity seed and vault ID.
 It stores at most the latest successful:
 
 - transfer export ID, vault revision, time, and output digest;
-- owner backup ID, captured vault revision, time, and payload digest;
+- owner backup ID, captured vault revision, time, and an authenticated coverage
+  digest that commits the payload digest and exact recovery coverage;
 - verification for that backup ID and time;
 - real restore drill for that backup ID and time.
 
@@ -4485,12 +4486,19 @@ The Jury v1 command surface includes:
 
 ```text
 jury backup create --out FILE [--overwrite] \
-  [--kdf-profile portable|hardened] [--reuse-identity-passphrase]
+  [--kdf-profile portable|hardened] [--reuse-identity-passphrase] \
+  [--approver-identity-file FILE] [--witness-identity-file FILE]
 jury backup status
 jury backup verify --in FILE
 jury backup drill --in FILE --vault-out ABSENT_PATH \
-  --identity-out ABSENT_PATH [--identity-kdf-profile portable|hardened]
-jury backup restore --in FILE --identity-out ABSENT_PATH \
+  --identity-out ABSENT_PATH --state-out ABSENT_PATH \
+  [--approver-identity-out ABSENT_PATH] \
+  [--witness-identity-out ABSENT_PATH] \
+  [--identity-kdf-profile portable|hardened]
+jury backup restore --in FILE \
+  (--identity-out ABSENT_PATH | --reuse-identity PATH) \
+  [--state-out PATH] [--approver-identity-out ABSENT_PATH] \
+  [--witness-identity-out ABSENT_PATH] \
   [--identity-kdf-profile portable|hardened]
 ```
 
@@ -4522,6 +4530,16 @@ The owner identity public descriptor must match current policy.
 Successful backup creation records an authenticated local recovery receipt with
 backup ID, payload digest, captured vault revision, owner principal fingerprint,
 creation time, and verification state.
+
+The frozen fixed-width receipt entry remains unchanged. For an owner-backup
+entry, its digest field is SHA-256 over the JCE1 domain
+`jury-v1/receipt/backup-coverage`, followed by the payload digest, owner
+descriptor fingerprint, identity-role bitmask, checkpoint-current flag,
+external-witness-recovery-required flag, and the counted sorted lists of direct,
+witnessed, and unavailable-witnessed item IDs. The authenticated JSON retains
+those inputs so status can report exact coverage without claiming the backup
+file is present. Verification receipts continue to carry the exact payload
+digest and must match the corresponding creation receipt.
 
 The receipt stores no passphrase, private key, field value, item name, or trusted
 destination path.
@@ -4566,9 +4584,12 @@ The encrypted payload contains:
 - a canonical owner identity recovery payload containing the selected
   principal's suite-defined recipient and signing private keys plus local
   audit/checkpoint seed inside the outer encrypted payload;
-- the matching public identity descriptor, but not an independently
-  passphrase-encrypted copy of the live identity file;
-- selected identity path metadata without trusted absolute-path installation;
+- when explicitly selected, one approver and one witness-client identity
+  recovery payload with the same private/public correspondence guarantees;
+- each matching public identity descriptor, but not an independently
+  passphrase-encrypted copy of a live identity file;
+- role tags for selected identities; source absolute paths are neither stored
+  nor trusted for installation;
 - selected principal's local audit bytes;
 - selected principal's checkpoint bytes;
 - selected principal's prior authenticated local receipt bytes;
@@ -4609,7 +4630,8 @@ creation receipt.
 
 ### 18.4 Restore destinations
 
-Jury V1 restore takes an absent vault home and either:
+Jury V1 restore takes an absent vault home, a local-state root with no state for
+the restored lineage, and either:
 
 - an absent `--identity-out PATH`; or
 
@@ -4620,7 +4642,8 @@ For an absent identity target, restore captures a new identity passphrase twice,
 uses `portable-v1` by default or the explicit `--identity-kdf-profile`, and seals
 the recovered private payload with a fresh identity root, salt, and nonces using
 portable protection. The backup passphrase alone never becomes the installed
-identity passphrase. Non-interactive restore uses the existing command-scoped
+identity passphrase: equality is rejected for every newly sealed restored
+identity. Non-interactive restore uses the existing command-scoped
 `JURY_NEW_PASSPHRASE` contract for the new identity credential.
 
 For `--reuse-identity`, restore unlocks that identity with its separate current

@@ -146,6 +146,58 @@ impl HardenedStateRoot {
         }
     }
 
+    /// Creates one new owner-only child directory. Any existing directory,
+    /// file, or link is preserved and rejected.
+    pub fn create_private_child_new(&self, name: &Path) -> Result<Self, FilesystemError> {
+        #[cfg(not(unix))]
+        {
+            let _ = name;
+            return Err(FilesystemError::new(
+                FilesystemOperation::OpenStateRoot,
+                FilesystemErrorKind::Unsupported,
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let name =
+                crate::capability::single_component(name, FilesystemOperation::OpenStateRoot)?;
+            let mut builder = DirBuilder::new();
+            builder.mode(0o700);
+            self.root
+                .dir
+                .create_dir_with(&name, &builder)
+                .map_err(|error| {
+                    let kind = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        FilesystemErrorKind::AlreadyExists
+                    } else {
+                        FilesystemErrorKind::Io
+                    };
+                    FilesystemError::new(FilesystemOperation::OpenStateRoot, kind)
+                })?;
+            self.root
+                .dir
+                .open(".")
+                .and_then(|dir| dir.sync_all())
+                .map_err(|_| {
+                    FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
+                })?;
+            self.open_private_child(Path::new(&name))
+        }
+    }
+
+    /// Reports whether any direct child occupies a name without following it.
+    pub fn private_child_exists(&self, name: &Path) -> Result<bool, FilesystemError> {
+        let name = crate::capability::single_component(name, FilesystemOperation::Preview)?;
+        match self.root.dir.symlink_metadata(&name) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(FilesystemError::new(
+                FilesystemOperation::Preview,
+                FilesystemErrorKind::Io,
+            )),
+        }
+    }
+
     /// Opens one existing owner-only child without following a link or
     /// creating filesystem state.
     pub fn open_private_child(&self, name: &Path) -> Result<Self, FilesystemError> {
@@ -198,6 +250,40 @@ impl HardenedStateRoot {
     ) -> Result<Vec<u8>, FilesystemError> {
         crate::private_input::read(self, name, maximum_bytes)
     }
+
+    /// Removes a direct owner-only file only when its bounded contents still
+    /// equal the caller's authenticated marker bytes, then syncs the parent.
+    pub fn remove_private_file_if_exact(
+        &self,
+        name: &Path,
+        expected: &[u8],
+    ) -> Result<(), FilesystemError> {
+        let name = crate::capability::single_component(name, FilesystemOperation::Cleanup)?;
+        let maximum = expected.len().checked_add(1).ok_or_else(|| {
+            FilesystemError::new(
+                FilesystemOperation::Cleanup,
+                FilesystemErrorKind::HardLinkOrSize,
+            )
+        })?;
+        let observed =
+            crate::private_input::read_from_dir(&self.root.dir, Path::new(&name), maximum)?;
+        if observed != expected {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Cleanup,
+                FilesystemErrorKind::IdentityChanged,
+            ));
+        }
+        self.root.dir.remove_file(&name).map_err(|_| {
+            FilesystemError::new(FilesystemOperation::Cleanup, FilesystemErrorKind::Io)
+        })?;
+        self.root
+            .dir
+            .open(".")
+            .and_then(|dir| dir.sync_all())
+            .map_err(|_| {
+                FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
+            })
+    }
 }
 
 #[cfg(unix)]
@@ -246,6 +332,58 @@ fn validate_root(
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::{PreparedPrivateFile, PublicationPolicy};
+    use jury_protected::{ProtectedMemory, ProtectionPolicy};
+
+    #[test]
+    fn restore_marker_removal_requires_exact_owner_only_contents()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = HardenedStateRoot::open_or_create(&temporary.path().join("private"), &[])?;
+        let marker =
+            ProtectedMemory::initialize(15, ProtectionPolicy::EmergencyAllowDegraded, |output| {
+                output.copy_from_slice(b"ExampleMarkerV1");
+                Ok::<usize, ()>(output.len())
+            })?;
+        PreparedPrivateFile::prepare_state(
+            &root,
+            Path::new("marker.json"),
+            &marker,
+            PublicationPolicy::CreateNew,
+        )?
+        .publish()?;
+        assert!(matches!(
+            root.remove_private_file_if_exact(Path::new("marker.json"), b"DifferentMarker"),
+            Err(error) if error.kind() == FilesystemErrorKind::IdentityChanged
+        ));
+        assert!(root.private_child_exists(Path::new("marker.json"))?);
+        root.remove_private_file_if_exact(Path::new("marker.json"), b"ExampleMarkerV1")?;
+        assert!(!root.private_child_exists(Path::new("marker.json"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn absent_restore_directory_creation_preserves_existing_targets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        std::fs::set_permissions(
+            temporary.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )?;
+        let parent = HardenedStateRoot::open_existing(temporary.path(), &[])?;
+        parent.create_private_child_new(Path::new("restore"))?;
+        assert!(matches!(
+            parent.create_private_child_new(Path::new("restore")),
+            Err(error) if error.kind() == FilesystemErrorKind::AlreadyExists
+        ));
+        assert!(parent.private_child_exists(Path::new("restore"))?);
+        Ok(())
+    }
 }
 
 impl fmt::Debug for HardenedStateRoot {

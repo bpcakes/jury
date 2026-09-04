@@ -531,6 +531,16 @@ pub(super) fn load_vault_principal(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<VaultPrincipalContext, CliError> {
+    load_vault_principal_with_passphrase(cli, environment, current, protection)
+        .map(|(context, _passphrase)| context)
+}
+
+pub(super) fn load_vault_principal_with_passphrase(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+    protection: ProtectionPolicy,
+) -> Result<(VaultPrincipalContext, secret_input::CapturedPassphrase), CliError> {
     let home = selected_home(cli, environment, current)?;
     let bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&bytes).map_err(|_| invalid_vault())?;
@@ -599,8 +609,17 @@ pub(super) fn load_vault_principal(
     if matches!(&probe, PrincipalStateProbe::Absent) {
         confirm_expected_genesis(cli, &vault)?;
     }
-    let passphrase =
-        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
+    let passphrase = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        false,
+        "Identity passphrase",
+        environment
+            .jury_identity_passphrase
+            .as_deref()
+            .map(Vec::as_slice),
+    )
+    .map_err(map_secret_error)?;
     let protection_degraded = passphrase.protection_degraded();
     let UnlockedIdentity::VaultPrincipal(identity) = unlock(&identity_file, passphrase.memory())
         .map_err(|error| map_identity_error(error.kind()))?
@@ -672,18 +691,21 @@ pub(super) fn load_vault_principal(
         }
         CheckpointRelation::Divergent => return Err(checkpoint_conflict()),
     }
-    Ok(VaultPrincipalContext {
-        home,
-        vault,
-        policy,
-        catalog_before: catalog.clone(),
-        catalog_before_bytes,
-        catalog,
-        identity,
-        state,
-        local,
-        protection_degraded,
-    })
+    Ok((
+        VaultPrincipalContext {
+            home,
+            vault,
+            policy,
+            catalog_before: catalog.clone(),
+            catalog_before_bytes,
+            catalog,
+            identity,
+            state,
+            local,
+            protection_degraded,
+        },
+        passphrase,
+    ))
 }
 
 #[cfg(test)]
