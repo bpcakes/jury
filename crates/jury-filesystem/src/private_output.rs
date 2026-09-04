@@ -364,7 +364,7 @@ fn preview_with_visibility(
 ) -> Result<PrivateFilePrecondition, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Preview)?;
     let state = destination_state(parent, &destination, FilesystemOperation::Preview)?;
-    validate_existing_visibility(parent, &destination, state, visibility)?;
+    validate_existing_visibility(state, visibility)?;
     Ok(PrivateFilePrecondition {
         parent: parent.try_clone().map_err(|_| {
             FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io)
@@ -405,7 +405,7 @@ fn prepare(
 ) -> Result<PreparedPrivateFile, FilesystemError> {
     let destination = single_component(name, FilesystemOperation::Prepare)?;
     let expected = destination_state(&parent, &destination, FilesystemOperation::Prepare)?;
-    validate_existing_visibility(&parent, &destination, expected, visibility)?;
+    validate_existing_visibility(expected, visibility)?;
     let replace = match (policy, expected) {
         (PublicationPolicy::CreateNew, DestinationState::Absent) => false,
         (PublicationPolicy::CreateNew, DestinationState::Existing(_)) => {
@@ -433,17 +433,15 @@ fn prepare(
 }
 
 fn validate_existing_visibility(
-    parent: &Dir,
-    destination: &OsStr,
     state: DestinationState,
     visibility: FileVisibility,
 ) -> Result<(), FilesystemError> {
-    let DestinationState::Existing(_) = state else {
+    let DestinationState::Existing(snapshot) = state else {
         return Ok(());
     };
     #[cfg(not(unix))]
     {
-        let _ = (parent, destination, visibility);
+        let _ = (snapshot, visibility);
         return Err(FilesystemError::new(
             FilesystemOperation::Preview,
             FilesystemErrorKind::Unsupported,
@@ -451,17 +449,11 @@ fn validate_existing_visibility(
     }
     #[cfg(unix)]
     {
-        let metadata = parent.symlink_metadata(destination).map_err(|_| {
-            FilesystemError::new(FilesystemOperation::Preview, FilesystemErrorKind::Io)
-        })?;
-        let mode = metadata.permissions().mode();
         let invalid_mode = match visibility {
-            FileVisibility::OwnerOnly => mode & 0o077 != 0,
-            FileVisibility::PublicEncryptedArtifact => mode & 0o022 != 0,
+            FileVisibility::OwnerOnly => snapshot.mode() & 0o077 != 0,
+            FileVisibility::PublicEncryptedArtifact => snapshot.mode() & 0o022 != 0,
         };
-        if invalid_mode
-            || cap_std::fs::MetadataExt::uid(&metadata) != rustix::process::geteuid().as_raw()
-        {
+        if invalid_mode || snapshot.owner() != rustix::process::geteuid().as_raw() {
             return Err(FilesystemError::new(
                 FilesystemOperation::Preview,
                 FilesystemErrorKind::Permission,
@@ -715,6 +707,26 @@ mod tests {
         assert!(matches!(
             state.preview_private_file(Path::new("loose.jury")),
             Err(error) if error.kind() == FilesystemErrorKind::Permission
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn visibility_validation_uses_the_retained_destination_snapshot()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let state = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+        let output = temporary.path().join("state/existing.bin");
+        std::fs::write(&output, b"existing")?;
+        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600))?;
+        let name = OsString::from("existing.bin");
+        let snapshot = destination_state(&state.root.dir, &name, FilesystemOperation::Preview)?;
+        std::fs::remove_file(output)?;
+
+        validate_existing_visibility(snapshot, FileVisibility::OwnerOnly)?;
+        assert!(matches!(
+            validate_expected(&state.root.dir, &name, snapshot),
+            Err(error) if error.kind() == FilesystemErrorKind::IdentityChanged
         ));
         Ok(())
     }

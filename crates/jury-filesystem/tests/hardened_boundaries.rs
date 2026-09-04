@@ -612,6 +612,43 @@ fn retained_repository_refuses_publication_after_git_marker_disappears()
 }
 
 #[test]
+fn retained_repository_refuses_a_replaced_jury_directory() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let mut repository = repository(&worktree)?;
+    repository.create_jury_directory()?;
+    let original = protected(b"original-encrypted-vault")?;
+    PreparedPrivateFile::prepare_encrypted_shared_artifact(
+        &repository,
+        &original,
+        PublicationPolicy::CreateNew,
+    )?
+    .publish()?;
+
+    fs::rename(worktree.join(".jury"), worktree.join(".jury-retained"))?;
+    fs::create_dir(worktree.join(".jury"))?;
+    fs::set_permissions(worktree.join(".jury"), fs::Permissions::from_mode(0o700))?;
+    fs::write(worktree.join(".jury/vault.json"), b"replacement")?;
+
+    let error = repository
+        .read_encrypted_shared_artifact(1024)
+        .err()
+        .ok_or("replaced Jury directory should fail")?;
+    assert_eq!(error.kind(), FilesystemErrorKind::IdentityChanged);
+    let create_error = repository
+        .create_jury_directory()
+        .err()
+        .ok_or("existing retained Jury identity should be revalidated")?;
+    assert_eq!(create_error.kind(), FilesystemErrorKind::IdentityChanged);
+    assert_eq!(
+        fs::read(worktree.join(".jury-retained/vault.json"))?,
+        b"original-encrypted-vault"
+    );
+    assert_eq!(fs::read(worktree.join(".jury/vault.json"))?, b"replacement");
+    Ok(())
+}
+
+#[test]
 fn errors_are_value_and_path_free() -> Result<(), Box<dyn Error>> {
     let temp = tempfile::tempdir()?;
     let state = HardenedStateRoot::open_or_create(&temp.path().join("state"), &[])?;

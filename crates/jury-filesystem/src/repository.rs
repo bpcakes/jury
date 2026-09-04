@@ -6,7 +6,7 @@ use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest as _, Sha256};
 
-use crate::capability::{HardenedDir, nofollow_directory_child, open_absolute_dir};
+use crate::capability::{FileIdentity, HardenedDir, nofollow_directory_child, open_absolute_dir};
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation};
 
 const MAX_GITDIR_MARKER_BYTES: u64 = 4096;
@@ -18,7 +18,7 @@ const VAULT_ATTRIBUTES: &[u8] = b"vault.json -diff -merge\n";
 pub struct RepositoryLocation {
     pub(crate) worktree: HardenedDir,
     _git_dir: HardenedDir,
-    jury_dir: Option<Dir>,
+    jury_dir_identity: Option<FileIdentity>,
 }
 
 impl RepositoryLocation {
@@ -46,11 +46,11 @@ impl RepositoryLocation {
                 open_absolute_dir(candidate_path, FilesystemOperation::DiscoverRepository)?;
             match open_git_marker(&worktree) {
                 Ok(Some(git_dir)) => {
-                    let jury_dir = inspect_jury_directory(&worktree.dir)?;
+                    let jury_dir_identity = inspect_jury_directory(&worktree.dir)?;
                     return Ok(Self {
                         worktree,
                         _git_dir: git_dir,
-                        jury_dir,
+                        jury_dir_identity,
                     });
                 }
                 Ok(None) => {}
@@ -66,13 +66,14 @@ impl RepositoryLocation {
 
     #[must_use]
     pub fn has_jury_directory(&self) -> bool {
-        self.jury_dir.is_some()
+        self.jury_dir_identity.is_some()
     }
 
     /// Explicitly creates the encrypted shared-artifact directory owner-only.
     pub fn create_jury_directory(&mut self) -> Result<(), FilesystemError> {
         self.revalidate_worktree()?;
-        if self.jury_dir.is_some() {
+        if self.jury_dir_identity.is_some() {
+            self.jury_dir_clone()?;
             return Ok(());
         }
         #[cfg(not(unix))]
@@ -96,11 +97,16 @@ impl RepositoryLocation {
                     };
                     FilesystemError::new(FilesystemOperation::Open, kind)
                 })?;
-            self.jury_dir = Some(nofollow_directory_child(
+            let jury_dir = nofollow_directory_child(
                 &self.worktree.dir,
                 Path::new(".jury"),
                 FilesystemOperation::Open,
-            )?);
+            )?;
+            self.jury_dir_identity = Some(FileIdentity::from_metadata(
+                &jury_dir.dir_metadata().map_err(|_| {
+                    FilesystemError::new(FilesystemOperation::Open, FilesystemErrorKind::Io)
+                })?,
+            ));
             Ok(())
         }
     }
@@ -246,14 +252,28 @@ impl RepositoryLocation {
 
     pub(crate) fn jury_dir_clone(&self) -> Result<Dir, FilesystemError> {
         self.revalidate_worktree()?;
-        self.jury_dir
-            .as_ref()
-            .ok_or(FilesystemError::new(
+        let expected = self.jury_dir_identity.ok_or(FilesystemError::new(
+            FilesystemOperation::Open,
+            FilesystemErrorKind::NotFound,
+        ))?;
+        let directory = nofollow_directory_child(
+            &self.worktree.dir,
+            Path::new(".jury"),
+            FilesystemOperation::Open,
+        )?;
+        let observed = FileIdentity::from_metadata(&directory.dir_metadata().map_err(|_| {
+            FilesystemError::new(
                 FilesystemOperation::Open,
-                FilesystemErrorKind::NotFound,
-            ))?
-            .try_clone()
-            .map_err(|_| FilesystemError::new(FilesystemOperation::Open, FilesystemErrorKind::Io))
+                FilesystemErrorKind::IdentityChanged,
+            )
+        })?);
+        if observed != expected {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Open,
+                FilesystemErrorKind::IdentityChanged,
+            ));
+        }
+        Ok(directory)
     }
 
     fn revalidate_worktree(&self) -> Result<(), FilesystemError> {
@@ -478,14 +498,22 @@ fn linked_git_dir(
     open_absolute_dir(&resolved, FilesystemOperation::DiscoverRepository)
 }
 
-fn inspect_jury_directory(worktree: &Dir) -> Result<Option<Dir>, FilesystemError> {
+fn inspect_jury_directory(worktree: &Dir) -> Result<Option<FileIdentity>, FilesystemError> {
     match worktree.symlink_metadata(".jury") {
-        Ok(metadata) if metadata.is_dir() => nofollow_directory_child(
-            worktree,
-            Path::new(".jury"),
-            FilesystemOperation::DiscoverRepository,
-        )
-        .map(Some),
+        Ok(metadata) if metadata.is_dir() => {
+            let directory = nofollow_directory_child(
+                worktree,
+                Path::new(".jury"),
+                FilesystemOperation::DiscoverRepository,
+            )?;
+            let metadata = directory.dir_metadata().map_err(|_| {
+                FilesystemError::new(
+                    FilesystemOperation::DiscoverRepository,
+                    FilesystemErrorKind::Io,
+                )
+            })?;
+            Ok(Some(FileIdentity::from_metadata(&metadata)))
+        }
         Ok(_) => Err(FilesystemError::new(
             FilesystemOperation::DiscoverRepository,
             FilesystemErrorKind::LinkOrWrongType,

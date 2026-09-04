@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(unix)]
+use cap_fs_ext::OsMetadataExt as _;
 use cap_fs_ext::{DirExt, MetadataExt};
 use cap_std::ambient_authority;
 use cap_std::fs::Dir;
@@ -19,8 +21,8 @@ pub(crate) struct FileIdentity {
 impl FileIdentity {
     pub(crate) fn from_metadata(metadata: &cap_std::fs::Metadata) -> Self {
         Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
+            device: MetadataExt::dev(metadata),
+            inode: MetadataExt::ino(metadata),
         }
     }
 }
@@ -31,6 +33,8 @@ pub(crate) struct RegularFileSnapshot {
     byte_len: u64,
     changed_seconds: i64,
     changed_nanoseconds: i64,
+    mode: u32,
+    owner: u32,
 }
 
 impl RegularFileSnapshot {
@@ -41,7 +45,19 @@ impl RegularFileSnapshot {
             byte_len: metadata.len(),
             changed_seconds: cap_std::fs::MetadataExt::ctime(metadata),
             changed_nanoseconds: cap_std::fs::MetadataExt::ctime_nsec(metadata),
+            mode: metadata.mode(),
+            owner: metadata.uid(),
         }
+    }
+
+    #[cfg(unix)]
+    pub(crate) const fn mode(self) -> u32 {
+        self.mode
+    }
+
+    #[cfg(unix)]
+    pub(crate) const fn owner(self) -> u32 {
+        self.owner
     }
 }
 
