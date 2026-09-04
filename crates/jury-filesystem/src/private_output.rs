@@ -754,6 +754,47 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_create_new_publications_preserve_the_first_destination()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let state = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+        let first = ProtectedMemory::initialize(5, ProtectionPolicy::Strict, |output| {
+            output.copy_from_slice(b"first");
+            Ok::<usize, ()>(output.len())
+        })?;
+        let second = ProtectedMemory::initialize(6, ProtectionPolicy::Strict, |output| {
+            output.copy_from_slice(b"second");
+            Ok::<usize, ()>(output.len())
+        })?;
+        let first_prepared = PreparedPrivateFile::prepare_state(
+            &state,
+            Path::new("value.bin"),
+            &first,
+            PublicationPolicy::CreateNew,
+        )?;
+        let second_prepared = PreparedPrivateFile::prepare_state(
+            &state,
+            Path::new("value.bin"),
+            &second,
+            PublicationPolicy::CreateNew,
+        )?;
+
+        assert_eq!(
+            first_prepared.publish()?,
+            PublicationOutcome::PublishedAndSynced
+        );
+        assert!(matches!(
+            second_prepared.publish(),
+            Err(error) if error.kind() == FilesystemErrorKind::IdentityChanged
+        ));
+        assert_eq!(
+            std::fs::read(temporary.path().join("state/value.bin"))?,
+            b"first"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn visibility_validation_uses_the_retained_destination_snapshot()
     -> Result<(), Box<dyn std::error::Error>> {
         let temporary = tempfile::tempdir()?;

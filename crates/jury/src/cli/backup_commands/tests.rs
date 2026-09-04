@@ -395,7 +395,7 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
         allow_degraded_protection: true,
         command: Command::Backup {
             command: BackupCommand::Restore(BackupRestoreArgs {
-                input: backup,
+                input: backup.clone(),
                 identity_out: Some(owner.clone()),
                 reuse_identity: None,
                 state_out: Some(state.clone()),
@@ -405,7 +405,7 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
             }),
         },
     };
-    let environment = Environment {
+    let mut environment = Environment {
         jury_home: None,
         jury_identity_home: None,
         jury_identity: None,
@@ -418,6 +418,43 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
         jury_backup_passphrase: Some(Zeroizing::new(b"ExampleBackupPassphrase".to_vec())),
         jury_new_passphrase: Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec())),
     };
+    for fault in [
+        RestorePublicationPoint::ApproverIdentityPublished,
+        RestorePublicationPoint::WitnessIdentityPublished,
+    ] {
+        let mut injected = false;
+        let error = backup_restore_with_observer(
+            &cli,
+            restore_arguments(&cli),
+            &environment,
+            &current,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            &mut |observed| {
+                if !injected && observed == fault {
+                    injected = true;
+                    Err(CliError::new(
+                        CliErrorKind::Filesystem,
+                        "injected-role-restore-failure",
+                        "injected role restore failure",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .err()
+        .ok_or("the selected role publication fault was not injected")?;
+        assert_eq!(error.code(), "injected-role-restore-failure");
+        assert!(injected);
+        assert!(fs::read_dir(&identity_parent)?.any(|entry| {
+            entry.is_ok_and(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".jury-vault-restore-")
+            })
+        }));
+    }
     let output = backup_restore(
         &cli,
         restore_arguments(&cli),
@@ -443,7 +480,7 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
     assert!(approver.is_file());
     assert!(witness.is_file());
     assert!(state.is_dir());
-    assert!(!fs::read_dir(identity_parent)?.any(|entry| {
+    assert!(!fs::read_dir(&identity_parent)?.any(|entry| {
         entry.is_ok_and(|entry| {
             entry
                 .file_name()
@@ -451,6 +488,44 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
                 .starts_with(".jury-vault-restore-")
         })
     }));
+
+    let reused_vault = vault_parent.join("ExampleReusedIdentityVault");
+    let reused_state = state_parent.join("ExampleReusedIdentityState");
+    let reused_approver = identity_parent.join("ExampleReusedApprover.identity");
+    let reused_witness = identity_parent.join("ExampleReusedWitness.identity");
+    let mut reuse_cli = restore_cli(
+        &backup,
+        reused_vault.clone(),
+        owner.clone(),
+        reused_state.clone(),
+    )?;
+    let Command::Backup {
+        command: BackupCommand::Restore(reuse_arguments),
+    } = &mut reuse_cli.command
+    else {
+        return Err("test CLI did not contain restore arguments".into());
+    };
+    reuse_arguments.identity_out = None;
+    reuse_arguments.reuse_identity = Some(owner.clone());
+    reuse_arguments.approver_identity_out = Some(reused_approver.clone());
+    reuse_arguments.witness_identity_out = Some(reused_witness.clone());
+    environment.jury_identity_passphrase =
+        Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec()));
+    let reused = backup_restore(
+        &reuse_cli,
+        restore_arguments(&reuse_cli),
+        &environment,
+        &current,
+        ProtectionPolicy::EmergencyAllowDegraded,
+    )?;
+    let CommandOutput::Safe { fields, .. } = reused else {
+        return Err("reuse restore returned an unexpected output shape".into());
+    };
+    assert_eq!(fields["details"]["identity_reused"], true);
+    assert!(reused_vault.join("vault.json").is_file());
+    assert!(reused_state.is_dir());
+    assert!(reused_approver.is_file());
+    assert!(reused_witness.is_file());
     Ok(())
 }
 
@@ -606,6 +681,29 @@ fn restore_reconciles_each_injected_cross_directory_publication_failure() -> Tes
         };
         assert_eq!(error.code(), "injected-restore-failure");
         assert!(injected);
+
+        if fault == RestorePublicationPoint::MarkerCreated {
+            let mismatched_vault_parent = root.join("mismatched-vault-parent");
+            private_directory(&mismatched_vault_parent)?;
+            let mismatched_vault = mismatched_vault_parent.join("DifferentRestoredVault");
+            let mismatched_cli = restore_cli(
+                &backup,
+                mismatched_vault.clone(),
+                identity.clone(),
+                state.clone(),
+            )?;
+            let mismatch = backup_restore(
+                &mismatched_cli,
+                restore_arguments(&mismatched_cli),
+                &environment,
+                &current,
+                ProtectionPolicy::EmergencyAllowDegraded,
+            )
+            .err()
+            .ok_or("a different retry target unexpectedly matched the marker")?;
+            assert_eq!(mismatch.code(), "restore-marker-mismatch");
+            assert!(!mismatched_vault.exists());
+        }
 
         backup_restore_with_observer(
             &cli,
