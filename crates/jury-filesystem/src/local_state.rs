@@ -231,10 +231,19 @@ impl LockedVaultState<'_> {
         principal_id: &[u8; 32],
         file: PrincipalStateFile,
     ) -> Result<Vec<u8>, FilesystemError> {
+        self.read_bounded(principal_id, file, file.maximum_bytes())
+    }
+
+    pub fn read_bounded(
+        &self,
+        principal_id: &[u8; 32],
+        file: PrincipalStateFile,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, FilesystemError> {
         read_state_file(
             &principal_root(&self.directory.root, principal_id)?,
             file.name(),
-            file.maximum_bytes(),
+            maximum_bytes.min(file.maximum_bytes()),
         )
     }
 

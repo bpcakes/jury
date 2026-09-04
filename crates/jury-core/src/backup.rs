@@ -8,7 +8,10 @@ use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource, SecretBytes};
 use jury_protocol::{
-    backup_v1::{BackupEnvelopeV1, BackupHeaderV1, MAX_BACKUP_ENVELOPE_BYTES, smallest_bucket_id},
+    backup_v1::{
+        AEAD_TAG_BYTES, BACKUP_PREFIX_BYTES, BackupEnvelopeV1, BackupHeaderV1,
+        MAX_BACKUP_ENVELOPE_BYTES, smallest_bucket_id,
+    },
     identity_v1::{IdentityHeaderV1, KdfProfile},
     vault_v1::{
         ContentRole, Digest32, ItemAccessMode, ItemId, Nonce12, PrincipalId, PrincipalKind,
@@ -33,7 +36,7 @@ mod error;
 use codec::{
     ParsedPayload, PreparedIdentity, encode_payload, encoded_payload_len, parse_padded_payload,
 };
-pub use error::{BackupError, BackupErrorKind};
+pub use error::{BackupCapacityClass, BackupError, BackupErrorKind};
 use error::{map_crypto_error, map_format_error, map_identity_error};
 
 const RECOVERY_PAYLOAD_MAGIC: &[u8; 16] = b"JURY-RECOVERY-V1";
@@ -42,6 +45,8 @@ const IDENTITY_PRIVATE_PAYLOAD_BYTES: usize = 133;
 const MAX_BACKUP_ID_ATTEMPTS: usize = 16;
 const MAX_IDENTITY_HEADER_BYTES: usize = 16 * 1024;
 const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RECOVERY_PAYLOAD_BYTES: usize =
+    MAX_BACKUP_ENVELOPE_BYTES - BACKUP_PREFIX_BYTES - AEAD_TAG_BYTES - 4;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RecoveryRole {
@@ -386,7 +391,7 @@ impl<R: RandomSource> BackupCreator<R> {
             .to_json_bytes()
             .map_err(|_| BackupError::new(BackupErrorKind::InvalidCatalog))?;
         if catalog_bytes.len() > MAX_CATALOG_BYTES {
-            return Err(BackupError::new(BackupErrorKind::CapacityExhausted));
+            return Err(BackupError::capacity(BackupCapacityClass::Catalog));
         }
         let (policy, candidate) = validate_vault(request.vault, request.catalog)?;
 
@@ -419,7 +424,7 @@ impl<R: RandomSource> BackupCreator<R> {
         let logical_length = encoded_payload_len(&vault_bytes, &catalog_bytes, &prepared)?;
         let framed_length = logical_length
             .checked_add(4)
-            .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
+            .ok_or_else(|| BackupError::capacity(BackupCapacityClass::Envelope))?;
         let bucket_id = smallest_bucket_id(framed_length).map_err(map_format_error)?;
 
         let backup_id = self.draw_backup_id()?;
@@ -428,15 +433,15 @@ impl<R: RandomSource> BackupCreator<R> {
         let target = jury_protocol::backup_v1::bucket_bytes(bucket_id).map_err(map_format_error)?;
         let ciphertext_length = target
             .checked_sub(jury_protocol::backup_v1::BACKUP_PREFIX_BYTES)
-            .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
+            .ok_or_else(|| BackupError::capacity(BackupCapacityClass::Envelope))?;
         let plaintext_length = ciphertext_length
             .checked_sub(jury_protocol::backup_v1::AEAD_TAG_BYTES)
-            .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
+            .ok_or_else(|| BackupError::capacity(BackupCapacityClass::Envelope))?;
         let mut padded = SecretBytes::try_zeroed(plaintext_length)
             .map_err(|_| BackupError::new(BackupErrorKind::ResourceUnavailable))?;
         padded.as_mut_slice()[..4].copy_from_slice(
             &u32::try_from(logical_length)
-                .map_err(|_| BackupError::new(BackupErrorKind::CapacityExhausted))?
+                .map_err(|_| BackupError::capacity(BackupCapacityClass::Envelope))?
                 .to_be_bytes(),
         );
         encode_payload(
@@ -466,7 +471,7 @@ impl<R: RandomSource> BackupCreator<R> {
             nonce,
             target_bucket_id: bucket_id,
             payload_ciphertext_length: u32::try_from(ciphertext_length)
-                .map_err(|_| BackupError::new(BackupErrorKind::CapacityExhausted))?,
+                .map_err(|_| BackupError::capacity(BackupCapacityClass::Envelope))?,
             payload_digest: Digest32::new(payload_digest),
         };
         let derived = crypto::derive_argon2_key(

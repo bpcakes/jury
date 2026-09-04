@@ -54,6 +54,19 @@ fn every_large_backup_bucket_fits_bounded_zeroizing_bulk_memory() -> TestResult 
     Ok(())
 }
 
+#[test]
+fn payload_capacity_errors_retain_the_crossing_metadata_class() {
+    let error =
+        codec::add_payload_length(MAX_RECOVERY_PAYLOAD_BYTES, 1, BackupCapacityClass::Audit)
+            .expect_err("oversized payload length should fail");
+    assert_eq!(error.kind(), BackupErrorKind::CapacityExhausted);
+    assert_eq!(error.capacity_class(), Some(BackupCapacityClass::Audit));
+    assert_eq!(
+        format!("{error:?}"),
+        "BackupError { kind: CapacityExhausted, capacity_class: Audit }"
+    );
+}
+
 fn fixture() -> TestResult<(VaultPrincipalIdentity, VaultFileV1)> {
     let principal_id = PrincipalId::from_bytes([0x21; 32])?;
     let UnlockedIdentity::VaultPrincipal(owner) =

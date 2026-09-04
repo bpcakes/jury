@@ -28,28 +28,57 @@ pub enum BackupErrorKind {
     CapacityExhausted,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackupCapacityClass {
+    Envelope,
+    Vault,
+    Catalog,
+    Identity,
+    Audit,
+    Checkpoint,
+    Receipts,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct BackupError {
     kind: BackupErrorKind,
+    capacity_class: Option<BackupCapacityClass>,
 }
 
 impl BackupError {
     pub(super) const fn new(kind: BackupErrorKind) -> Self {
-        Self { kind }
+        Self {
+            kind,
+            capacity_class: None,
+        }
+    }
+
+    pub(super) const fn capacity(class: BackupCapacityClass) -> Self {
+        Self {
+            kind: BackupErrorKind::CapacityExhausted,
+            capacity_class: Some(class),
+        }
     }
 
     #[must_use]
     pub const fn kind(self) -> BackupErrorKind {
         self.kind
     }
+
+    #[must_use]
+    pub const fn capacity_class(self) -> Option<BackupCapacityClass> {
+        self.capacity_class
+    }
 }
 
 impl fmt::Debug for BackupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BackupError")
-            .field("kind", &self.kind)
-            .finish()
+        let mut debug = formatter.debug_struct("BackupError");
+        debug.field("kind", &self.kind);
+        if let Some(capacity_class) = self.capacity_class {
+            debug.field("capacity_class", &capacity_class);
+        }
+        debug.finish()
     }
 }
 
@@ -90,13 +119,14 @@ impl fmt::Display for BackupError {
 impl std::error::Error for BackupError {}
 
 pub(super) const fn map_format_error(error: BackupFormatError) -> BackupError {
-    BackupError::new(match error {
+    let kind = match error {
         BackupFormatError::ArtifactTooLarge | BackupFormatError::ResourceUnavailable => {
-            BackupErrorKind::CapacityExhausted
+            return BackupError::capacity(BackupCapacityClass::Envelope);
         }
         BackupFormatError::UnsupportedProfile => BackupErrorKind::InvalidFormat,
         _ => BackupErrorKind::InvalidFormat,
-    })
+    };
+    BackupError::new(kind)
 }
 
 pub(super) const fn map_identity_error(error: IdentityError) -> BackupError {

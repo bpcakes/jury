@@ -56,6 +56,7 @@ pub enum FilesystemErrorKind {
     Traversal,
     LinkOrWrongType,
     HardLinkOrSize,
+    Capacity,
     Alias,
     Containment,
     IdentityChanged,

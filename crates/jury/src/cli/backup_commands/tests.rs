@@ -1,4 +1,5 @@
 use std::fs;
+use std::fs::File;
 use std::os::unix::fs::PermissionsExt as _;
 
 use zeroize::Zeroizing;
@@ -39,6 +40,34 @@ fn backup_local_state_snapshot_requires_the_vault_edit_lock() -> TestResult {
     };
     assert_eq!(error.code(), "local-state-error");
     drop(held);
+    Ok(())
+}
+
+#[test]
+fn backup_local_state_budget_rejects_oversized_audit_before_reading_it() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let state_root = temporary.path().join("state");
+    private_directory(&state_root)?;
+    let vault_id = [0x11; 32];
+    let genesis = [0x22; 32];
+    let principal_id = PrincipalId::from_bytes([0x33; 32])?;
+    let state = VaultStateDirectory::open_or_create(&state_root, &vault_id, &genesis, &[], &[])?;
+    let principal_root = state_root
+        .join(hex(&vault_id))
+        .join(hex(&genesis))
+        .join(hex(principal_id.as_bytes()));
+    private_directory(&principal_root)?;
+    let audit_path = principal_root.join("audit.jsonl");
+    let audit = File::create(&audit_path)?;
+    audit.set_len(u64::try_from(MAX_BACKUP_ENVELOPE_BYTES)? + 1)?;
+    fs::set_permissions(&audit_path, fs::Permissions::from_mode(0o600))?;
+
+    let error = match read_local_state_snapshots(&state, &[principal_id]) {
+        Err(error) => error,
+        Ok(_) => return Err("oversized audit should fail before allocation".into()),
+    };
+    assert_eq!(error.code(), "backup-audit-capacity-exhausted");
+    assert!(!principal_root.join("checkpoint.json").exists());
     Ok(())
 }
 

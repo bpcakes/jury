@@ -425,22 +425,59 @@ fn read_local_state_snapshots(
     principal_ids: &[PrincipalId],
 ) -> Result<Vec<LocalStateSnapshot>, CliError> {
     let locked = state.try_lock().map_err(|_| local_state_error())?;
-    principal_ids
-        .iter()
-        .map(|principal_id| {
-            Ok(LocalStateSnapshot {
-                audit: locked
-                    .read(principal_id.as_bytes(), PrincipalStateFile::Audit)
-                    .map_err(map_filesystem_error)?,
-                checkpoint: locked
-                    .read(principal_id.as_bytes(), PrincipalStateFile::Checkpoint)
-                    .map_err(map_filesystem_error)?,
-                receipts: locked
-                    .read(principal_id.as_bytes(), PrincipalStateFile::Receipts)
-                    .map_err(map_filesystem_error)?,
-            })
-        })
-        .collect()
+    let mut remaining = MAX_BACKUP_ENVELOPE_BYTES;
+    let mut snapshots = Vec::with_capacity(principal_ids.len());
+    for principal_id in principal_ids {
+        let audit = read_budgeted_local_state(
+            &locked,
+            principal_id,
+            PrincipalStateFile::Audit,
+            BackupCapacityClass::Audit,
+            &mut remaining,
+        )?;
+        let checkpoint = read_budgeted_local_state(
+            &locked,
+            principal_id,
+            PrincipalStateFile::Checkpoint,
+            BackupCapacityClass::Checkpoint,
+            &mut remaining,
+        )?;
+        let receipts = read_budgeted_local_state(
+            &locked,
+            principal_id,
+            PrincipalStateFile::Receipts,
+            BackupCapacityClass::Receipts,
+            &mut remaining,
+        )?;
+        snapshots.push(LocalStateSnapshot {
+            audit,
+            checkpoint,
+            receipts,
+        });
+    }
+    Ok(snapshots)
+}
+
+fn read_budgeted_local_state(
+    locked: &LockedVaultState<'_>,
+    principal_id: &PrincipalId,
+    file: PrincipalStateFile,
+    class: BackupCapacityClass,
+    remaining: &mut usize,
+) -> Result<Vec<u8>, CliError> {
+    let bytes = locked
+        .read_bounded(principal_id.as_bytes(), file, *remaining)
+        .map_err(|error| {
+            if error.kind() == FilesystemErrorKind::Capacity {
+                backup_capacity_error(class)
+            } else {
+                map_filesystem_error(error)
+            }
+        })?;
+    *remaining = remaining
+        .checked_sub(bytes.len())
+        .ok_or_else(|| backup_capacity_error(class))?;
+    Ok(bytes)
 }
 
 fn load_additional_backup_identity(
@@ -734,13 +771,47 @@ fn map_backup_error(error: jury_core::backup::BackupError) -> CliError {
                 "required backup protection resources are unavailable",
             )
         }
-        BackupErrorKind::CapacityExhausted => CliError::new(
-            CliErrorKind::InvalidArguments,
-            "backup-capacity-exhausted",
-            "backup recovery metadata exceeds a hard capacity",
+        BackupErrorKind::CapacityExhausted => backup_capacity_error(
+            error
+                .capacity_class()
+                .unwrap_or(BackupCapacityClass::Envelope),
         ),
         _ => invalid_backup(),
     }
+}
+
+fn backup_capacity_error(class: BackupCapacityClass) -> CliError {
+    let (code, message) = match class {
+        BackupCapacityClass::Envelope => (
+            "backup-capacity-exhausted",
+            "backup recovery metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Vault => (
+            "backup-vault-capacity-exhausted",
+            "backup vault metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Catalog => (
+            "backup-catalog-capacity-exhausted",
+            "backup public catalog metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Identity => (
+            "backup-identity-capacity-exhausted",
+            "backup identity metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Audit => (
+            "backup-audit-capacity-exhausted",
+            "backup audit metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Checkpoint => (
+            "backup-checkpoint-capacity-exhausted",
+            "backup checkpoint metadata exceeds the archive capacity",
+        ),
+        BackupCapacityClass::Receipts => (
+            "backup-receipts-capacity-exhausted",
+            "backup receipt metadata exceeds the archive capacity",
+        ),
+    };
+    CliError::new(CliErrorKind::InvalidArguments, code, message)
 }
 
 #[cfg(all(test, target_os = "linux"))]

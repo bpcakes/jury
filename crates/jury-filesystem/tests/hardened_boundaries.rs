@@ -364,7 +364,7 @@ fn identity_reads_reject_links_modes_sizes_and_worktree_paths() -> Result<(), Bo
             .err()
             .ok_or("oversized file should fail")?
             .kind(),
-        FilesystemErrorKind::HardLinkOrSize
+        FilesystemErrorKind::Capacity
     );
 
     let repository = repository(&temp.path().join("worktree"))?;

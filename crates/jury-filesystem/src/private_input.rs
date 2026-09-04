@@ -121,7 +121,7 @@ fn read_with_permissions(
         if maximum_bytes == 0 {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,
-                FilesystemErrorKind::HardLinkOrSize,
+                FilesystemErrorKind::Capacity,
             ));
         }
         let name = single_component(name, FilesystemOperation::Read)?;
@@ -174,7 +174,7 @@ fn read_with_permissions(
         if output.len() > maximum_bytes {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,
-                FilesystemErrorKind::HardLinkOrSize,
+                FilesystemErrorKind::Capacity,
             ));
         }
         let after = file.metadata().map_err(|_| {
@@ -196,13 +196,16 @@ fn validate_metadata(
     maximum_bytes: usize,
     permissions: PermissionProfile,
 ) -> Result<(), FilesystemError> {
-    if !metadata.is_file()
-        || metadata.nlink() != 1
-        || metadata.len() > u64::try_from(maximum_bytes).unwrap_or(u64::MAX)
-    {
+    if !metadata.is_file() || metadata.nlink() != 1 {
         return Err(FilesystemError::new(
             FilesystemOperation::Read,
             FilesystemErrorKind::HardLinkOrSize,
+        ));
+    }
+    if metadata.len() > u64::try_from(maximum_bytes).unwrap_or(u64::MAX) {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Read,
+            FilesystemErrorKind::Capacity,
         ));
     }
     let mode = metadata.permissions().mode();

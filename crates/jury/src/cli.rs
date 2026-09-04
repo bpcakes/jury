@@ -15,8 +15,8 @@ use jury_core::access_provider::{
     RevisionAccessTarget, WitnessedAccessStatus, WitnessedItemAccessProvider,
 };
 use jury_core::backup::{
-    BackupCreateRequest, BackupCreator, BackupErrorKind, BackupIdentitySource, LocalStateArchive,
-    RecoveryCoverage, RecoveryRole, open as open_backup,
+    BackupCapacityClass, BackupCreateRequest, BackupCreator, BackupErrorKind, BackupIdentitySource,
+    LocalStateArchive, RecoveryCoverage, RecoveryRole, open as open_backup,
 };
 use jury_core::domain::{Capability, FieldSelector, ItemSelector};
 use jury_core::identity::{IdentityCreator, UnlockedIdentity, VaultPrincipalIdentity, unlock};

@@ -17,7 +17,10 @@ pub(super) fn encoded_payload_len(
     catalog: &[u8],
     identities: &[PreparedIdentity<'_>],
 ) -> Result<usize, BackupError> {
-    let mut length = RECOVERY_PAYLOAD_MAGIC.len() + 2 + 4 + vault.len() + 4 + catalog.len() + 1;
+    let mut length = RECOVERY_PAYLOAD_MAGIC.len() + 2;
+    length = add_payload_length(length, 4 + vault.len(), BackupCapacityClass::Vault)?;
+    length = add_payload_length(length, 4 + catalog.len(), BackupCapacityClass::Catalog)?;
+    length = add_payload_length(length, 1, BackupCapacityClass::Envelope)?;
     for entry in identities {
         let header = serde_json::to_vec(&entry.identity.header)
             .map_err(|_| BackupError::new(BackupErrorKind::InvalidFormat))?;
@@ -26,14 +29,39 @@ pub(super) fn encoded_payload_len(
         {
             return Err(BackupError::new(BackupErrorKind::InvalidFormat));
         }
-        length = length
-            .checked_add(1 + 4 + header.len() + 2 + IDENTITY_PRIVATE_PAYLOAD_BYTES)
-            .and_then(|value| value.checked_add(4 + entry.local_state.audit.len()))
-            .and_then(|value| value.checked_add(4 + entry.local_state.checkpoint.len()))
-            .and_then(|value| value.checked_add(4 + entry.local_state.receipts.len()))
-            .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
+        length = add_payload_length(
+            length,
+            1 + 4 + header.len() + 2 + IDENTITY_PRIVATE_PAYLOAD_BYTES,
+            BackupCapacityClass::Identity,
+        )?;
+        length = add_payload_length(
+            length,
+            4 + entry.local_state.audit.len(),
+            BackupCapacityClass::Audit,
+        )?;
+        length = add_payload_length(
+            length,
+            4 + entry.local_state.checkpoint.len(),
+            BackupCapacityClass::Checkpoint,
+        )?;
+        length = add_payload_length(
+            length,
+            4 + entry.local_state.receipts.len(),
+            BackupCapacityClass::Receipts,
+        )?;
     }
     Ok(length)
+}
+
+pub(super) fn add_payload_length(
+    current: usize,
+    added: usize,
+    class: BackupCapacityClass,
+) -> Result<usize, BackupError> {
+    current
+        .checked_add(added)
+        .filter(|length| *length <= MAX_RECOVERY_PAYLOAD_BYTES)
+        .ok_or_else(|| BackupError::capacity(class))
 }
 
 pub(super) fn encode_payload(
