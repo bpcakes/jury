@@ -463,6 +463,7 @@ fn backup_restore_with_observer(
             cli,
             input: &arguments.input,
             target_home: &mut target_home,
+            source_home: None,
             identity_target,
             approver_identity_target: arguments.approver_identity_out.as_deref(),
             witness_identity_target: arguments.witness_identity_out.as_deref(),
@@ -504,12 +505,6 @@ pub(super) fn backup_drill(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let source_home = selected_home(cli, environment, current)?;
-    if source_home
-        .detached_path()
-        .is_some_and(|source| overlaps(source, &arguments.vault_out))
-    {
-        return Err(containment_error());
-    }
     let mut target_home = VaultHomeLocation::Detached {
         path: arguments.vault_out.clone(),
         source: HomeSource::Explicit,
@@ -518,6 +513,7 @@ pub(super) fn backup_drill(
         cli,
         input: &arguments.input,
         target_home: &mut target_home,
+        source_home: Some(&source_home),
         identity_target: &arguments.identity_out,
         approver_identity_target: arguments.approver_identity_out.as_deref(),
         witness_identity_target: arguments.witness_identity_out.as_deref(),
@@ -687,6 +683,7 @@ struct RestoreRequest<'a> {
     cli: &'a Cli,
     input: &'a Path,
     target_home: &'a mut VaultHomeLocation,
+    source_home: Option<&'a VaultHomeLocation>,
     identity_target: &'a Path,
     approver_identity_target: Option<&'a Path>,
     witness_identity_target: Option<&'a Path>,
@@ -721,7 +718,7 @@ fn restore_archive(request: RestoreRequest<'_>) -> Result<RestoredInstallation, 
 }
 
 fn restore_archive_with_observer(
-    request: RestoreRequest<'_>,
+    mut request: RestoreRequest<'_>,
     observer: &mut dyn FnMut(RestorePublicationPoint) -> Result<(), CliError>,
 ) -> Result<RestoredInstallation, CliError> {
     validate_restore_paths(&request)?;
@@ -736,9 +733,7 @@ fn restore_archive_with_observer(
         .identity_target
         .file_name()
         .ok_or_else(filesystem_error)?;
-    let identity_root =
-        HardenedStateRoot::open_existing(identity_parent, &repository_refs(request.target_home))
-            .map_err(map_filesystem_error)?;
+    let identity_root = open_restore_root(identity_parent, &request)?;
     let identity_preview = identity_root
         .preview_private_file(Path::new(identity_name))
         .map_err(map_filesystem_error)?;
@@ -865,15 +860,9 @@ fn restore_archive_with_observer(
     {
         return Err(independent_restored_identity_passphrase_required());
     }
-    let selector = IdentitySelector::select(None, Some(request.identity_target.to_path_buf()))
-        .map_err(|_| invalid_restore_target())?;
     let (identity_file, publish_identity) = if identity_preview.destination_exists() {
-        let bytes = selector
-            .read(
-                &identity_root,
-                &repository_refs(request.target_home),
-                MAX_IDENTITY_FILE_BYTES,
-            )
+        let bytes = identity_root
+            .read_private_file(Path::new(identity_name), MAX_IDENTITY_FILE_BYTES)
             .map_err(map_filesystem_error)?;
         let file = IdentityFileV1::parse(&bytes).map_err(|_| invalid_identity())?;
         let unlocked = unlock(&file, identity_passphrase.memory())
@@ -918,16 +907,15 @@ fn restore_archive_with_observer(
     }
     if publish_identity {
         let protected = protect(&identity_bytes, request.protection)?;
-        let outcome = selector
-            .prepare(
-                &identity_root,
-                &repository_refs(request.target_home),
-                &protected,
-                PublicationPolicy::CreateNew,
-            )
-            .map_err(map_filesystem_error)?
-            .publish()
-            .map_err(map_filesystem_error)?;
+        let outcome = PreparedPrivateFile::prepare_state(
+            &identity_root,
+            Path::new(identity_name),
+            &protected,
+            PublicationPolicy::CreateNew,
+        )
+        .map_err(map_filesystem_error)?
+        .publish()
+        .map_err(map_filesystem_error)?;
         require_durable_restore_step(outcome)?;
         observer(RestorePublicationPoint::OwnerIdentityPublished)?;
     }
@@ -965,7 +953,7 @@ fn restore_archive_with_observer(
         )?;
     }
 
-    match read_vault(request.target_home) {
+    match read_restore_vault(&request) {
         Ok(observed) => {
             if observed != recovered.vault_bytes() || prior_marker_bytes.is_none() {
                 return Err(restore_partial_conflict());
@@ -979,9 +967,9 @@ fn restore_archive_with_observer(
             if marker.vault_published {
                 return Err(restore_partial_conflict());
             }
-            ensure_detached_restore_home(request.target_home, prior_marker_bytes.is_some())?;
+            ensure_detached_restore_home(&request, prior_marker_bytes.is_some())?;
             let protected_vault = protect(recovered.vault_bytes(), request.protection)?;
-            let outcome = prepare_new_vault(request.target_home, &protected_vault)?
+            let outcome = prepare_restore_vault(&mut request, &protected_vault)?
                 .publish()
                 .map_err(map_filesystem_error)?;
             require_durable_restore_step(outcome)?;
@@ -1005,12 +993,8 @@ fn restore_archive_with_observer(
         write_marker(&identity_root, &marker, true, request.protection)?;
     }
 
-    let installed_identity_bytes = selector
-        .read(
-            &identity_root,
-            &repository_refs(request.target_home),
-            MAX_IDENTITY_FILE_BYTES,
-        )
+    let installed_identity_bytes = identity_root
+        .read_private_file(Path::new(identity_name), MAX_IDENTITY_FILE_BYTES)
         .map_err(map_filesystem_error)?;
     if installed_identity_bytes != identity_bytes {
         return Err(restore_partial_conflict());
@@ -1100,7 +1084,104 @@ fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(), CliError> 
     {
         return Err(containment_error());
     }
+    if let Some(source_home) = request.source_home {
+        let source_root = source_home
+            .repository()
+            .map(RepositoryLocation::worktree_path)
+            .or_else(|| source_home.detached_path())
+            .ok_or_else(containment_error)?;
+        let mut output_paths = vec![request.identity_target, request.state_root];
+        output_paths.extend(request.approver_identity_target);
+        output_paths.extend(request.witness_identity_target);
+        output_paths.extend(request.target_home.detached_path());
+        if output_paths
+            .into_iter()
+            .any(|output| overlaps(source_root, output))
+        {
+            return Err(containment_error());
+        }
+    }
     Ok(())
+}
+
+fn restore_repository_refs<'a>(request: &'a RestoreRequest<'_>) -> Vec<&'a RepositoryLocation> {
+    request
+        .target_home
+        .repository()
+        .into_iter()
+        .chain(request.source_home.and_then(VaultHomeLocation::repository))
+        .collect()
+}
+
+fn source_detached_paths<'a>(request: &'a RestoreRequest<'_>) -> Vec<&'a Path> {
+    request
+        .source_home
+        .and_then(VaultHomeLocation::detached_path)
+        .into_iter()
+        .collect()
+}
+
+fn restore_vault_home_paths<'a>(request: &'a RestoreRequest<'_>) -> Vec<&'a Path> {
+    request
+        .target_home
+        .detached_path()
+        .into_iter()
+        .chain(source_detached_paths(request))
+        .collect()
+}
+
+fn open_restore_root(
+    path: &Path,
+    request: &RestoreRequest<'_>,
+) -> Result<HardenedStateRoot, CliError> {
+    HardenedStateRoot::open_existing_excluding(
+        path,
+        &restore_repository_refs(request),
+        &source_detached_paths(request),
+    )
+    .map_err(map_filesystem_error)
+}
+
+fn read_restore_vault(request: &RestoreRequest<'_>) -> Result<Vec<u8>, CliError> {
+    match &*request.target_home {
+        VaultHomeLocation::Repository { repository } => repository
+            .read_encrypted_shared_artifact(MAX_VAULT_BYTES)
+            .map_err(map_filesystem_error),
+        VaultHomeLocation::Detached { path, .. } => open_restore_root(path, request)?
+            .read_private_file(Path::new("vault.json"), MAX_VAULT_BYTES)
+            .map_err(map_filesystem_error),
+    }
+}
+
+fn prepare_restore_vault(
+    request: &mut RestoreRequest<'_>,
+    contents: &ProtectedMemory,
+) -> Result<PreparedPrivateFile, CliError> {
+    match &mut *request.target_home {
+        VaultHomeLocation::Repository { .. } => prepare_new_vault(request.target_home, contents),
+        VaultHomeLocation::Detached { path, .. } => {
+            let repositories = request
+                .source_home
+                .and_then(VaultHomeLocation::repository)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let excluded_paths = request
+                .source_home
+                .and_then(VaultHomeLocation::detached_path)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let root =
+                HardenedStateRoot::open_existing_excluding(path, &repositories, &excluded_paths)
+                    .map_err(map_filesystem_error)?;
+            PreparedPrivateFile::prepare_state(
+                &root,
+                Path::new("vault.json"),
+                contents,
+                PublicationPolicy::CreateNew,
+            )
+            .map_err(map_filesystem_error)
+        }
+    }
 }
 
 fn validate_role_restore_targets(
@@ -1151,8 +1232,7 @@ fn preflight_new_restore_targets(
     {
         let parent = target.parent().ok_or_else(invalid_restore_target)?;
         let name = target.file_name().ok_or_else(invalid_restore_target)?;
-        let root = HardenedStateRoot::open_existing(parent, &repository_refs(request.target_home))
-            .map_err(map_filesystem_error)?;
+        let root = open_restore_root(parent, request)?;
         if root
             .private_child_exists(Path::new(name))
             .map_err(map_filesystem_error)?
@@ -1173,8 +1253,7 @@ fn preflight_new_restore_targets(
         VaultHomeLocation::Detached { path, .. } => {
             let parent = path.parent().ok_or_else(invalid_restore_target)?;
             let name = path.file_name().ok_or_else(invalid_restore_target)?;
-            let parent =
-                HardenedStateRoot::open_existing(parent, &[]).map_err(map_filesystem_error)?;
+            let parent = open_restore_root(parent, request)?;
             if parent
                 .private_child_exists(Path::new(name))
                 .map_err(map_filesystem_error)?
@@ -1192,9 +1271,7 @@ fn preflight_new_restore_targets(
             .state_root
             .file_name()
             .ok_or_else(invalid_restore_target)?;
-        let parent =
-            HardenedStateRoot::open_existing(parent, &repository_refs(request.target_home))
-                .map_err(map_filesystem_error)?;
+        let parent = open_restore_root(parent, request)?;
         if parent
             .private_child_exists(Path::new(name))
             .map_err(map_filesystem_error)?
@@ -1206,11 +1283,12 @@ fn preflight_new_restore_targets(
             ));
         }
     } else {
-        match VaultStateDirectory::open_existing(
+        match VaultStateDirectory::open_existing_excluding(
             request.state_root,
             envelope.header.vault_id.as_bytes(),
             envelope.header.genesis_fingerprint.as_bytes(),
-            &repository_refs(request.target_home),
+            &restore_repository_refs(request),
+            &source_detached_paths(request),
         ) {
             Ok(_) => {
                 return Err(CliError::new(
@@ -1226,14 +1304,13 @@ fn preflight_new_restore_targets(
     Ok(())
 }
 
-fn ensure_detached_restore_home(home: &mut VaultHomeLocation, retry: bool) -> Result<(), CliError> {
-    let VaultHomeLocation::Detached { path, .. } = home else {
+fn ensure_detached_restore_home(request: &RestoreRequest<'_>, retry: bool) -> Result<(), CliError> {
+    let VaultHomeLocation::Detached { path, .. } = &*request.target_home else {
         return Ok(());
     };
     let parent_path = path.parent().ok_or_else(invalid_restore_target)?;
     let name = path.file_name().ok_or_else(invalid_restore_target)?;
-    let parent =
-        HardenedStateRoot::open_existing(parent_path, &[]).map_err(map_filesystem_error)?;
+    let parent = open_restore_root(parent_path, request)?;
     if parent
         .private_child_exists(Path::new(name))
         .map_err(map_filesystem_error)?
@@ -1265,8 +1342,7 @@ fn restore_additional_role_identity(
     let recovered_role = recovered.identity(role).ok_or_else(invalid_backup)?;
     let parent = target.parent().ok_or_else(invalid_restore_target)?;
     let name = target.file_name().ok_or_else(invalid_restore_target)?;
-    let root = HardenedStateRoot::open_existing(parent, &repository_refs(request.target_home))
-        .map_err(map_filesystem_error)?;
+    let root = open_restore_root(parent, request)?;
     let preview = root
         .preview_private_file(Path::new(name))
         .map_err(map_filesystem_error)?;
@@ -1303,15 +1379,9 @@ fn restore_additional_role_identity(
     {
         return Err(independent_restored_identity_passphrase_required());
     }
-    let selector = IdentitySelector::select(None, Some(target.to_path_buf()))
-        .map_err(|_| invalid_restore_target())?;
     let file = if preview.destination_exists() {
-        let bytes = selector
-            .read(
-                &root,
-                &repository_refs(request.target_home),
-                MAX_IDENTITY_FILE_BYTES,
-            )
+        let bytes = root
+            .read_private_file(Path::new(name), MAX_IDENTITY_FILE_BYTES)
             .map_err(map_filesystem_error)?;
         IdentityFileV1::parse(&bytes).map_err(|_| invalid_identity())?
     } else {
@@ -1326,26 +1396,21 @@ fn restore_additional_role_identity(
             .file;
         let bytes = file.to_json_bytes().map_err(|_| invalid_identity())?;
         let protected = protect(&bytes, request.protection)?;
-        let outcome = selector
-            .prepare(
-                &root,
-                &repository_refs(request.target_home),
-                &protected,
-                PublicationPolicy::CreateNew,
-            )
-            .map_err(map_filesystem_error)?
-            .publish()
-            .map_err(map_filesystem_error)?;
+        let outcome = PreparedPrivateFile::prepare_state(
+            &root,
+            Path::new(name),
+            &protected,
+            PublicationPolicy::CreateNew,
+        )
+        .map_err(map_filesystem_error)?
+        .publish()
+        .map_err(map_filesystem_error)?;
         require_durable_restore_step(outcome)?;
         file
     };
     let expected_bytes = file.to_json_bytes().map_err(|_| invalid_identity())?;
-    let installed_bytes = selector
-        .read(
-            &root,
-            &repository_refs(request.target_home),
-            MAX_IDENTITY_FILE_BYTES,
-        )
+    let installed_bytes = root
+        .read_private_file(Path::new(name), MAX_IDENTITY_FILE_BYTES)
         .map_err(map_filesystem_error)?;
     if installed_bytes != expected_bytes {
         return Err(restore_partial_conflict());
@@ -1393,20 +1458,20 @@ fn publish_recovered_state(
             .state_root
             .file_name()
             .ok_or_else(invalid_restore_target)?;
-        let parent =
-            HardenedStateRoot::open_existing(parent_path, &repository_refs(request.target_home))
-                .map_err(map_filesystem_error)?;
+        let parent = open_restore_root(parent_path, request)?;
         parent
             .create_private_child_new(Path::new(name))
             .map_err(map_filesystem_error)?;
     }
-    let repositories = repository_refs(request.target_home);
+    let repositories = restore_repository_refs(request);
+    let excluded_paths = source_detached_paths(request);
     let state = if must_already_exist {
-        VaultStateDirectory::open_existing(
+        VaultStateDirectory::open_existing_excluding(
             request.state_root,
             recovered.header().vault_id.as_bytes(),
             recovered.header().genesis_fingerprint.as_bytes(),
             &repositories,
+            &excluded_paths,
         )
     } else {
         VaultStateDirectory::open_or_create(
@@ -1414,7 +1479,7 @@ fn publish_recovered_state(
             recovered.header().vault_id.as_bytes(),
             recovered.header().genesis_fingerprint.as_bytes(),
             &repositories,
-            &detached_paths(request.target_home),
+            &restore_vault_home_paths(request),
         )
     }
     .map_err(map_filesystem_error)?;
@@ -1512,7 +1577,7 @@ fn validate_restored_state_publication(
     recovered: &jury_core::backup::RecoveredBackup,
     marker: &RestoreMarker,
 ) -> Result<(VaultFileV1, PolicyState), CliError> {
-    let installed_vault_bytes = read_vault(request.target_home)?;
+    let installed_vault_bytes = read_restore_vault(request)?;
     if installed_vault_bytes != recovered.vault_bytes() {
         return Err(restore_partial_conflict());
     }
@@ -1526,11 +1591,12 @@ fn validate_restored_state_publication(
     let mut expected_catalog = PolicyCatalogV1::empty();
     expected_catalog.merge_transfer(recovered.catalog())?;
     let expected_catalog_bytes = policy_catalog_json_bytes(&expected_catalog)?;
-    let state = VaultStateDirectory::open_existing(
+    let state = VaultStateDirectory::open_existing_excluding(
         request.state_root,
         recovered.header().vault_id.as_bytes(),
         recovered.header().genesis_fingerprint.as_bytes(),
-        &repository_refs(request.target_home),
+        &restore_repository_refs(request),
+        &source_detached_paths(request),
     )
     .map_err(map_filesystem_error)?;
     if state

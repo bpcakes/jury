@@ -149,7 +149,18 @@ impl VaultStateDirectory {
         genesis_fingerprint: &[u8; 32],
         repositories: &[&RepositoryLocation],
     ) -> Result<Self, FilesystemError> {
-        let root = HardenedStateRoot::open_existing(state_root, repositories)?;
+        Self::open_existing_excluding(state_root, vault_id, genesis_fingerprint, repositories, &[])
+    }
+
+    pub fn open_existing_excluding(
+        state_root: &Path,
+        vault_id: &[u8; 32],
+        genesis_fingerprint: &[u8; 32],
+        repositories: &[&RepositoryLocation],
+        excluded_paths: &[&Path],
+    ) -> Result<Self, FilesystemError> {
+        let root =
+            HardenedStateRoot::open_existing_excluding(state_root, repositories, excluded_paths)?;
         let root = descend_hex_existing(&root, vault_id)?;
         let root = descend_hex_existing(&root, genesis_fingerprint)?;
         Ok(Self { root })

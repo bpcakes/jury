@@ -22,9 +22,19 @@ impl HardenedStateRoot {
         path: &Path,
         repositories: &[&RepositoryLocation],
     ) -> Result<Self, FilesystemError> {
+        Self::open_existing_excluding(path, repositories, &[])
+    }
+
+    /// Opens an existing owner-only directory while proving disjointness from
+    /// retained repositories and explicit excluded directory paths.
+    pub fn open_existing_excluding(
+        path: &Path,
+        repositories: &[&RepositoryLocation],
+        excluded_paths: &[&Path],
+    ) -> Result<Self, FilesystemError> {
         #[cfg(not(unix))]
         {
-            let _ = (path, repositories);
+            let _ = (path, repositories, excluded_paths);
             return Err(FilesystemError::new(
                 FilesystemOperation::OpenStateRoot,
                 FilesystemErrorKind::Unsupported,
@@ -35,7 +45,7 @@ impl HardenedStateRoot {
         {
             let absolute = normalized_absolute(path, FilesystemOperation::OpenStateRoot)?;
             let root = open_absolute_dir(&absolute, FilesystemOperation::OpenStateRoot)?;
-            validate_root(&root, repositories, &[])?;
+            validate_root(&root, repositories, excluded_paths)?;
             Ok(Self { root })
         }
     }
@@ -382,6 +392,26 @@ mod tests {
             Err(error) if error.kind() == FilesystemErrorKind::AlreadyExists
         ));
         assert!(parent.private_child_exists(Path::new("restore"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn existing_state_root_rejects_an_explicit_excluded_tree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let source = temporary.path().join("source");
+        let output = source.join("output");
+        std::fs::create_dir_all(&output)?;
+        for directory in [&source, &output] {
+            std::fs::set_permissions(
+                directory,
+                std::os::unix::fs::PermissionsExt::from_mode(0o700),
+            )?;
+        }
+        assert!(matches!(
+            HardenedStateRoot::open_existing_excluding(&output, &[], &[&source]),
+            Err(error) if error.kind() == FilesystemErrorKind::Containment
+        ));
         Ok(())
     }
 }

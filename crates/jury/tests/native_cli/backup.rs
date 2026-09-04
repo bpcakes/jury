@@ -99,6 +99,53 @@ fn assert_backup_status(paths: NativePaths<'_>, drilled: bool) -> TestResult {
     Ok(())
 }
 
+fn assert_drill_rejects_every_output_inside_source_repository(
+    root: &Path,
+    paths: NativePaths<'_>,
+    backup: &Path,
+) -> TestResult {
+    for target in ["vault", "owner", "approver", "witness", "state"] {
+        let forbidden = paths.repository.join(format!("forbidden-{target}"));
+        let mut vault = root.join(format!("outside-vault-{target}"));
+        let mut owner = root.join(format!("outside-owner-{target}.identity"));
+        let mut state = root.join(format!("outside-state-{target}"));
+        let mut optional = None;
+        match target {
+            "vault" => vault = forbidden.clone(),
+            "owner" => owner = forbidden.clone(),
+            "approver" => optional = Some(("--approver-identity-out", forbidden.clone())),
+            "witness" => optional = Some(("--witness-identity-out", forbidden.clone())),
+            "state" => state = forbidden.clone(),
+            _ => return Err("unknown drill output fixture".into()),
+        }
+        let mut arguments = vec![
+            "--json".to_owned(),
+            "backup".to_owned(),
+            "drill".to_owned(),
+            "--in".to_owned(),
+            backup.to_str().ok_or("non-UTF-8 backup path")?.to_owned(),
+            "--vault-out".to_owned(),
+            vault.to_str().ok_or("non-UTF-8 vault path")?.to_owned(),
+            "--identity-out".to_owned(),
+            owner.to_str().ok_or("non-UTF-8 identity path")?.to_owned(),
+            "--state-out".to_owned(),
+            state.to_str().ok_or("non-UTF-8 state path")?.to_owned(),
+        ];
+        if let Some((option, path)) = optional {
+            arguments.push(option.to_owned());
+            arguments.push(path.to_str().ok_or("non-UTF-8 role path")?.to_owned());
+        }
+        let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        let rejected = run(paths.repository, paths.data, paths.state, &arguments, b"")?;
+        assert_eq!(rejected.status.code(), Some(2));
+        assert!(rejected.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr)?;
+        assert_eq!(error["error"]["code"], "private-state-overlap");
+        assert!(!forbidden.exists());
+    }
+    Ok(())
+}
+
 struct DrillInstallation {
     vault: std::path::PathBuf,
     identity: std::path::PathBuf,
@@ -330,6 +377,7 @@ fn native_backup_verify_restore_and_real_drill_preserve_the_source_vault() -> Te
     let source_before = fs::read(repository.join(".jury/vault.json"))?;
 
     let backup = create_and_verify_backup(root, paths, &source_before)?;
+    assert_drill_rejects_every_output_inside_source_repository(root, paths, &backup)?;
     assert_backup_status(paths, false)?;
     let drill = run_real_drill(root, paths, &backup, &source_before)?;
     inspect_drill(root, paths, &drill)?;
