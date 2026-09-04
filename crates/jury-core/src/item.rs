@@ -727,9 +727,15 @@ fn resolve_access<'a>(
     {
         return Err(ItemError::new(ItemErrorKind::InvalidInput));
     }
+    let mut direct_recipient_ids = plan.direct_recipient_ids.clone();
+    if !direct_recipient_ids.is_empty() {
+        direct_recipient_ids.extend(next_owner_ids(policy, replacement, owner_change));
+        direct_recipient_ids.sort_unstable();
+        direct_recipient_ids.dedup();
+    }
     let mut direct = Vec::new();
     let mut direct_roles = BTreeMap::new();
-    for principal_id in &plan.direct_recipient_ids {
+    for principal_id in &direct_recipient_ids {
         let replaced = replacement
             .filter(|replacement| replacement.next_descriptor.principal_id == *principal_id);
         let registered = registration
@@ -1118,6 +1124,16 @@ fn next_reader_ids(
     replacement: Option<&PrincipalReplacement>,
     owner_change: Option<OwnerChange>,
 ) -> Vec<PrincipalId> {
+    let mut ids = next_owner_ids(policy, replacement, owner_change);
+    ids.extend(access.grants.iter().map(|grant| grant.principal_id));
+    ids.into_iter().collect()
+}
+
+fn next_owner_ids(
+    policy: &PolicyState,
+    replacement: Option<&PrincipalReplacement>,
+    owner_change: Option<OwnerChange>,
+) -> BTreeSet<PrincipalId> {
     let mut ids = policy
         .owner_ids()
         .map(|owner| {
@@ -1138,8 +1154,7 @@ fn next_reader_ids(
             }
         }
     }
-    ids.extend(access.grants.iter().map(|grant| grant.principal_id));
-    ids.into_iter().collect()
+    ids
 }
 
 fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<ProtectedMemory, ItemError> {

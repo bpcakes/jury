@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jury_protected::{OsRandom, RandomSource};
 use jury_protocol::vault_v1::{
-    AccessRole, DescriptorMetadataV1, Digest32, DirectSlotV1, EmptyGenesisEntryV1, FixedBytes,
-    ItemId, MAX_ITEMS, MAX_POLICY_REVISIONS, MAX_PUBLIC_LABEL_BYTES, PolicyGenesisV1,
-    PolicyJournalV1, PolicyOperationV1, PrincipalDescriptorV1, PrincipalId, PrincipalKind,
-    Signature64, SignedPolicyRevisionV1, VaultId, WitnessedStateV1,
+    AccessRole, ContentRole, DescriptorMetadataV1, Digest32, DirectSlotV1, EmptyGenesisEntryV1,
+    FixedBytes, ItemAccessMode, ItemId, MAX_ITEMS, MAX_POLICY_REVISIONS, MAX_PUBLIC_LABEL_BYTES,
+    PolicyGenesisV1, PolicyJournalV1, PolicyOperationV1, PrincipalDescriptorV1, PrincipalId,
+    PrincipalKind, Signature64, SignedPolicyRevisionV1, VaultId, WitnessedStateV1,
     validate_policy_operation_context,
 };
 

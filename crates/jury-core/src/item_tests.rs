@@ -23,7 +23,7 @@ use crate::access_provider::{
     WitnessedAccessStatus, WitnessedItemAccessProvider,
 };
 use crate::domain::Capability;
-use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};
+use crate::identity::{IdentityCreator, UnlockedIdentity, unlock, unlocked_identity_for_test};
 use crate::local_state::{CheckpointCandidate, PrincipalLocalState};
 use crate::policy::{AutomaticReadTarget, PolicyCreator};
 use crate::witness_client::{PreparedWitnessRequest, WitnessRequestContext, WitnessRequestCreator};
@@ -505,6 +505,105 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
         post_replacement_rekey.envelope.current_revision.key_epoch,
         4
     );
+    Ok(())
+}
+
+#[test]
+fn direct_item_construction_derives_every_implicit_owner_slot()
+-> Result<(), Box<dyn std::error::Error>> {
+    let protection = ProtectionPolicy::EmergencyAllowDegraded;
+    let owner_id = PrincipalId::from_bytes([0x31; 32])?;
+    let next_owner_id = PrincipalId::from_bytes([0x32; 32])?;
+    let UnlockedIdentity::VaultPrincipal(owner) = unlocked_identity_for_test(
+        owner_id,
+        PrincipalKind::Human,
+        &mut IncrementingRandom(0x20),
+    )?
+    else {
+        return Err("owner identity role differs".into());
+    };
+    let UnlockedIdentity::VaultPrincipal(next_owner) = unlocked_identity_for_test(
+        next_owner_id,
+        PrincipalKind::Human,
+        &mut IncrementingRandom(0x80),
+    )?
+    else {
+        return Err("next owner identity role differs".into());
+    };
+    let created_policy = PolicyCreator::new().create(&owner, 1, |_| false)?;
+    let two_owner_policy = created_policy.state.prepare_revision(
+        &owner,
+        2,
+        vec![
+            PolicyOperationV1::PrincipalAdd {
+                descriptor: next_owner.public_descriptor()?,
+                display_label: "ExampleOwner".to_owned(),
+                registration_proof_digest: FixedBytes::new([0x44; 32]),
+            },
+            PolicyOperationV1::OwnerGrant {
+                principal_id: next_owner_id,
+            },
+        ],
+    )?;
+    let mut items = ItemCreator::new(protection);
+    let created_item = items.prepare_create(
+        &two_owner_policy.state,
+        &owner,
+        3,
+        NewItem {
+            kind: ItemKind::Canonical,
+            descriptor: ItemDescriptorV1::new("ExampleItem".to_owned())?,
+            state: ItemStateV1 {
+                plaintext_schema: 1,
+                fields: Vec::new(),
+            },
+            bucket_id: 1,
+            access: ItemAccessPlan {
+                grants: Vec::new(),
+                // Callers select a direct path; the core owns the complete
+                // implicit owner recipient set.
+                direct_recipient_ids: vec![owner_id],
+                witness_policy_digest: None,
+            },
+        },
+        &ItemArtifactInventory::default(),
+    )?;
+    let slots = item_slots(
+        &created_item.policy.revision.operations,
+        SlotOperation::Create,
+    )?;
+    for expected_owner in [&owner, &next_owner] {
+        let owner_slots = slots
+            .iter()
+            .filter(|slot| slot.recipient_principal_id == expected_owner.principal_id())
+            .collect::<Vec<_>>();
+        assert_eq!(owner_slots.len(), 2);
+        let body_slot = owner_slots
+            .into_iter()
+            .find(|slot| slot.content_role == ContentRole::Body)
+            .ok_or("owner body slot absent")?;
+        let body_secret = expected_owner.open_direct_slot(body_slot)?;
+        assert_eq!(
+            open_body(&created_item.envelope, &body_secret)?
+                .fields
+                .len(),
+            0
+        );
+    }
+
+    let mut incomplete_operations = created_item.policy.revision.operations.clone();
+    for operation in &mut incomplete_operations {
+        if let PolicyOperationV1::ItemCreate { direct_slots, .. } = operation {
+            direct_slots.retain(|slot| slot.recipient_principal_id != next_owner_id);
+        }
+    }
+    let incomplete = two_owner_policy
+        .state
+        .prepare_revision(&owner, 3, incomplete_operations);
+    assert!(matches!(
+        incomplete,
+        Err(error) if error.kind() == PolicyErrorKind::IncompleteRotation
+    ));
     Ok(())
 }
 

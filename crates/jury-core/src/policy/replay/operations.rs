@@ -317,6 +317,24 @@ fn validate_complete_state(state: &PolicyState) -> Result<(), PolicyError> {
         let mode = item
             .access_mode()
             .ok_or_else(|| PolicyError::new(PolicyErrorKind::InvalidTransition))?;
+        if matches!(mode, ItemAccessMode::DirectOnly | ItemAccessMode::Mixed)
+            && state.owners.iter().any(|owner_id| {
+                let (count, has_descriptor, has_body) = item
+                    .direct_slots
+                    .iter()
+                    .filter(|slot| slot.recipient_principal_id == *owner_id)
+                    .fold((0_u8, false, false), |(count, descriptor, body), slot| {
+                        (
+                            count.saturating_add(1),
+                            descriptor || slot.content_role == ContentRole::Descriptor,
+                            body || slot.content_role == ContentRole::Body,
+                        )
+                    });
+                count != 2 || !has_descriptor || !has_body
+            })
+        {
+            return Err(PolicyError::new(PolicyErrorKind::IncompleteRotation));
+        }
         for (principal_id, role) in &item.grants {
             let principal = state
                 .principals
