@@ -11,15 +11,15 @@ after separately committed fixes and the full repository gates pass.
   `0f6c624767727e16021b0cdbfb8415f6df9c7af6`.
 - [x] Research persisted-state, platform, passphrase, capacity, and restore
   retry contracts in repository documentation and Linux primary sources.
-- [ ] Stop eager ambient credential capture before process protection.
-- [ ] Restore compatibility with valid pre-change multi-owner histories.
-- [ ] Split restore validation from publication and type committed outcomes.
-- [ ] Make create-new and repository metadata publication durable and
+- [x] Stop eager ambient credential capture before process protection.
+- [x] Restore compatibility with valid pre-change multi-owner histories.
+- [x] Split restore validation from publication and type committed outcomes.
+- [x] Make create-new and repository metadata publication durable and
   filesystem-capability aware.
-- [ ] Move alias decisions to retained filesystem identities.
-- [ ] Aggregate all protection degradation and remove infallible archive copies.
-- [ ] Add the accepted regression, retry, compatibility, and CLI test matrix.
-- [ ] Run format, Clippy, test, contract, work evidence, and work gates; close
+- [x] Move alias decisions to retained filesystem identities.
+- [x] Aggregate all protection degradation and remove infallible archive copies.
+- [x] Add the accepted regression, retry, compatibility, and CLI test matrix.
+- [x] Run format, Clippy, test, contract, work evidence, and work gates; close
   `jury-qv4.2.17` and this plan only after all pass.
 
 ## Surprises & Discoveries
@@ -38,6 +38,31 @@ after separately committed fixes and the full repository gates pass.
   build and timed out in the pre-existing self-hosted loopback integration
   test. The exact failing test passed immediately in isolation, so this is a
   recorded baseline timing flake rather than evidence about the J17 changes.
+- The first final suite found that drill source authentication had moved ahead
+  of non-secret path preflight. The implementation now validates the proposed
+  layout before prompting, then revalidates it at the publication boundary;
+  the exact native drill regression passes with that ordering.
+- The first final plan check passed every runtime test but exposed two changed
+  files above the unchanged 800-LOC hard limit. Moving private-publication
+  tests and the cross-directory reconciliation matrix into cohesive child
+  modules reduced the parents to 678 and 764 LOC; the LOC gate and the moved
+  tests pass without a suppression or threshold change.
+- `work check` executes both the `api:test` target and the legacy `jig.test`
+  gate, so it runs the complete workspace suite twice. Both invocations passed
+  in the first final plan check; its only failure was the LOC gate above.
+- One later aggregate `api:test` target exited during the two long restore
+  tests, but its bounded receipt omitted the failing assertion. The same final
+  tree then passed the complete direct suite, the plan-linked `rust-tests`
+  gate, the focused backup-command matrix, the exact workspace-unified
+  all-role test, and a fresh five-target `verify` profile. No deterministic
+  source defect was established, so no timeout, assertion, or speculative
+  product change was used to hide the isolated failure.
+- Closing the bead invalidated the whole-worktree verification receipt as
+  designed. The first refresh failed when `/tmp` had no free blocks; unrelated
+  filesystem tests reported `ENOSPC`. Re-running the unchanged profile with a
+  task-specific temporary directory on the home filesystem passed all five
+  targets, including the complete workspace suite. No unrelated temporary
+  data was deleted.
 
 ## Decision Log
 
@@ -56,8 +81,23 @@ after separately committed fixes and the full repository gates pass.
 
 ## Outcomes & Retrospective
 
-Pending. Record the resulting boundaries, tests, commits, and any deferred risk
-after verification.
+The repair separates configuration from credential acquisition, historical
+replay compatibility from new-mutation validation, restore validation from
+publication, logical paths from retained filesystem identity, and prepared
+publication from committed cleanup outcomes. Create-new publication and marker
+cleanup are retryable and durability-aware; drill and installation trust checks
+complete before publication; optional-role degradation and bounded allocation
+failures remain observable.
+
+Regression coverage now includes valid legacy multi-owner replay, late-bound
+secret bounds, expected-genesis and drill-source rejection, existing state and
+role-target refusal, every cross-directory publication point, optional-role
+retry, exact marker cleanup states, identity reuse, hard-link alias rejection,
+and concurrent create-new publication. The final tree passed the complete
+workspace suite repeatedly, including final direct and plan-linked runs, and
+fresh plan evidence is green under verify run
+`run_01M1Q4M8XAMB1T98KRMGWYP80D`. Formatting, Clippy, contract, Rust LOC, and
+all required work gates pass without changing thresholds or suppressions.
 
 ## Context and orientation
 
