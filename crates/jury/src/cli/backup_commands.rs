@@ -83,18 +83,13 @@ pub(super) fn backup_create(
         additional_passphrases.push(passphrase);
     }
     let principal_id = context.identity.principal_id();
-    let audit = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Audit)
-        .map_err(map_filesystem_error)?;
-    let checkpoint = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Checkpoint)
-        .map_err(map_filesystem_error)?;
-    let receipts = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Receipts)
-        .map_err(map_filesystem_error)?;
+    let mut state_principal_ids = vec![principal_id];
+    state_principal_ids.extend(additional.iter().map(|entry| match &entry.identity {
+        UnlockedIdentity::Approver(identity) => identity.principal_id(),
+        UnlockedIdentity::Witness(identity) => identity.principal_id(),
+        UnlockedIdentity::VaultPrincipal(identity) => identity.principal_id(),
+    }));
+    let local_state_snapshots = read_local_state_snapshots(&context.state, &state_principal_ids)?;
     let catalog = context.catalog.transfer_catalog(&context.policy)?;
     let backup_passphrase = secret_input::capture_named_or_environment(
         protection,
@@ -126,20 +121,23 @@ pub(super) fn backup_create(
     }
     drop(identity_passphrase);
     drop(additional_passphrases);
+    let (owner_local_state, additional_local_state) = local_state_snapshots
+        .split_first()
+        .ok_or_else(local_state_error)?;
     let local_state = LocalStateArchive {
-        audit: &audit,
-        checkpoint: &checkpoint,
-        receipts: &receipts,
+        audit: &owner_local_state.audit,
+        checkpoint: &owner_local_state.checkpoint,
+        receipts: &owner_local_state.receipts,
     };
     let mut identities = vec![BackupIdentitySource::VaultPrincipal {
         identity: &context.identity,
         local_state,
     }];
-    for entry in &additional {
+    for (entry, local_state_snapshot) in additional.iter().zip(additional_local_state) {
         let local_state = LocalStateArchive {
-            audit: &entry.audit,
-            checkpoint: &entry.checkpoint,
-            receipts: &entry.receipts,
+            audit: &local_state_snapshot.audit,
+            checkpoint: &local_state_snapshot.checkpoint,
+            receipts: &local_state_snapshot.receipts,
         };
         identities.push(match &entry.identity {
             UnlockedIdentity::Approver(identity) => BackupIdentitySource::Approver {
@@ -589,9 +587,35 @@ const MAX_RESTORE_MARKER_BYTES: usize = 16 * 1024;
 
 struct AdditionalBackupIdentity {
     identity: UnlockedIdentity,
+}
+
+struct LocalStateSnapshot {
     audit: Vec<u8>,
     checkpoint: Vec<u8>,
     receipts: Vec<u8>,
+}
+
+fn read_local_state_snapshots(
+    state: &VaultStateDirectory,
+    principal_ids: &[PrincipalId],
+) -> Result<Vec<LocalStateSnapshot>, CliError> {
+    let locked = state.try_lock().map_err(|_| local_state_error())?;
+    principal_ids
+        .iter()
+        .map(|principal_id| {
+            Ok(LocalStateSnapshot {
+                audit: locked
+                    .read(principal_id.as_bytes(), PrincipalStateFile::Audit)
+                    .map_err(map_filesystem_error)?,
+                checkpoint: locked
+                    .read(principal_id.as_bytes(), PrincipalStateFile::Checkpoint)
+                    .map_err(map_filesystem_error)?,
+                receipts: locked
+                    .read(principal_id.as_bytes(), PrincipalStateFile::Receipts)
+                    .map_err(map_filesystem_error)?,
+            })
+        })
+        .collect()
 }
 
 fn load_additional_backup_identity(
@@ -633,32 +657,7 @@ fn load_additional_backup_identity(
             "an explicitly selected backup identity has the wrong local role",
         ));
     }
-    let principal_id = match &identity {
-        UnlockedIdentity::Approver(identity) => identity.principal_id(),
-        UnlockedIdentity::Witness(identity) => identity.principal_id(),
-        UnlockedIdentity::VaultPrincipal(identity) => identity.principal_id(),
-    };
-    let audit = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Audit)
-        .map_err(map_filesystem_error)?;
-    let checkpoint = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Checkpoint)
-        .map_err(map_filesystem_error)?;
-    let receipts = context
-        .state
-        .read_principal_state(principal_id.as_bytes(), PrincipalStateFile::Receipts)
-        .map_err(map_filesystem_error)?;
-    Ok((
-        AdditionalBackupIdentity {
-            identity,
-            audit,
-            checkpoint,
-            receipts,
-        },
-        passphrase,
-    ))
+    Ok((AdditionalBackupIdentity { identity }, passphrase))
 }
 
 #[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -1928,6 +1927,24 @@ mod tests {
     fn private_directory(path: &Path) -> TestResult {
         fs::create_dir_all(path)?;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    }
+
+    #[test]
+    fn backup_local_state_snapshot_requires_the_vault_edit_lock() -> TestResult {
+        let temporary = tempfile::tempdir()?;
+        let state_root = temporary.path().join("state");
+        private_directory(&state_root)?;
+        let state =
+            VaultStateDirectory::open_or_create(&state_root, &[0x11; 32], &[0x22; 32], &[], &[])?;
+        let principal_id = PrincipalId::from_bytes([0x33; 32])?;
+        let held = state.try_lock()?;
+        let error = match read_local_state_snapshots(&state, &[principal_id]) {
+            Ok(_) => return Err("backup state snapshot ignored the held edit lock".into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "local-state-error");
+        drop(held);
         Ok(())
     }
 
