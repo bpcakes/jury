@@ -409,12 +409,18 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
         &current,
         ProtectionPolicy::EmergencyAllowDegraded,
     )?;
-    let CommandOutput::Safe { fields, .. } = output else {
+    let CommandOutput::Safe { fields, lines, .. } = output else {
         return Err("restore returned an unexpected output shape".into());
     };
     assert_eq!(
         fields["included_identity_roles"],
         serde_json::json!(["vault-principal", "approver", "witness-client"])
+    );
+    assert!(fields["details"]["protection_degraded"].is_boolean());
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("Protection degraded: "))
     );
     assert!(vault.join("vault.json").is_file());
     assert!(owner.is_file());

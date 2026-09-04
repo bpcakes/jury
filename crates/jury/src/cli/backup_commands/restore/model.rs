@@ -62,6 +62,7 @@ pub(super) struct RestoredInstallation {
     pub(super) coverage: RecoveryCoverage,
     pub(super) output_digest: Digest32,
     pub(super) marker_removed: bool,
+    pub(super) protection_degraded: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

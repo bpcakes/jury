@@ -204,6 +204,7 @@ fn run_real_drill(
     assert_eq!(drilled["details"]["restored_direct_access_validated"], true);
     assert_eq!(drilled["details"]["source_drill_receipt_recorded"], true);
     assert_eq!(drilled["details"]["drill_copy_retained"], true);
+    assert!(drilled["details"]["protection_degraded"].is_boolean());
     assert!(installation.vault.join("vault.json").is_file());
     assert!(installation.identity.is_file());
     assert!(installation.state.is_dir());
@@ -336,6 +337,7 @@ fn restore_into_repository(
     assert_eq!(restored["operation"], "backup-restore");
     assert_eq!(restored["details"]["committed"], true);
     assert_eq!(restored["details"]["transaction_marker_removed"], true);
+    assert!(restored["details"]["protection_degraded"].is_boolean());
     let mut shared_entries = fs::read_dir(repository.join(".jury"))?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<Result<Vec<_>, _>>()?;

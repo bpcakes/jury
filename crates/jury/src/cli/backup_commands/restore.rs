@@ -83,6 +83,7 @@ pub(super) fn backup_restore_with_observer(
     let mut lines = vec![
         "Backup restored without overwriting an existing vault or identity.".to_owned(),
         format!("Transaction marker removed: {}", restored.marker_removed),
+        format!("Protection degraded: {}", restored.protection_degraded),
     ];
     lines.extend(coverage_lines(&restored.coverage));
     Ok(recovery_output(
@@ -95,6 +96,7 @@ pub(super) fn backup_restore_with_observer(
             "restored_direct_access_validated": false,
             "transaction_marker_removed": restored.marker_removed,
             "local_state_published": true,
+            "protection_degraded": restored.protection_degraded,
         }),
         lines,
     ))
@@ -131,6 +133,7 @@ pub(in crate::cli) fn backup_drill(
     // Receipt authentication intentionally happens only after the restored
     // files were read back and every direct descriptor was actually opened.
     let source = load_vault_principal(cli, environment, current, protection)?;
+    let protection_degraded = restored.protection_degraded || source.protection_degraded;
     if source.vault.header.vault_id != restored.header.vault_id
         || source.vault.header.genesis_fingerprint != restored.header.genesis_fingerprint
         || source.identity.principal_id() != restored.header.owner_principal_id
@@ -156,6 +159,7 @@ pub(in crate::cli) fn backup_drill(
         "Real restore drill committed; restored direct descriptors were opened and validated."
             .to_owned(),
         "The drill copy remains in place for operator inspection.".to_owned(),
+        format!("Protection degraded: {protection_degraded}"),
     ];
     lines.extend(coverage_lines(&restored.coverage));
     if !receipt_recorded {
@@ -176,6 +180,7 @@ pub(in crate::cli) fn backup_drill(
             "transaction_marker_removed": restored.marker_removed,
             "external_witness_recovery_complete": !restored.coverage.external_witness_recovery_required,
             "local_state_published": true,
+            "protection_degraded": protection_degraded,
         }),
         lines,
     ))
@@ -234,6 +239,7 @@ fn restore_archive_with_observer(
             .map(Vec::as_slice),
     )
     .map_err(map_secret_error)?;
+    let mut protection_degraded = backup_passphrase.protection_degraded();
     let recovered = open_backup(&envelope, backup_passphrase.memory()).map_err(map_backup_error)?;
     let owner = recovered
         .identity(RecoveryRole::VaultPrincipal)
@@ -323,6 +329,7 @@ fn restore_archive_with_observer(
         identity_environment.map(Vec::as_slice),
     )
     .map_err(map_secret_error)?;
+    protection_degraded |= identity_passphrase.protection_degraded();
     if !request.identity_target.is_reuse()
         && backup_passphrase
             .matches(&identity_passphrase)
@@ -395,7 +402,7 @@ fn restore_archive_with_observer(
     }
 
     if let Some(target) = request.approver_identity_target {
-        restore_additional_role_identity(
+        protection_degraded |= restore_additional_role_identity(
             &request,
             &recovered,
             RecoveryRole::Approver,
@@ -409,7 +416,7 @@ fn restore_archive_with_observer(
         )?;
     }
     if let Some(target) = request.witness_identity_target {
-        restore_additional_role_identity(
+        protection_degraded |= restore_additional_role_identity(
             &request,
             &recovered,
             RecoveryRole::WitnessClient,
@@ -514,6 +521,7 @@ fn restore_archive_with_observer(
         coverage: recovered.coverage().clone(),
         output_digest: sha256_digest(&output_preimage),
         marker_removed: true,
+        protection_degraded,
     })
 }
 

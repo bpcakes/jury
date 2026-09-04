@@ -12,7 +12,7 @@ pub(super) fn restore_additional_role_identity(
     retry: bool,
     backup_passphrase: &secret_input::CapturedPassphrase,
     observer: &mut dyn FnMut(RestorePublicationPoint) -> Result<(), CliError>,
-) -> Result<(), CliError> {
+) -> Result<bool, CliError> {
     let recovered_role = recovered.identity(role).ok_or_else(invalid_backup)?;
     let parent = target.parent().ok_or_else(invalid_restore_target)?;
     let name = target.file_name().ok_or_else(invalid_restore_target)?;
@@ -112,7 +112,7 @@ pub(super) fn restore_additional_role_identity(
         })?;
         write_marker(marker_root, marker, true, request.protection)?;
     }
-    Ok(())
+    Ok(passphrase.protection_degraded())
 }
 
 pub(super) fn publish_recovered_state(
