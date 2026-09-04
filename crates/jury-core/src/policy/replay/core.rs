@@ -179,6 +179,7 @@ impl PolicyState {
             return Err(PolicyError::new(PolicyErrorKind::CapacityExhausted));
         }
         let mut state = apply_operations(self, sequence, &operations)?;
+        validate_complete_owner_slots(&state)?;
         let resulting_policy_state_hash = state.normalized_state_hash()?;
         let mut revision = SignedPolicyRevisionV1 {
             vault_id: self.vault_id,
@@ -326,7 +327,7 @@ struct SlotRotation {
     witnessed_state: Option<WitnessedStateV1>,
 }
 
-fn apply_operations(
+pub(super) fn apply_operations(
     prior: &PolicyState,
     sequence: u64,
     operations: &[PolicyOperationV1],

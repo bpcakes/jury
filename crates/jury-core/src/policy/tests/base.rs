@@ -7,8 +7,9 @@ use jury_protocol::vault_v1::{
     AccessRole, ContentRole, DescriptorMetadataV1, Digest32, DirectCiphertext48, DirectSlotV1,
     Encapsulation1120, FixedBytes, ItemAccessMode, ItemId, ItemKind, Nonce12, PolicyOperationV1,
     PrincipalDescriptorV1, PrincipalId, PrincipalKind, RecipientPublicKey1216, RevisionSealId,
-    ShareCiphertext49, Signature64, SlotId, VaultId, VerificationPublicKey32, WitnessPolicyId,
-    WitnessShareCapsuleV1, WitnessedSlotV1, WitnessedStateV1, recipient_public_key_fingerprint,
+    ShareCiphertext49, Signature64, SignedPolicyRevisionV1, SlotId, VaultId,
+    VerificationPublicKey32, WitnessPolicyId, WitnessShareCapsuleV1, WitnessedSlotV1,
+    WitnessedStateV1, recipient_public_key_fingerprint,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -16,7 +17,8 @@ use crate::domain::Capability;
 use crate::domain::IDENTIFIER_COLLISION_RETRY_ATTEMPTS;
 
 use super::replay::{
-    PolicySigner, create_with_test_signer, prepare_with_test_signer, replay_policy,
+    PolicySigner, apply_operations, create_with_test_signer, prepare_with_test_signer,
+    replay_policy,
 };
 use super::{
     AccessPath, ApprovalMode, ApproverPolicyDescriptor, DescriptorStatus, OperationRule,
@@ -313,5 +315,83 @@ fn direct_item_state_exposes_authority_and_suppresses_a_quorum_claim() -> AnyRes
     assert_eq!(read.effective_role, Some(AccessRole::Owner));
     assert_eq!(read.path, AccessPath::Direct);
     assert!(!read.carries_quorum_claim);
+    Ok(())
+}
+
+#[test]
+fn replay_accepts_legacy_item_without_every_implicit_owner_slot() -> AnyResult {
+    let (owner, mut created) = created_policy()?;
+    let next_owner = TestSigner::new(0x22, 0x32, PrincipalKind::Human)?;
+    let owner_added = prepare_with_test_signer(
+        &created.state,
+        &owner,
+        1_700_000_000_001,
+        vec![
+            PolicyOperationV1::PrincipalAdd {
+                descriptor: next_owner.descriptor.clone(),
+                display_label: "ExampleOwner".to_owned(),
+                registration_proof_digest: FixedBytes::new([0x44; 32]),
+            },
+            PolicyOperationV1::OwnerGrant {
+                principal_id: next_owner.principal_id(),
+            },
+        ],
+    )?;
+    created.journal.revisions.push(owner_added.revision);
+
+    let item_id = ItemId::from_bytes([0x51; 32])?;
+    let operations = vec![PolicyOperationV1::ItemCreate {
+        item_id,
+        item_kind: ItemKind::Canonical,
+        key_epoch: 1,
+        descriptor: descriptor_metadata(1, 1, 0x61)?,
+        current_item_revision_hash: FixedBytes::new([0x62; 32]),
+        direct_slots: direct_slots(
+            owner_added.state.vault_id(),
+            item_id,
+            owner.principal_id(),
+            1,
+            2,
+            AccessRole::Owner,
+            ItemAccessMode::DirectOnly,
+            recipient_public_key_fingerprint(&owner.descriptor.recipient_public_key),
+        )?,
+        witnessed_state: None,
+    }];
+    let Err(new_write_error) = prepare_with_test_signer(
+        &owner_added.state,
+        &owner,
+        1_700_000_000_002,
+        operations.clone(),
+    ) else {
+        panic!("new writes must include every implicit owner slot");
+    };
+    assert_eq!(
+        new_write_error.kind(),
+        PolicyErrorKind::IncompleteRotation
+    );
+
+    // This revision models bytes produced before implicit owner-slot
+    // completion became a new-write invariant. It remains fully signed and
+    // state-hash checked; only its historical construction rule differs.
+    let mut legacy_state = apply_operations(&owner_added.state, 2, &operations)?;
+    let mut legacy_revision = SignedPolicyRevisionV1 {
+        vault_id: owner_added.state.vault_id(),
+        sequence: 2,
+        previous_revision_hash: owner_added.state.terminal_revision_hash().clone(),
+        timestamp_ms: 1_700_000_000_002,
+        author_principal_id: owner.principal_id(),
+        operations,
+        resulting_policy_state_hash: legacy_state.normalized_state_hash()?,
+        signature: Signature64::new([0; 64]),
+    };
+    legacy_revision.signature = owner.sign(&legacy_revision.signature_preimage()?)?;
+    legacy_state.terminal_revision_hash = legacy_revision.recomputed_hash()?;
+    legacy_state
+        .revision_hashes
+        .push(legacy_state.terminal_revision_hash.clone());
+    created.journal.revisions.push(legacy_revision);
+
+    assert_eq!(replay_policy(&created.journal), Ok(legacy_state));
     Ok(())
 }
