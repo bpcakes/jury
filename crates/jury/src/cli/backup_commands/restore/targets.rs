@@ -1,19 +1,33 @@
 use super::*;
 
+pub(super) struct RestorePathLayout<'a> {
+    pub(super) input: &'a Path,
+    pub(super) target_home: &'a VaultHomeLocation,
+    pub(super) source_home: Option<&'a VaultHomeLocation>,
+    pub(super) identity_targets: Vec<&'a Path>,
+    pub(super) state_root: &'a Path,
+}
+
 pub(super) fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(), CliError> {
-    let mut paths = vec![
-        request.input,
-        request.identity_target.path(),
-        request.state_root,
-    ];
-    paths.extend(request.approver_identity_target);
-    paths.extend(request.witness_identity_target);
-    for path in paths {
-        direct_utf8_path(path)?;
-    }
     let mut identity_targets = vec![request.identity_target.path()];
     identity_targets.extend(request.approver_identity_target);
     identity_targets.extend(request.witness_identity_target);
+    validate_restore_path_layout(RestorePathLayout {
+        input: request.input,
+        target_home: request.target_home,
+        source_home: request.mode.source_home(),
+        identity_targets,
+        state_root: request.state_root,
+    })
+}
+
+pub(super) fn validate_restore_path_layout(layout: RestorePathLayout<'_>) -> Result<(), CliError> {
+    let mut paths = vec![layout.input, layout.state_root];
+    paths.extend(layout.identity_targets.iter().copied());
+    for path in paths {
+        direct_utf8_path(path)?;
+    }
+    let mut identity_targets = layout.identity_targets;
     identity_targets.sort_unstable();
     if identity_targets.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(invalid_restore_target());
@@ -24,16 +38,13 @@ pub(super) fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(),
         .collect::<Result<Vec<_>, _>>()?;
     identity_parents.sort_unstable();
     identity_parents.dedup();
-    let mut boundaries = vec![
-        request.input.to_path_buf(),
-        request.state_root.to_path_buf(),
-    ];
+    let mut boundaries = vec![layout.input.to_path_buf(), layout.state_root.to_path_buf()];
     boundaries.extend(identity_parents.into_iter().map(Path::to_path_buf));
-    if let Some(repository) = request.target_home.repository() {
+    if let Some(repository) = layout.target_home.repository() {
         boundaries.push(repository.worktree_path().to_path_buf());
     }
-    boundaries.extend(request.target_home.detached_path().map(Path::to_path_buf));
-    if let Some(source_home) = request.mode.source_home() {
+    boundaries.extend(layout.target_home.detached_path().map(Path::to_path_buf));
+    if let Some(source_home) = layout.source_home {
         if let Some(repository) = source_home.repository() {
             boundaries.push(repository.worktree_path().to_path_buf());
         }

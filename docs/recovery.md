@@ -119,6 +119,10 @@ $ jury --home /absolute/private/ExampleVaultDrill \
     vault audit verify
 ```
 
+The drill authenticates the selected source owner before it decrypts the
+backup or accepts new identity passphrases. Therefore an unavailable or
+mismatched source fails before any drill destination is published.
+
 Confirm that the reported genesis fingerprint and owner principal match the
 source. The drill opens and validates every restored direct descriptor. For a
 generic direct test field such as `ExampleRecoveryItem.ExampleRecoveryField`,

@@ -15,9 +15,9 @@ use publication::{
     write_marker,
 };
 use targets::{
-    ensure_detached_restore_home, open_restore_root, preflight_new_restore_targets,
-    prepare_restore_vault, read_restore_vault, validate_restore_paths,
-    validate_role_restore_targets,
+    RestorePathLayout, ensure_detached_restore_home, open_restore_root,
+    preflight_new_restore_targets, prepare_restore_vault, read_restore_vault,
+    validate_restore_path_layout, validate_restore_paths, validate_role_restore_targets,
 };
 
 const MAX_RESTORE_MARKER_BYTES: usize = 16 * 1024;
@@ -117,16 +117,26 @@ pub(in crate::cli) fn backup_drill(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let source_home = selected_home(cli, environment, current)?;
+    let mut target_home = VaultHomeLocation::Detached {
+        path: arguments.vault_out.clone(),
+        source: HomeSource::Explicit,
+    };
+    let mut identity_targets = vec![arguments.identity_out.as_path()];
+    identity_targets.extend(arguments.approver_identity_out.as_deref());
+    identity_targets.extend(arguments.witness_identity_out.as_deref());
+    validate_restore_path_layout(RestorePathLayout {
+        input: &arguments.input,
+        target_home: &target_home,
+        source_home: Some(&source_home),
+        identity_targets,
+        state_root: &arguments.state_out,
+    })?;
     let source = load_vault_principal(cli, environment, current, protection)?;
     let receipt_timestamp_ms = timestamp_ms()?;
     let source_expectation = RestoreSourceExpectation {
         vault_id: source.vault.header.vault_id,
         genesis_fingerprint: source.vault.header.genesis_fingerprint.clone(),
         owner_principal_id: source.identity.principal_id(),
-    };
-    let mut target_home = VaultHomeLocation::Detached {
-        path: arguments.vault_out.clone(),
-        source: HomeSource::Explicit,
     };
     let restored = restore_archive(RestoreRequest {
         cli,

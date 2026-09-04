@@ -197,7 +197,7 @@ fn run_real_drill(
                 .to_str()
                 .ok_or("non-UTF-8 drill state path")?,
         ],
-        b"ExampleBackupPassphrase\nExampleDrillPassphrase\nExampleDrillPassphrase\nExamplePass1234\n",
+        b"ExamplePass1234\nExampleBackupPassphrase\nExampleDrillPassphrase\nExampleDrillPassphrase\n",
     )?)?;
     assert_eq!(drilled["operation"], "backup-drill");
     assert_eq!(drilled["details"]["committed"], true);
