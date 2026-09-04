@@ -1,4 +1,3 @@
-
 use jury_protected::EntropyError;
 use jury_protocol::{
     vault_v1::{
