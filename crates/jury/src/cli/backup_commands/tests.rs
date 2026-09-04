@@ -305,14 +305,20 @@ fn write_all_roles_backup(path: &Path) -> TestResult<Vec<u8>> {
     Ok(bytes)
 }
 
-fn restore_cli(backup: &Path, vault: PathBuf, identity: PathBuf, state: PathBuf) -> Cli {
-    Cli {
+fn restore_cli(
+    backup: &Path,
+    vault: PathBuf,
+    identity: PathBuf,
+    state: PathBuf,
+) -> TestResult<Cli> {
+    let envelope = BackupEnvelopeV1::parse(&fs::read(backup)?)?;
+    Ok(Cli {
         json: true,
         home: Some(vault),
         global_home: false,
         identity: None,
         identity_file: None,
-        expected_genesis: None,
+        expected_genesis: Some(hex(envelope.header.genesis_fingerprint.as_bytes())),
         passphrase_stdin: false,
         allow_degraded_protection: true,
         command: Command::Backup {
@@ -326,7 +332,7 @@ fn restore_cli(backup: &Path, vault: PathBuf, identity: PathBuf, state: PathBuf)
                 identity_kdf_profile: KdfProfileArg::Portable,
             }),
         },
-    }
+    })
 }
 
 fn restore_arguments(cli: &Cli) -> &BackupRestoreArgs {
@@ -374,7 +380,10 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
         global_home: false,
         identity: None,
         identity_file: None,
-        expected_genesis: None,
+        expected_genesis: Some(hex(BackupEnvelopeV1::parse(&fs::read(&backup)?)?
+            .header
+            .genesis_fingerprint
+            .as_bytes())),
         passphrase_stdin: false,
         allow_degraded_protection: true,
         command: Command::Backup {
@@ -439,6 +448,88 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
 }
 
 #[test]
+fn restore_requires_and_validates_expected_genesis_before_publication() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    let offline = root.join("offline");
+    let current = root.join("current");
+    let data = root.join("data");
+    let source_state = root.join("source-state");
+    let vault_parent = root.join("vault-parent");
+    let identity_parent = root.join("identity-parent");
+    let state_parent = root.join("state-parent");
+    for directory in [
+        &offline,
+        &current,
+        &data,
+        &source_state,
+        &vault_parent,
+        &identity_parent,
+        &state_parent,
+    ] {
+        private_directory(directory)?;
+    }
+    let backup = offline.join("ExampleVault.backup");
+    write_owner_backup(&backup)?;
+    let vault = vault_parent.join("ExampleRestoredVault");
+    let identity = identity_parent.join("ExampleRestoredOwner.identity");
+    let state = state_parent.join("ExampleRestoredState");
+    let mut cli = restore_cli(&backup, vault.clone(), identity.clone(), state.clone())?;
+    let environment = Environment {
+        jury_home: None,
+        jury_identity_home: None,
+        jury_identity: None,
+        jury_identity_file: None,
+        jury_state_home: Some(source_state.into_os_string()),
+        xdg_data_home: Some(data.clone().into_os_string()),
+        xdg_state_home: Some(root.join("xdg-state").into_os_string()),
+        user_home: Some(data.into_os_string()),
+        jury_identity_passphrase: None,
+        jury_backup_passphrase: Some(Zeroizing::new(b"ExampleBackupPassphrase".to_vec())),
+        jury_new_passphrase: Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec())),
+    };
+
+    cli.expected_genesis = None;
+    let missing_error = backup_restore(
+        &cli,
+        restore_arguments(&cli),
+        &environment,
+        &current,
+        ProtectionPolicy::EmergencyAllowDegraded,
+    )
+    .err()
+    .ok_or("missing expected genesis unexpectedly restored the backup")?;
+    assert_eq!(missing_error.code(), "expected-genesis-required");
+    assert!(!vault.exists());
+    assert!(!identity.exists());
+    assert!(!state.exists());
+
+    cli.expected_genesis = Some(hex(&[0xff; 32]));
+    let error = backup_restore(
+        &cli,
+        restore_arguments(&cli),
+        &environment,
+        &current,
+        ProtectionPolicy::EmergencyAllowDegraded,
+    )
+    .err()
+    .ok_or("wrong expected genesis unexpectedly restored the backup")?;
+    assert_eq!(error.code(), "genesis-fingerprint-mismatch");
+    assert!(!vault.exists());
+    assert!(!identity.exists());
+    assert!(!state.exists());
+    assert!(!fs::read_dir(identity_parent)?.any(|entry| {
+        entry.is_ok_and(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".jury-vault-restore-")
+        })
+    }));
+    Ok(())
+}
+
+#[test]
 fn restore_reconciles_each_injected_cross_directory_publication_failure() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let root = temporary.path();
@@ -481,7 +572,7 @@ fn restore_reconciles_each_injected_cross_directory_publication_failure() -> Tes
         let vault = vault_parent.join("ExampleRestoredVault");
         let identity = identity_parent.join("ExampleRestoredOwner.identity");
         let state = state_parent.join("ExampleRestoredState");
-        let cli = restore_cli(&backup, vault.clone(), identity.clone(), state.clone());
+        let cli = restore_cli(&backup, vault.clone(), identity.clone(), state.clone())?;
         let mut injected = false;
         let injected_result = backup_restore_with_observer(
             &cli,

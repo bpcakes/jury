@@ -27,16 +27,65 @@ pub(super) struct RestoreRequest<'a> {
     pub(super) cli: &'a Cli,
     pub(super) input: &'a Path,
     pub(super) target_home: &'a mut VaultHomeLocation,
-    pub(super) source_home: Option<&'a VaultHomeLocation>,
+    pub(super) mode: RestoreMode<'a>,
     pub(super) identity_target: RestoreIdentityTarget<'a>,
     pub(super) approver_identity_target: Option<&'a Path>,
     pub(super) witness_identity_target: Option<&'a Path>,
     pub(super) identity_profile: KdfProfile,
     pub(super) state_root: &'a Path,
-    pub(super) require_absent_state_root: bool,
     pub(super) environment: &'a Environment,
     pub(super) protection: ProtectionPolicy,
-    pub(super) validate_access: bool,
+}
+
+pub(super) enum RestoreMode<'a> {
+    Installation,
+    Drill {
+        source_home: &'a VaultHomeLocation,
+        expected: RestoreSourceExpectation,
+    },
+}
+
+pub(super) struct RestoreSourceExpectation {
+    pub(super) vault_id: jury_protocol::vault_v1::VaultId,
+    pub(super) genesis_fingerprint: Digest32,
+    pub(super) owner_principal_id: PrincipalId,
+}
+
+impl RestoreMode<'_> {
+    pub(super) const fn source_home(&self) -> Option<&VaultHomeLocation> {
+        match self {
+            Self::Installation => None,
+            Self::Drill { source_home, .. } => Some(source_home),
+        }
+    }
+
+    pub(super) const fn requires_absent_state_root(&self) -> bool {
+        matches!(self, Self::Drill { .. })
+    }
+
+    pub(super) const fn validates_access(&self) -> bool {
+        matches!(self, Self::Drill { .. })
+    }
+
+    pub(super) fn validate_recovered(
+        &self,
+        recovered: &jury_core::backup::RecoveredBackup,
+    ) -> Result<(), CliError> {
+        let Self::Drill { expected, .. } = self else {
+            return Ok(());
+        };
+        if recovered.header().vault_id != expected.vault_id
+            || recovered.header().genesis_fingerprint != expected.genesis_fingerprint
+            || recovered.header().owner_principal_id != expected.owner_principal_id
+        {
+            return Err(CliError::new(
+                CliErrorKind::Conflict,
+                "drill-source-mismatch",
+                "the backup does not match the selected source owner and vault",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

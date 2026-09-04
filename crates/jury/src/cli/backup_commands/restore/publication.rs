@@ -122,7 +122,7 @@ pub(super) fn publish_recovered_state(
     must_already_exist: bool,
     observer: &mut dyn FnMut(RestorePublicationPoint) -> Result<(), CliError>,
 ) -> Result<(), CliError> {
-    if request.require_absent_state_root && !retry {
+    if request.mode.requires_absent_state_root() && !retry {
         let parent_path = request
             .state_root
             .parent()

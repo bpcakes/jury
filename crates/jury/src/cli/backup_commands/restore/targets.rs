@@ -41,7 +41,7 @@ pub(super) fn validate_restore_paths(request: &RestoreRequest<'_>) -> Result<(),
     {
         return Err(containment_error());
     }
-    if let Some(source_home) = request.source_home {
+    if let Some(source_home) = request.mode.source_home() {
         let source_root = source_home
             .repository()
             .map(RepositoryLocation::worktree_path)
@@ -68,13 +68,19 @@ pub(super) fn restore_repository_refs<'a>(
         .target_home
         .repository()
         .into_iter()
-        .chain(request.source_home.and_then(VaultHomeLocation::repository))
+        .chain(
+            request
+                .mode
+                .source_home()
+                .and_then(VaultHomeLocation::repository),
+        )
         .collect()
 }
 
 pub(super) fn source_detached_paths<'a>(request: &'a RestoreRequest<'_>) -> Vec<&'a Path> {
     request
-        .source_home
+        .mode
+        .source_home()
         .and_then(VaultHomeLocation::detached_path)
         .into_iter()
         .collect()
@@ -120,12 +126,14 @@ pub(super) fn prepare_restore_vault(
         VaultHomeLocation::Repository { .. } => prepare_new_vault(request.target_home, contents),
         VaultHomeLocation::Detached { path, .. } => {
             let repositories = request
-                .source_home
+                .mode
+                .source_home()
                 .and_then(VaultHomeLocation::repository)
                 .into_iter()
                 .collect::<Vec<_>>();
             let excluded_paths = request
-                .source_home
+                .mode
+                .source_home()
                 .and_then(VaultHomeLocation::detached_path)
                 .into_iter()
                 .collect::<Vec<_>>();
@@ -221,7 +229,7 @@ pub(super) fn preflight_new_restore_targets(
             }
         }
     }
-    if request.require_absent_state_root {
+    if request.mode.requires_absent_state_root() {
         let parent = request
             .state_root
             .parent()

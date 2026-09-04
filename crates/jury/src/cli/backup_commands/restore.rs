@@ -5,7 +5,10 @@ mod publication;
 mod targets;
 
 pub(super) use model::RestorePublicationPoint;
-use model::{RestoreIdentityTarget, RestoreMarker, RestoreRequest, RestoredInstallation};
+use model::{
+    RestoreIdentityTarget, RestoreMarker, RestoreMode, RestoreRequest, RestoreSourceExpectation,
+    RestoredInstallation,
+};
 use publication::{
     marker_bytes, marker_name, parse_marker, publish_recovered_state,
     restore_additional_role_identity, validate_restored_state_publication, vault_target_label,
@@ -73,16 +76,14 @@ pub(super) fn backup_restore_with_observer(
             cli,
             input: &arguments.input,
             target_home: &mut target_home,
-            source_home: None,
+            mode: RestoreMode::Installation,
             identity_target,
             approver_identity_target: arguments.approver_identity_out.as_deref(),
             witness_identity_target: arguments.witness_identity_out.as_deref(),
             identity_profile: arguments.identity_kdf_profile.into(),
             state_root: &state_root,
-            require_absent_state_root: false,
             environment,
             protection,
-            validate_access: false,
         },
         observer,
     )?;
@@ -116,6 +117,13 @@ pub(in crate::cli) fn backup_drill(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let source_home = selected_home(cli, environment, current)?;
+    let source = load_vault_principal(cli, environment, current, protection)?;
+    let receipt_timestamp_ms = timestamp_ms()?;
+    let source_expectation = RestoreSourceExpectation {
+        vault_id: source.vault.header.vault_id,
+        genesis_fingerprint: source.vault.header.genesis_fingerprint.clone(),
+        owner_principal_id: source.identity.principal_id(),
+    };
     let mut target_home = VaultHomeLocation::Detached {
         path: arguments.vault_out.clone(),
         source: HomeSource::Explicit,
@@ -124,38 +132,28 @@ pub(in crate::cli) fn backup_drill(
         cli,
         input: &arguments.input,
         target_home: &mut target_home,
-        source_home: Some(&source_home),
+        mode: RestoreMode::Drill {
+            source_home: &source_home,
+            expected: source_expectation,
+        },
         identity_target: RestoreIdentityTarget::Create(&arguments.identity_out),
         approver_identity_target: arguments.approver_identity_out.as_deref(),
         witness_identity_target: arguments.witness_identity_out.as_deref(),
         identity_profile: arguments.identity_kdf_profile.into(),
         state_root: &arguments.state_out,
-        require_absent_state_root: true,
         environment,
         protection,
-        validate_access: true,
     })?;
 
     // Receipt authentication intentionally happens only after the restored
     // files were read back and every direct descriptor was actually opened.
-    let source = load_vault_principal(cli, environment, current, protection)?;
     let protection_degraded = restored.protection_degraded || source.protection_degraded;
-    if source.vault.header.vault_id != restored.header.vault_id
-        || source.vault.header.genesis_fingerprint != restored.header.genesis_fingerprint
-        || source.identity.principal_id() != restored.header.owner_principal_id
-    {
-        return Err(CliError::new(
-            CliErrorKind::Conflict,
-            "drill-source-mismatch",
-            "the committed drill does not match the selected source owner and vault",
-        ));
-    }
     let receipt_recorded = record_restore_drill_receipt(
         &source,
         RestoreDrillReceipt {
             backup_id: digest_from_recovery_id(&restored.header.backup_id),
             captured_public_revision_hash: restored.header.source_public_revision_hash.clone(),
-            timestamp_ms: timestamp_ms()?,
+            timestamp_ms: receipt_timestamp_ms,
             output_digest: restored.output_digest,
         },
         protection,
@@ -243,6 +241,10 @@ fn restore_archive_with_observer(
     .map_err(map_secret_error)?;
     let mut protection_degraded = backup_passphrase.protection_degraded();
     let recovered = open_backup(&envelope, backup_passphrase.memory()).map_err(map_backup_error)?;
+    if matches!(&request.mode, RestoreMode::Installation) {
+        confirm_expected_genesis(request.cli, recovered.vault())?;
+    }
+    request.mode.validate_recovered(&recovered)?;
     let owner = recovered
         .identity(RecoveryRole::VaultPrincipal)
         .ok_or_else(invalid_backup)?;
@@ -491,7 +493,7 @@ fn restore_archive_with_observer(
     }
     let (installed_vault, installed_policy) =
         validate_restored_state_publication(&request, &recovered, &marker)?;
-    if request.validate_access {
+    if request.mode.validates_access() {
         let UnlockedIdentity::VaultPrincipal(installed_owner) = unlocked else {
             return Err(invalid_identity());
         };

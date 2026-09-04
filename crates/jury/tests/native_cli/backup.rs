@@ -296,6 +296,9 @@ fn restore_into_repository(
     vault: &serde_json::Value,
     source_before: &[u8],
 ) -> TestResult {
+    let expected_genesis = vault["genesis_fingerprint"]
+        .as_str()
+        .ok_or("vault genesis fingerprint is absent")?;
     let repository = root.join("restore-repository");
     fs::create_dir(&repository)?;
     fs::create_dir(repository.join(".git"))?;
@@ -317,6 +320,8 @@ fn restore_into_repository(
         paths.state,
         &[
             "--json",
+            "--expected-genesis",
+            expected_genesis,
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "backup",
