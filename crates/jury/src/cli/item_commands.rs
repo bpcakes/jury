@@ -346,10 +346,10 @@ pub(super) fn field_read(
         return request_execute(
             cli,
             &RequestExecuteArgs {
-                item: Some(arguments.item.clone()),
-                item_id: None,
-                field: Some(arguments.field.clone()),
-                field_id: None,
+                item: arguments.item.clone(),
+                item_id: arguments.item_id.clone(),
+                field: arguments.field.clone(),
+                field_id: arguments.field_id.clone(),
                 checkpoint: arguments
                     .checkpoint
                     .clone()
@@ -375,16 +375,27 @@ pub(super) fn field_read(
             protection,
         );
     }
-    FieldSelector::parse(arguments.item.clone(), arguments.field.clone())
+    if arguments.item_id.is_some() || arguments.field_id.is_some() {
+        return Err(invalid_field_selector());
+    }
+    let item = arguments
+        .item
+        .as_deref()
+        .ok_or_else(invalid_field_selector)?;
+    let field_name = arguments
+        .field
+        .as_deref()
+        .ok_or_else(invalid_field_selector)?;
+    FieldSelector::parse(item.to_owned(), field_name.to_owned())
         .map_err(|_| invalid_field_selector())?;
     validate_plaintext_sink(cli, arguments.out.as_deref(), arguments.reveal)?;
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let accessible = selected_accessible_item(&context, &arguments.item)?;
+    let accessible = selected_accessible_item(&context, item)?;
     let mut state = open_item_body(&context, &accessible, Capability::Read)?;
     let field = state
         .fields
         .iter()
-        .find(|field| field.name == arguments.field)
+        .find(|field| field.name == field_name)
         .ok_or_else(field_unavailable)?;
     let item_id = context.vault.items[accessible.envelope_index].item_id;
     append_operational_audit(&context, AuditAction::ItemRead, &[item_id], protection)?;
@@ -398,8 +409,8 @@ pub(super) fn field_read(
         )?;
         CommandOutput::PrivateOutput {
             operation: "field-read",
-            item: Some(arguments.item.clone()),
-            field: Some(arguments.field.clone()),
+            item: Some(item.to_owned()),
+            field: Some(field_name.to_owned()),
             sink: "private-file",
             durability: Some(durability(outcome)),
             authority: "direct-unilateral",

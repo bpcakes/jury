@@ -162,6 +162,24 @@ pub(super) fn transfer_inspect(
             })
         })
         .collect::<Vec<_>>();
+    let public_review_labels = transfer
+        .catalog()
+        .review_label_sets
+        .iter()
+        .flat_map(|set| &set.labels)
+        .map(|label| {
+            let public_label = std::str::from_utf8(label.public_label.as_bytes())
+                .map_err(|_| invalid_transfer())?;
+            Ok(serde_json::json!({
+                "label_id": hex(label.label_id.as_bytes()),
+                "subject_kind": label.subject_kind,
+                "item_id": label.item_id.as_ref().map(|id| hex(id.as_bytes())),
+                "field_id": label.field_id.as_ref().map(|id| hex(id.as_bytes())),
+                "public_label": public_label,
+                "vault_policy_sequence": label.vault_policy_sequence,
+            }))
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
     let relation_name = relation.map_or("not-compared", relation_label);
     let mut lines = vec![
         format!(
@@ -174,6 +192,10 @@ pub(super) fn transfer_inspect(
         ),
         format!("Ancestry: {relation_name}"),
         format!("Opaque item deltas: {}", delta_json.len()),
+        format!(
+            "Deliberately public review labels: {}",
+            public_review_labels.len()
+        ),
     ];
     for delta in &deltas {
         let label = names
@@ -200,6 +222,8 @@ pub(super) fn transfer_inspect(
             "item_count": transfer.policy().item_count(),
             "relation": relation_name,
             "deltas": delta_json,
+            "public_review_labels": public_review_labels,
+            "public_review_labels_disclosed": true,
             "identity_unlocked": arguments.me,
             "inaccessible_names_disclosed": false,
             "mutated": false,

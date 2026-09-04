@@ -1,9 +1,17 @@
 #[derive(Debug, Args)]
 pub struct ReadArgs {
-    #[arg(value_name = "ITEM")]
-    pub item: String,
-    #[arg(value_name = "FIELD")]
-    pub field: String,
+    /// Private item name in `--direct` mode, or an exact public review label otherwise.
+    #[arg(value_name = "ITEM", conflicts_with = "item_id")]
+    pub item: Option<String>,
+    /// Private field name in `--direct` mode, or an exact public review label otherwise.
+    #[arg(value_name = "FIELD", conflicts_with = "field_id")]
+    pub field: Option<String>,
+    /// Opaque item ID for a governed automatic-read rule.
+    #[arg(long, value_name = "ITEM_ID", conflicts_with = "item")]
+    pub item_id: Option<String>,
+    /// Opaque field ID for a governed automatic-read rule.
+    #[arg(long, value_name = "FIELD_ID", conflicts_with = "field")]
+    pub field_id: Option<String>,
     /// Atomically create a private file instead of writing to the terminal.
     #[arg(long, value_name = "FILE", conflicts_with = "reveal")]
     pub out: Option<PathBuf>,

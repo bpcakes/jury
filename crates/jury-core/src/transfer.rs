@@ -111,7 +111,8 @@ impl ReviewLabelSetV1 {
         Ok(set)
     }
 
-    fn validate(&self) -> Result<(), TransferError> {
+    /// Validates the exact serialized ordering and digest without normalizing it.
+    pub fn validate(&self) -> Result<(), TransferError> {
         if self
             .labels
             .windows(2)

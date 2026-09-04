@@ -54,8 +54,6 @@ pub struct PolicyRequireWitnessedArgs {
     pub automatic_read_fields: Vec<String>,
     #[arg(long, value_name = "SECONDS")]
     pub request_lifetime: u64,
-    #[arg(long, value_name = "DIGEST")]
-    pub workload: Option<String>,
     #[arg(long)]
     pub dry_run: bool,
 }

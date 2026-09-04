@@ -180,10 +180,11 @@ release has shipped.
 `jury transfer export` writes a signed, bounded envelope containing the exact
 canonical encrypted vault plus the public policy catalog needed for fresh
 validation. It never includes identity-private bytes, local audit, checkpoints,
-or receipts. `jury transfer inspect` validates the envelope without an identity
-and reports only public identifiers, counts, ancestry, and opaque item revision
-deltas; `--me` may add names only for items the selected identity can directly
-open. Import installs the exact incoming bytes only for a first installation, an
+or receipts. The catalog can contain deliberately public owner-signed review
+labels, which `jury transfer inspect` reports without an identity alongside
+public identifiers, counts, ancestry, and opaque item revision deltas; `--me`
+may add private names only for items the selected identity can directly open.
+Import installs the exact incoming bytes only for a first installation, an
 identical artifact, or a complete authenticated strict descendant that neither
 introduces unilateral direct slots nor weakens witnessed authority. It does not
 perform textual or semantic merge. A raw copy moves the same portable

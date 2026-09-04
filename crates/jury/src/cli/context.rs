@@ -99,9 +99,8 @@ impl PolicyCatalogV1 {
         }
         let mut label_digests = BTreeSet::new();
         for set in &self.review_label_sets {
-            let validated = jury_core::transfer::ReviewLabelSetV1::new(set.labels.clone())
-                .map_err(|_| invalid_policy_catalog())?;
-            if validated.digest != set.digest || !label_digests.insert(set.digest.clone()) {
+            set.validate().map_err(|_| invalid_policy_catalog())?;
+            if !label_digests.insert(set.digest.clone()) {
                 return Err(invalid_policy_catalog());
             }
         }

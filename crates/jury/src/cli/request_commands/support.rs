@@ -534,10 +534,12 @@ pub(super) fn resolve_request_target(
             return Ok((parse_item_id(item_id)?, parse_field_id(field_id)?));
         }
         (None, None) => {}
-        _ => return Err(invalid_request_artifact()),
+        _ => return Err(invalid_request_selector()),
     }
-    let item_label = item_label.ok_or_else(invalid_request_artifact)?.as_bytes();
-    let field_label = field_label.ok_or_else(invalid_request_artifact)?.as_bytes();
+    let item_label = item_label.ok_or_else(invalid_request_selector)?.as_bytes();
+    let field_label = field_label
+        .ok_or_else(invalid_request_selector)?
+        .as_bytes();
     use jury_protocol::witness_v1::PresentationSubjectV1;
     let matching_items = labels
         .iter()
@@ -548,7 +550,7 @@ pub(super) fn resolve_request_target(
         .collect::<Vec<_>>();
     let item_id = match matching_items.as_slice() {
         [label] => label.item_id.ok_or_else(invalid_request_artifact)?,
-        _ => return Err(invalid_request_artifact()),
+        _ => return Err(invalid_request_selector()),
     };
     let matching_fields = labels
         .iter()
@@ -563,7 +565,7 @@ pub(super) fn resolve_request_target(
             item_id,
             label.field_id.ok_or_else(invalid_request_artifact)?,
         )),
-        _ => Err(invalid_request_artifact()),
+        _ => Err(invalid_request_selector()),
     }
 }
 
@@ -589,6 +591,14 @@ const fn invalid_request_artifact() -> CliError {
         CliErrorKind::AuthenticationFailed,
         "invalid-witness-request",
         "the witnessed request artifact is missing, stale, malformed, or not fully authenticated",
+    )
+}
+
+const fn invalid_request_selector() -> CliError {
+    CliError::new(
+        CliErrorKind::InvalidArguments,
+        "invalid-witness-selector",
+        "the public review labels or opaque IDs must identify exactly one governed item and field",
     )
 }
 
@@ -638,5 +648,32 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(codes.len(), cases.len());
+    }
+
+    #[test]
+    fn unmatched_public_review_labels_are_invalid_arguments() {
+        let error = match resolve_request_target(
+            &[],
+            Some("ExampleVault"),
+            None,
+            Some("ExampleField"),
+            None,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("missing review labels unexpectedly resolved"),
+        };
+        assert_eq!(error.kind(), CliErrorKind::InvalidArguments);
+        assert_eq!(error.code(), "invalid-witness-selector");
+    }
+
+    #[test]
+    fn governed_ids_must_be_supplied_as_a_pair() {
+        let id = "11".repeat(32);
+        let error = match resolve_request_target(&[], None, Some(&id), None, None) {
+            Err(error) => error,
+            Ok(_) => panic!("partial opaque target unexpectedly resolved"),
+        };
+        assert_eq!(error.kind(), CliErrorKind::InvalidArguments);
+        assert_eq!(error.code(), "invalid-witness-selector");
     }
 }

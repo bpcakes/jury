@@ -74,6 +74,40 @@ fn execution_help_states_plaintext_and_platform_limits() -> Result<(), Box<dyn s
 }
 
 #[test]
+fn governed_read_accepts_opaque_target_ids() {
+    let id = "11".repeat(32);
+    assert!(matches!(
+        Cli::try_parse_from([
+            "jury",
+            "read",
+            "--item-id",
+            &id,
+            "--field-id",
+            &id,
+            "--checkpoint",
+            "/tmp/ExampleCheckpoint.json",
+            "--request-out",
+            "/tmp/ExampleRequest.json",
+            "--receipt",
+            "/tmp/ExampleReceipt.json",
+            "--witness",
+            "ExampleWitness,https://127.0.0.1:7443,/tmp/ExampleToken",
+        ]),
+        Ok(Cli {
+            command: Command::Read(ReadArgs {
+                item: None,
+                field: None,
+                item_id: Some(_),
+                field_id: Some(_),
+                direct: false,
+                ..
+            }),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn transfer_commands_require_artifact_path_options() {
     let parsed = Cli::try_parse_from([
         "jury",

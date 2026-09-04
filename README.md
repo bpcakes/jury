@@ -116,7 +116,10 @@ truncate that review to the terminal width.
 `jury transfer export` packages
 the exact encrypted vault with the bounded public policy catalog required for
 fresh validation; it does not include identities, audit, checkpoints, receipts,
-or plaintext names. Public inspection is value-free by default, and import
+or private item/field names. It does include deliberately public owner-signed
+review labels used for meaningful witnessed approval, and `transfer inspect`
+reports those labels without unlocking an identity. Public inspection never
+reveals field values, and import
 accepts only a first installation, an identical artifact, or a complete
 authenticated strict descendant that does not introduce unilateral direct slots
 or weaken witnessed authority. It never merges branches. `transfer status`

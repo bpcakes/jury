@@ -54,9 +54,6 @@ pub(super) fn policy_require_witnessed(
     {
         return Err(invalid_policy_controls());
     }
-    if arguments.workload.is_some() {
-        return Err(invalid_policy_controls());
-    }
     let context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
     let accessible = selected_accessible_item(&context, &arguments.item)?;

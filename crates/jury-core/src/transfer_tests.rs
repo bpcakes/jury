@@ -1,12 +1,17 @@
 use jury_protected::{EntropyError, RandomSource};
-use jury_protocol::vault_v1::{
-    PolicyOperationV1, PrincipalId, PrincipalKind, Signature64, VaultFileV1, VaultHeaderV1,
+use jury_protocol::{
+    vault_v1::{
+        ItemId, PolicyOperationV1, PrincipalId, PrincipalKind, Signature64, VaultFileV1,
+        VaultHeaderV1,
+    },
+    witness_v1::ReviewLabelBytes,
 };
 
 use super::*;
 use crate::identity::{UnlockedIdentity, unlocked_identity_for_test};
 use crate::policy::{PolicyCreator, replay_policy};
 use crate::registration::{RegistrationCreator, answer_challenge};
+use crate::witness_approval::{OwnerReviewLabelCreator, OwnerReviewLabelInput, ReviewLabelSubject};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -171,6 +176,48 @@ fn portable_catalog_requires_the_registration_proof_bound_by_policy() -> TestRes
         ValidatedTransfer::parse(&envelope.to_json_bytes()?)?.vault(),
         &registered
     );
+    Ok(())
+}
+
+#[test]
+fn review_label_set_exact_validation_rejects_reordered_labels() -> TestResult {
+    let (owner, vault) = fixture()?;
+    let policy = replay_policy(&vault.policy)?;
+    let mut first_creator = OwnerReviewLabelCreator::from_source(CounterRandom(0x80));
+    let mut second_creator = OwnerReviewLabelCreator::from_source(CounterRandom(0x90));
+    let first = first_creator.create(
+        OwnerReviewLabelInput {
+            policy: &policy,
+            owner: &owner,
+            label_revision: 1,
+            subject: ReviewLabelSubject::Item(ItemId::from_bytes([0x41; 32])?),
+            public_label: ReviewLabelBytes::new(b"ExampleOne".to_vec())?,
+            target_policy_sequence: 1,
+            issued_at_ms: 20,
+            expires_at_ms: None,
+        },
+        |_| false,
+    )?;
+    let second = second_creator.create(
+        OwnerReviewLabelInput {
+            policy: &policy,
+            owner: &owner,
+            label_revision: 1,
+            subject: ReviewLabelSubject::Item(ItemId::from_bytes([0x42; 32])?),
+            public_label: ReviewLabelBytes::new(b"ExampleTwo".to_vec())?,
+            target_policy_sequence: 1,
+            issued_at_ms: 20,
+            expires_at_ms: None,
+        },
+        |_| false,
+    )?;
+    let mut set = ReviewLabelSetV1::new(vec![first, second])?;
+    set.labels.swap(0, 1);
+
+    assert!(matches!(
+        set.validate(),
+        Err(error) if error.kind() == TransferErrorKind::InvalidCatalog
+    ));
     Ok(())
 }
 

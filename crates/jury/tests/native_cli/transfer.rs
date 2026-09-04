@@ -263,6 +263,8 @@ fn inspect_and_preview_first_install(
     assert_eq!(inspected["operation"], "transfer-inspect");
     assert_eq!(inspected["identity_unlocked"], false);
     assert_eq!(inspected["inaccessible_names_disclosed"], false);
+    assert_eq!(inspected["public_review_labels_disclosed"], true);
+    assert!(inspected["public_review_labels"].is_array());
     assert_eq!(inspected["mutated"], false);
 
     let repository_before = snapshot_tree(target.repository)?;

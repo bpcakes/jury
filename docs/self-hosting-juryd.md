@@ -139,6 +139,13 @@ Witness endpoints are:
 | `POST /v1/requests/decide` | client | Evaluate exact request, manifest, and approvals |
 | `POST /v1/requests/cancel` | client | Cancel or return the stable too-late response |
 
+Request artifacts, action manifests, checkpoints, approvals, cancellations,
+receipts, and witness responses are public protocol material. Owner-signed
+review labels and literal template/command segments in a manifest are also
+public by design; private item/field names and substituted field values are not.
+Choose every public label and literal accordingly, and never place credentials
+or private operational details in them.
+
 Anchor endpoints are `GET /livez`, `GET /readyz`, and
 `GET|POST /v1/anchors/{witness_id}`. Each anchor service is bound to the one
 public `witness_id` in its configuration; reads for any other ID are absent and
