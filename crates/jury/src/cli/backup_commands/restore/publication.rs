@@ -1,3 +1,6 @@
+use super::targets::{
+    open_restore_root, restore_repository_refs, restore_vault_home_paths, source_detached_paths,
+};
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
