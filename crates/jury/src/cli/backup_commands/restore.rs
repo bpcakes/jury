@@ -238,11 +238,7 @@ fn restore_archive_with_observer(
         request.cli.passphrase_stdin,
         false,
         "Backup passphrase",
-        request
-            .environment
-            .jury_backup_passphrase
-            .as_deref()
-            .map(Vec::as_slice),
+        request.environment.backup_passphrase(),
     )
     .map_err(map_secret_error)?;
     let mut protection_degraded = backup_passphrase.protection_degraded();
@@ -319,9 +315,9 @@ fn restore_archive_with_observer(
     }
 
     let identity_environment = if request.identity_target.is_reuse() {
-        request.environment.jury_identity_passphrase.as_deref()
+        request.environment.identity_passphrase()
     } else {
-        request.environment.jury_new_passphrase.as_deref()
+        request.environment.new_passphrase()
     };
     let identity_passphrase = secret_input::capture_named_or_environment(
         request.protection,
@@ -332,7 +328,7 @@ fn restore_archive_with_observer(
         } else {
             "New identity passphrase"
         },
-        identity_environment.map(Vec::as_slice),
+        identity_environment,
     )
     .map_err(map_secret_error)?;
     protection_degraded |= identity_passphrase.protection_degraded();

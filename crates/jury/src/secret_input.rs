@@ -1,11 +1,13 @@
 use std::fmt;
 use std::io::{self, IsTerminal as _, Write as _};
+use std::{env, ffi::OsString};
 
 use jury_protected::{
     ProtectedMemory, ProtectionPolicy, ProtectionStatus, RuntimeControlStatus,
     capture_after_process_protection,
 };
 use zeroize::Zeroize as _;
+use zeroize::Zeroizing;
 
 const MAX_PASSPHRASE_BYTES: usize = 1_024;
 
@@ -39,6 +41,29 @@ impl std::error::Error for SecretInputError {}
 pub struct CapturedPassphrase {
     memory: ProtectedMemory,
     process_status: ProtectionStatus,
+}
+
+#[derive(Clone, Copy)]
+pub struct SecretInputSource<'a> {
+    provided: Option<&'a [u8]>,
+    environment_name: Option<&'static str>,
+}
+
+impl<'a> SecretInputSource<'a> {
+    pub(crate) const fn process_environment(name: &'static str) -> Self {
+        Self {
+            provided: None,
+            environment_name: Some(name),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn provided(value: &'a [u8]) -> Self {
+        Self {
+            provided: Some(value),
+            environment_name: None,
+        }
+    }
 }
 
 impl CapturedPassphrase {
@@ -79,33 +104,31 @@ pub fn capture_named_or_environment(
     passphrase_stdin: bool,
     confirmation: bool,
     label: &str,
-    environment: Option<&[u8]>,
+    source: Option<SecretInputSource<'_>>,
 ) -> Result<CapturedPassphrase, SecretInputError> {
-    if let Some(value) = environment {
-        if value.len() > MAX_PASSPHRASE_BYTES {
-            return Err(SecretInputError::InputTooLong);
-        }
-        let process_status = establish_process_protection(policy)?;
-        let capacity = value.len().max(1);
-        let memory = ProtectedMemory::initialize(capacity, policy, |destination| {
-            destination[..value.len()].copy_from_slice(value);
-            Ok::<usize, ()>(value.len())
-        })
-        .map_err(|_| SecretInputError::ProtectionUnavailable)?;
-        return Ok(CapturedPassphrase {
-            memory,
-            process_status,
-        });
-    }
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    if !terminal && !passphrase_stdin {
+    if source.is_none() && !terminal && !passphrase_stdin {
         return Err(SecretInputError::NonInteractiveRequiresOptIn);
     }
 
     // Establish dump suppression and the requested memory controls before the
     // first secret byte is accepted from the terminal or pipe.
     let process_status = establish_process_protection(policy)?;
+
+    if let Some(source) = source {
+        if let Some(value) = source.provided {
+            return capture_provided(policy, value, process_status);
+        }
+        if let Some(name) = source.environment_name
+            && let Some(value) = env::var_os(name).and_then(secret_environment)
+        {
+            return capture_provided(policy, &value, process_status);
+        }
+    }
+    if !terminal && !passphrase_stdin {
+        return Err(SecretInputError::NonInteractiveRequiresOptIn);
+    }
 
     let first_prompt = format!("{label}: ");
     let first = read_one(&stdin, terminal, &first_prompt, policy)?;
@@ -124,6 +147,38 @@ pub fn capture_named_or_environment(
         })
     } else {
         Err(SecretInputError::ConfirmationMismatch)
+    }
+}
+
+fn capture_provided(
+    policy: ProtectionPolicy,
+    value: &[u8],
+    process_status: ProtectionStatus,
+) -> Result<CapturedPassphrase, SecretInputError> {
+    if value.len() > MAX_PASSPHRASE_BYTES {
+        return Err(SecretInputError::InputTooLong);
+    }
+    let capacity = value.len().max(1);
+    let memory = ProtectedMemory::initialize(capacity, policy, |destination| {
+        destination[..value.len()].copy_from_slice(value);
+        Ok::<usize, ()>(value.len())
+    })
+    .map_err(|_| SecretInputError::ProtectionUnavailable)?;
+    Ok(CapturedPassphrase {
+        memory,
+        process_status,
+    })
+}
+
+fn secret_environment(value: OsString) -> Option<Zeroizing<Vec<u8>>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        Some(Zeroizing::new(value.into_vec()))
+    }
+    #[cfg(not(unix))]
+    {
+        Some(Zeroizing::new(value.to_string_lossy().as_bytes().to_vec()))
     }
 }
 
@@ -336,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn environment_capture_preserves_exact_utf8_bytes_and_the_1024_byte_ceiling()
+    fn late_bound_sources_preserve_exact_bytes_bounds_and_missing_environment_fallback()
     -> Result<(), Box<dyn std::error::Error>> {
         let value = "Exact-例-Backup-Passphrase".as_bytes();
         let captured = capture_named_or_environment(
@@ -344,7 +399,7 @@ mod tests {
             false,
             true,
             "Backup passphrase",
-            Some(value),
+            Some(SecretInputSource::provided(value)),
         )?;
         assert!(captured.memory().expose(|bytes| bytes == value)?);
 
@@ -354,7 +409,7 @@ mod tests {
             false,
             true,
             "Backup passphrase",
-            Some(&maximum),
+            Some(SecretInputSource::provided(&maximum)),
         )?;
         assert_eq!(captured.memory().len(), 1_024);
         let oversized = vec![b'x'; 1_025];
@@ -364,9 +419,21 @@ mod tests {
                 false,
                 true,
                 "Backup passphrase",
-                Some(&oversized),
+                Some(SecretInputSource::provided(&oversized)),
             ),
             Err(SecretInputError::InputTooLong)
+        ));
+        assert!(matches!(
+            capture_named_or_environment(
+                ProtectionPolicy::EmergencyAllowDegraded,
+                false,
+                false,
+                "Backup passphrase",
+                Some(SecretInputSource::process_environment(
+                    "JURY_TEST_INTENTIONALLY_MISSING_PASSPHRASE",
+                )),
+            ),
+            Err(SecretInputError::NonInteractiveRequiresOptIn)
         ));
         Ok(())
     }

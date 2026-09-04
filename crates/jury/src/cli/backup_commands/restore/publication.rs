@@ -43,11 +43,7 @@ pub(super) fn restore_additional_role_identity(
         request.cli.passphrase_stdin,
         true,
         label,
-        request
-            .environment
-            .jury_new_passphrase
-            .as_deref()
-            .map(Vec::as_slice),
+        request.environment.new_passphrase(),
     )
     .map_err(map_secret_error)?;
     if backup_passphrase

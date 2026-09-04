@@ -104,10 +104,7 @@ pub(super) fn backup_create(
         cli.passphrase_stdin,
         true,
         "Backup passphrase",
-        environment
-            .jury_backup_passphrase
-            .as_deref()
-            .map(Vec::as_slice),
+        environment.backup_passphrase(),
     )
     .map_err(map_secret_error)?;
     let passphrases_match = identity_passphrase
@@ -236,10 +233,7 @@ pub(super) fn backup_verify(
         cli.passphrase_stdin,
         false,
         "Backup passphrase",
-        environment
-            .jury_backup_passphrase
-            .as_deref()
-            .map(Vec::as_slice),
+        environment.backup_passphrase(),
     )
     .map_err(map_secret_error)?;
     let recovered = open_backup(&envelope, backup_passphrase.memory()).map_err(map_backup_error)?;

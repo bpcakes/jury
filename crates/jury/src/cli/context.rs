@@ -614,10 +614,7 @@ pub(super) fn load_vault_principal_with_passphrase(
         cli.passphrase_stdin,
         false,
         "Identity passphrase",
-        environment
-            .jury_identity_passphrase
-            .as_deref()
-            .map(Vec::as_slice),
+        environment.identity_passphrase(),
     )
     .map_err(map_secret_error)?;
     let protection_degraded = passphrase.protection_degraded();
