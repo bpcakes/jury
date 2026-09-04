@@ -11,7 +11,7 @@ use hpke::{
     kem::XWing, rand_core::SeedableRng, single_shot_open, single_shot_seal_with_rng,
 };
 use jury_protected::{
-    MAX_LARGE_PROTECTED_BYTES, MemoryErrorKind, ProtectedMemory, ProtectionPolicy, RandomSource,
+    MemoryErrorKind, ProtectedMemory, ProtectionPolicy, RandomSource, SecretBytes,
     capture_after_process_protection, protected_random,
 };
 use jury_protocol::{
@@ -229,10 +229,36 @@ pub(crate) fn seal(
     aad: &[u8],
     plaintext: &ProtectedMemory,
 ) -> Result<Vec<u8>, CryptoError> {
-    let mut ciphertext = Zeroizing::new(Vec::with_capacity(plaintext.len() + 16));
     plaintext
-        .expose(|bytes| ciphertext.extend_from_slice(bytes))
-        .map_err(|_| CryptoError::MemoryProtection)?;
+        .expose(|bytes| seal_bytes(key, nonce, aad, bytes))
+        .map_err(|_| CryptoError::MemoryProtection)?
+}
+
+pub(crate) fn seal_secret_bytes(
+    key: &ProtectedMemory,
+    nonce: &Nonce12,
+    aad: &[u8],
+    plaintext: &SecretBytes,
+) -> Result<Vec<u8>, CryptoError> {
+    seal_bytes(key, nonce, aad, plaintext.as_slice())
+}
+
+fn seal_bytes(
+    key: &ProtectedMemory,
+    nonce: &Nonce12,
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let ciphertext_length = plaintext
+        .len()
+        .checked_add(16)
+        .ok_or(CryptoError::ResourceUnavailable)?;
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(ciphertext_length)
+        .map_err(|_| CryptoError::ResourceUnavailable)?;
+    let mut ciphertext = Zeroizing::new(buffer);
+    ciphertext.extend_from_slice(plaintext);
     let tag = key
         .expose(|key_bytes| {
             let cipher = Aes256GcmSiv::new_from_slice(key_bytes)
@@ -258,24 +284,6 @@ pub(crate) fn open(
     ciphertext: &[u8],
     plaintext_length: usize,
 ) -> Result<ProtectedMemory, CryptoError> {
-    open_with_ceiling(
-        key,
-        nonce,
-        aad,
-        ciphertext,
-        plaintext_length,
-        MAX_LARGE_PROTECTED_BYTES,
-    )
-}
-
-pub(crate) fn open_with_ceiling(
-    key: &ProtectedMemory,
-    nonce: &Nonce12,
-    aad: &[u8],
-    ciphertext: &[u8],
-    plaintext_length: usize,
-    maximum_plaintext_length: usize,
-) -> Result<ProtectedMemory, CryptoError> {
     if ciphertext.len() != plaintext_length.saturating_add(16) {
         return Err(CryptoError::ProviderFailure);
     }
@@ -300,16 +308,49 @@ pub(crate) fn open_with_ceiling(
         opened?;
         Ok::<usize, ()>(destination.len())
     };
-    let result = ProtectedMemory::initialize_with_ceiling(
-        plaintext_length,
-        maximum_plaintext_length,
-        key.status().policy(),
-        initialize,
-    );
+    let result =
+        ProtectedMemory::initialize_supported(plaintext_length, key.status().policy(), initialize);
     result.map_err(|error| match error.kind() {
         MemoryErrorKind::Initializer => initializer_error,
         _ => CryptoError::MemoryProtection,
     })
+}
+
+pub(crate) fn open_secret_bytes(
+    key: &ProtectedMemory,
+    nonce: &Nonce12,
+    aad: &[u8],
+    ciphertext: &[u8],
+    plaintext_length: usize,
+    maximum_plaintext_length: usize,
+) -> Result<SecretBytes, CryptoError> {
+    if plaintext_length == 0
+        || plaintext_length > maximum_plaintext_length
+        || ciphertext.len() != plaintext_length.saturating_add(16)
+    {
+        return Err(CryptoError::ProviderFailure);
+    }
+    let (body, tag_bytes) = ciphertext.split_at(plaintext_length);
+    let mut plaintext =
+        SecretBytes::try_zeroed(plaintext_length).map_err(|_| CryptoError::ResourceUnavailable)?;
+    plaintext.as_mut_slice().copy_from_slice(body);
+    key.expose(|key_bytes| {
+        let cipher =
+            Aes256GcmSiv::new_from_slice(key_bytes).map_err(|_| CryptoError::ProviderFailure)?;
+        let provider_nonce: &Nonce = nonce
+            .as_bytes()
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::ProviderFailure)?;
+        let tag: &Tag = tag_bytes
+            .try_into()
+            .map_err(|_| CryptoError::ProviderFailure)?;
+        cipher
+            .decrypt_inout_detached(provider_nonce, aad, plaintext.as_mut_slice().into(), tag)
+            .map_err(|_| CryptoError::AuthenticationFailed)
+    })
+    .map_err(|_| CryptoError::MemoryProtection)??;
+    Ok(plaintext)
 }
 
 pub(crate) fn open_hpke(

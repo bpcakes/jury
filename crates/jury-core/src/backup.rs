@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
+use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource, SecretBytes};
 use jury_protocol::{
     backup_v1::{BackupEnvelopeV1, BackupHeaderV1, MAX_BACKUP_ENVELOPE_BYTES, smallest_bucket_id},
     identity_v1::{IdentityHeaderV1, KdfProfile},
@@ -432,28 +432,21 @@ impl<R: RandomSource> BackupCreator<R> {
         let plaintext_length = ciphertext_length
             .checked_sub(jury_protocol::backup_v1::AEAD_TAG_BYTES)
             .ok_or_else(|| BackupError::new(BackupErrorKind::CapacityExhausted))?;
-        let policy_memory = request.backup_passphrase.status().policy();
-        let padded = ProtectedMemory::initialize_with_ceiling(
-            plaintext_length,
-            MAX_BACKUP_ENVELOPE_BYTES,
-            policy_memory,
-            |output| {
-                output.fill(0);
-                output[..4]
-                    .copy_from_slice(&u32::try_from(logical_length).map_err(|_| ())?.to_be_bytes());
-                encode_payload(
-                    &mut output[4..4 + logical_length],
-                    &vault_bytes,
-                    &catalog_bytes,
-                    &prepared,
-                )?;
-                Ok::<usize, ()>(output.len())
-            },
+        let mut padded = SecretBytes::try_zeroed(plaintext_length)
+            .map_err(|_| BackupError::new(BackupErrorKind::ResourceUnavailable))?;
+        padded.as_mut_slice()[..4].copy_from_slice(
+            &u32::try_from(logical_length)
+                .map_err(|_| BackupError::new(BackupErrorKind::CapacityExhausted))?
+                .to_be_bytes(),
+        );
+        encode_payload(
+            &mut padded.as_mut_slice()[4..4 + logical_length],
+            &vault_bytes,
+            &catalog_bytes,
+            &prepared,
         )
-        .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))?;
-        let payload_digest = padded
-            .expose(|bytes| crypto::sha256(&bytes[4..4 + logical_length]))
-            .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))?;
+        .map_err(|_| BackupError::new(BackupErrorKind::InvalidFormat))?;
+        let payload_digest = crypto::sha256(&padded.as_slice()[4..4 + logical_length]);
         let header = BackupHeaderV1 {
             backup_format: 1,
             backup_id,
@@ -484,7 +477,7 @@ impl<R: RandomSource> BackupCreator<R> {
         .map_err(map_crypto_error)?;
         let key =
             crypto::derive_hkdf_key(&derived, &header.kdf_info()).map_err(map_crypto_error)?;
-        let ciphertext = crypto::seal(
+        let ciphertext = crypto::seal_secret_bytes(
             &key,
             &header.nonce,
             &header.aad().map_err(map_format_error)?,
@@ -520,7 +513,7 @@ pub fn open(
     .map_err(map_crypto_error)?;
     let key =
         crypto::derive_hkdf_key(&derived, &envelope.header.kdf_info()).map_err(map_crypto_error)?;
-    let plaintext = crypto::open_with_ceiling(
+    let plaintext = crypto::open_secret_bytes(
         &key,
         &envelope.header.nonce,
         &envelope.header.aad().map_err(map_format_error)?,
@@ -533,9 +526,7 @@ pub fn open(
     )
     .map_err(map_crypto_error)?;
     let policy_memory = passphrase.status().policy();
-    let parts = plaintext
-        .expose(|bytes| parse_padded_payload(bytes, &envelope.header, policy_memory))
-        .map_err(|_| BackupError::new(BackupErrorKind::ProtectionUnavailable))??;
+    let parts = parse_padded_payload(plaintext.as_slice(), &envelope.header, policy_memory)?;
     validate_recovered(envelope.header.clone(), parts)
 }
 

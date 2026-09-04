@@ -13,6 +13,17 @@ impl fmt::Display for SecretBytesCapacityError {
 
 impl std::error::Error for SecretBytesCapacityError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SecretBytesAllocationError;
+
+impl fmt::Display for SecretBytesAllocationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("secret byte allocation failed")
+    }
+}
+
+impl std::error::Error for SecretBytesAllocationError {}
+
 pub struct SecretBytes {
     value: Zeroizing<Vec<u8>>,
 }
@@ -28,6 +39,17 @@ impl SecretBytes {
         Self::new(Vec::with_capacity(capacity))
     }
 
+    /// Allocates one fixed-length zeroed sensitive buffer without a panic on
+    /// recoverable allocator exhaustion.
+    pub fn try_zeroed(length: usize) -> Result<Self, SecretBytesAllocationError> {
+        let mut value = Vec::new();
+        value
+            .try_reserve_exact(length)
+            .map_err(|_| SecretBytesAllocationError)?;
+        value.resize(length, 0);
+        Ok(Self::new(value))
+    }
+
     pub fn len(&self) -> usize {
         self.value.len()
     }
@@ -38,6 +60,10 @@ impl SecretBytes {
 
     pub fn as_slice(&self) -> &[u8] {
         self.value.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.value.as_mut_slice()
     }
 
     /// Appends bytes without allowing the backing allocation to grow.
@@ -94,6 +120,17 @@ impl fmt::Debug for SecretBytes {
 #[cfg(test)]
 mod tests {
     use super::SecretBytes;
+
+    #[test]
+    fn fallible_zeroed_allocation_has_fixed_mutable_length()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut bytes = SecretBytes::try_zeroed(32)?;
+        assert_eq!(bytes.len(), 32);
+        assert!(bytes.as_slice().iter().all(|byte| *byte == 0));
+        bytes.as_mut_slice()[31] = 0xa5;
+        assert_eq!(bytes.as_slice()[31], 0xa5);
+        Ok(())
+    }
 
     #[test]
     fn truncate_and_clear_retain_the_preallocated_capacity()

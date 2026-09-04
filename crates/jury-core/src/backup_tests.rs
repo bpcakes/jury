@@ -1,4 +1,4 @@
-use jury_protected::{EntropyError, ProtectedMemory, ProtectionPolicy, RandomSource};
+use jury_protected::{EntropyError, ProtectedMemory, ProtectionPolicy, RandomSource, SecretBytes};
 use jury_protocol::{
     identity_v1::KdfProfile,
     vault_v1::{
@@ -30,7 +30,7 @@ impl RandomSource for CounterRandom {
 fn protected_passphrase(value: &[u8]) -> TestResult<ProtectedMemory> {
     Ok(ProtectedMemory::initialize(
         value.len(),
-        ProtectionPolicy::EmergencyAllowDegraded,
+        ProtectionPolicy::Strict,
         |destination| {
             destination.copy_from_slice(value);
             Ok::<usize, ()>(destination.len())
@@ -39,25 +39,17 @@ fn protected_passphrase(value: &[u8]) -> TestResult<ProtectedMemory> {
 }
 
 #[test]
-fn every_large_backup_bucket_fits_the_format_owned_protected_ceiling() -> TestResult {
+fn every_large_backup_bucket_fits_bounded_zeroizing_bulk_memory() -> TestResult {
     for bucket_id in [4, 5] {
         let plaintext_length = jury_protocol::backup_v1::bucket_bytes(bucket_id)?
             - jury_protocol::backup_v1::BACKUP_PREFIX_BYTES
             - jury_protocol::backup_v1::AEAD_TAG_BYTES;
-        let padded = ProtectedMemory::initialize_with_ceiling(
-            plaintext_length,
-            MAX_BACKUP_ENVELOPE_BYTES,
-            ProtectionPolicy::EmergencyAllowDegraded,
-            |bytes| {
-                bytes[0] = bucket_id;
-                bytes[bytes.len() - 1] = bucket_id;
-                Ok::<usize, ()>(bytes.len())
-            },
-        )?;
-        assert_eq!(padded.capacity(), plaintext_length);
-        assert!(
-            padded.expose(|bytes| bytes[0] == bucket_id && bytes[bytes.len() - 1] == bucket_id)?
-        );
+        let mut padded = SecretBytes::try_zeroed(plaintext_length)?;
+        padded.as_mut_slice()[0] = bucket_id;
+        padded.as_mut_slice()[plaintext_length - 1] = bucket_id;
+        assert_eq!(padded.len(), plaintext_length);
+        assert_eq!(padded.as_slice()[0], bucket_id);
+        assert_eq!(padded.as_slice()[plaintext_length - 1], bucket_id);
     }
     Ok(())
 }

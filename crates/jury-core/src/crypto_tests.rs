@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use jury_protected::{ProtectedMemory, ProtectionPolicy};
+use jury_protected::{ProtectedMemory, ProtectionPolicy, SecretBytes};
 use jury_protocol::{
     backup_v1::{AEAD_TAG_BYTES, BACKUP_PREFIX_BYTES, bucket_bytes},
     vault_v1::{Encapsulation1120, Nonce12},
@@ -115,21 +115,14 @@ fn frozen_storage_hkdf_and_signature_vectors_match_wrappers() -> Result<(), Box<
 }
 
 #[test]
-fn backup_sized_open_requires_an_explicit_format_ceiling() -> Result<(), Box<dyn Error>> {
+fn backup_sized_open_uses_bounded_zeroizing_bulk_memory() -> Result<(), Box<dyn Error>> {
     let plaintext_length = bucket_bytes(4)? - BACKUP_PREFIX_BYTES - AEAD_TAG_BYTES;
     let key = protected(&[0x11; 32])?;
     let nonce = Nonce12::new([0x22; 12]);
-    let plaintext = ProtectedMemory::initialize_with_ceiling(
-        plaintext_length,
-        jury_protocol::backup_v1::MAX_BACKUP_ENVELOPE_BYTES,
-        ProtectionPolicy::EmergencyAllowDegraded,
-        |bytes| {
-            bytes[0] = 0x5a;
-            bytes[bytes.len() - 1] = 0xa5;
-            Ok::<usize, ()>(bytes.len())
-        },
-    )?;
-    let ciphertext = seal(&key, &nonce, b"backup-sized-test", &plaintext)?;
+    let mut plaintext = SecretBytes::try_zeroed(plaintext_length)?;
+    plaintext.as_mut_slice()[0] = 0x5a;
+    plaintext.as_mut_slice()[plaintext_length - 1] = 0xa5;
+    let ciphertext = seal_secret_bytes(&key, &nonce, b"backup-sized-test", &plaintext)?;
     assert_eq!(
         open(
             &key,
@@ -141,7 +134,7 @@ fn backup_sized_open_requires_an_explicit_format_ceiling() -> Result<(), Box<dyn
         .map(|_| ()),
         Err(CryptoError::MemoryProtection)
     );
-    let opened = open_with_ceiling(
+    let opened = open_secret_bytes(
         &key,
         &nonce,
         b"backup-sized-test",
@@ -149,6 +142,7 @@ fn backup_sized_open_requires_an_explicit_format_ceiling() -> Result<(), Box<dyn
         plaintext_length,
         jury_protocol::backup_v1::MAX_BACKUP_ENVELOPE_BYTES,
     )?;
-    assert!(opened.expose(|bytes| bytes[0] == 0x5a && bytes[bytes.len() - 1] == 0xa5)?);
+    assert_eq!(opened.as_slice()[0], 0x5a);
+    assert_eq!(opened.as_slice()[opened.len() - 1], 0xa5);
     Ok(())
 }
