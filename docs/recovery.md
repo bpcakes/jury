@@ -61,6 +61,7 @@ that has no state for this vault lineage:
 
 ```console
 $ jury --home /absolute/private/ExampleRestoredVault \
+    --expected-genesis EXTERNALLY_VERIFIED_GENESIS \
     backup restore --in /absolute/offline/ExampleVault.backup \
     --identity-out /absolute/private/ExampleRestoredOwner.identity \
     --state-out /absolute/private/ExampleRestoredState
@@ -73,12 +74,25 @@ from the backup passphrase. To reuse an already installed exact identity, use
 `--reuse-identity PATH` instead of `--identity-out`; Jury decrypts it and
 compares its private material before publishing the vault.
 
+Before the first restored file is published, Jury requires the recovered
+genesis to match `--expected-genesis` or an exact interactive confirmation.
+The expected value must come from an independent trusted record, not from the
+backup being restored.
+
 Restore never overwrites a vault or identity. Cross-directory publication uses
 a private recovery marker beside the owner identity. If a later publication
 step fails, leave the successfully published files and marker in place, correct
 the reported environmental failure, and repeat the exact command. Jury accepts
 only authenticated matching partial output and removes the marker after the
 identity, vault, and local state are all durably published.
+
+The destination filesystem must support atomic no-replace rename and directory
+sync. Jury reports `filesystem-capability-unsupported` when it cannot preserve
+that transaction contract; it does not substitute a hard-link sequence with a
+second durable-name window. If final marker cleanup cannot be durably
+confirmed, restore still reports the committed installation with
+`transaction_marker_removed: false`; repeat the exact command to finish
+cleanup.
 
 Inside a Git worktree, omit `--home` while running the command from that
 worktree. Restore publishes only `.jury/vault.json` and

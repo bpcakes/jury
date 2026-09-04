@@ -372,6 +372,10 @@ pub(super) fn marker_name(id: &jury_protocol::vault_v1::RecoveryId) -> String {
     marker_name_from_text(&hex(id.as_bytes()))
 }
 
+pub(super) fn marker_cleanup_name(id: &jury_protocol::vault_v1::RecoveryId) -> String {
+    format!("{}.cleanup", marker_name(id))
+}
+
 fn marker_name_from_text(id: &str) -> String {
     format!(".jury-vault-restore-{id}.json")
 }

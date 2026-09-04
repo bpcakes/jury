@@ -32,7 +32,7 @@ pub use private_output::{
     PublicationOutcome, PublicationPolicy, preview_public_file,
 };
 pub use repository::RepositoryLocation;
-pub use state_root::HardenedStateRoot;
+pub use state_root::{HardenedStateRoot, PrivateFileCleanupOutcome};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FilesystemOperation {

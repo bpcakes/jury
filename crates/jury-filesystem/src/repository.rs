@@ -1,5 +1,5 @@
 use std::fmt;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
@@ -74,7 +74,7 @@ impl RepositoryLocation {
         self.revalidate_worktree()?;
         if self.jury_dir_identity.is_some() {
             self.jury_dir_clone()?;
-            return Ok(());
+            return sync_directory(&self.worktree.dir);
         }
         #[cfg(not(unix))]
         return Err(FilesystemError::new(
@@ -107,7 +107,7 @@ impl RepositoryLocation {
                     FilesystemError::new(FilesystemOperation::Open, FilesystemErrorKind::Io)
                 })?,
             ));
-            Ok(())
+            sync_directory(&self.worktree.dir)
         }
     }
 
@@ -182,71 +182,28 @@ impl RepositoryLocation {
     /// Existing non-identical content is never overwritten.
     pub fn ensure_vault_attributes(&self) -> Result<(), FilesystemError> {
         let directory = self.jury_dir_clone()?;
-        match crate::private_input::read_public_from_dir(
-            &directory,
-            Path::new(".gitattributes"),
-            VAULT_ATTRIBUTES.len(),
-        ) {
-            Ok(bytes) if bytes == VAULT_ATTRIBUTES => return Ok(()),
-            Ok(_) => {
-                return Err(FilesystemError::new(
-                    FilesystemOperation::Prepare,
-                    FilesystemErrorKind::IdentityChanged,
-                ));
-            }
-            Err(error) if error.kind() == FilesystemErrorKind::NotFound => {}
-            Err(error) => return Err(error),
+        let destination =
+            crate::private_output::preview_public_in_dir(&directory, Path::new(".gitattributes"))?;
+        if destination.destination_exists() {
+            return validate_vault_attributes(&directory);
         }
-        #[cfg(not(unix))]
-        return Err(FilesystemError::new(
-            FilesystemOperation::Prepare,
-            FilesystemErrorKind::Unsupported,
-        ));
-        #[cfg(unix)]
-        {
-            use cap_std::fs::OpenOptionsExt as _;
-            let mut options = OpenOptions::new();
-            options
-                .write(true)
-                .create_new(true)
-                .mode(0o644)
-                .follow(FollowSymlinks::No);
-            let mut file = match directory.open_with(".gitattributes", &options) {
-                Ok(file) => file,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let bytes = crate::private_input::read_public_from_dir(
-                        &directory,
-                        Path::new(".gitattributes"),
-                        VAULT_ATTRIBUTES.len(),
-                    )?;
-                    return if bytes == VAULT_ATTRIBUTES {
-                        Ok(())
-                    } else {
-                        Err(FilesystemError::new(
-                            FilesystemOperation::Prepare,
-                            FilesystemErrorKind::IdentityChanged,
-                        ))
-                    };
-                }
-                Err(_) => {
-                    return Err(FilesystemError::new(
-                        FilesystemOperation::Prepare,
-                        FilesystemErrorKind::Io,
-                    ));
-                }
-            };
-            file.write_all(VAULT_ATTRIBUTES).map_err(|_| {
-                FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
-            })?;
-            file.sync_all().map_err(|_| {
-                FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
-            })?;
-            directory
-                .open(".")
-                .and_then(|parent| parent.sync_all())
-                .map_err(|_| {
-                    FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
-                })
+        match crate::PreparedPublicFile::prepare_bounded_if_unchanged(
+            destination,
+            VAULT_ATTRIBUTES,
+            VAULT_ATTRIBUTES.len(),
+            false,
+        ) {
+            Ok(prepared) => match prepared.publish()? {
+                crate::PublicationOutcome::PublishedAndSynced => Ok(()),
+                crate::PublicationOutcome::PublishedButParentUnsynced => Err(FilesystemError::new(
+                    FilesystemOperation::SyncParent,
+                    FilesystemErrorKind::Io,
+                )),
+            },
+            Err(error) if error.kind() == FilesystemErrorKind::AlreadyExists => {
+                validate_vault_attributes(&directory)
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -305,6 +262,28 @@ impl RepositoryLocation {
         }
         Ok(())
     }
+}
+
+fn validate_vault_attributes(directory: &Dir) -> Result<(), FilesystemError> {
+    let bytes = crate::private_input::read_public_from_dir(
+        directory,
+        Path::new(".gitattributes"),
+        VAULT_ATTRIBUTES.len(),
+    )?;
+    if bytes != VAULT_ATTRIBUTES {
+        return Err(FilesystemError::new(
+            FilesystemOperation::Prepare,
+            FilesystemErrorKind::IdentityChanged,
+        ));
+    }
+    sync_directory(directory)
+}
+
+fn sync_directory(directory: &Dir) -> Result<(), FilesystemError> {
+    directory
+        .open(".")
+        .and_then(|parent| parent.sync_all())
+        .map_err(|_| FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io))
 }
 
 impl fmt::Debug for RepositoryLocation {

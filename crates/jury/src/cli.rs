@@ -62,10 +62,10 @@ use jury_core::{
 };
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, LockedVaultState,
-    PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicFilePrecondition,
-    PublicationOutcome, PublicationPolicy, RepositoryLocation, VaultStateDirectory, VaultStateFile,
-    list_named_identities, preview_public_file, read_private_file, read_public_file,
-    resolve_linux_state_root,
+    PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PrivateFileCleanupOutcome,
+    PublicFilePrecondition, PublicationOutcome, PublicationPolicy, RepositoryLocation,
+    VaultStateDirectory, VaultStateFile, list_named_identities, preview_public_file,
+    read_private_file, read_public_file, resolve_linux_state_root,
 };
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::backup_v1::{BackupEnvelopeV1, MAX_BACKUP_ENVELOPE_BYTES};

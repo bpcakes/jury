@@ -276,7 +276,7 @@ impl PreparedPrivateFile {
 }
 
 #[cfg(target_os = "linux")]
-fn rename_noreplace(
+pub(crate) fn rename_noreplace(
     parent: &Dir,
     source: &OsStr,
     destination: &OsStr,
@@ -303,7 +303,7 @@ fn rename_noreplace(
 }
 
 #[cfg(not(target_os = "linux"))]
-fn rename_noreplace(
+pub(crate) fn rename_noreplace(
     _parent: &Dir,
     _source: &OsStr,
     _destination: &OsStr,
@@ -348,6 +348,14 @@ pub(crate) fn preview_encrypted_shared_artifact(
     name: &Path,
 ) -> Result<PrivateFilePrecondition, FilesystemError> {
     preview_with_visibility(parent, name, FileVisibility::PublicEncryptedArtifact)
+}
+
+pub(crate) fn preview_public_in_dir(
+    parent: &Dir,
+    name: &Path,
+) -> Result<PublicFilePrecondition, FilesystemError> {
+    preview_with_visibility(parent, name, FileVisibility::PublicEncryptedArtifact)
+        .map(|inner| PublicFilePrecondition { inner })
 }
 
 /// Retains a bounded public-file destination selected by an absolute direct

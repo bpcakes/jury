@@ -483,7 +483,11 @@ pub(super) const fn decode_hex_nibble(byte: u8) -> Option<u8> {
 }
 
 pub(super) fn map_filesystem_error(error: FilesystemError) -> CliError {
-    match error.kind() {
+    map_filesystem_error_kind(error.kind())
+}
+
+fn map_filesystem_error_kind(kind: FilesystemErrorKind) -> CliError {
+    match kind {
         FilesystemErrorKind::NotFound => CliError::new(
             CliErrorKind::NotFound,
             "not-found",
@@ -499,6 +503,11 @@ pub(super) fn map_filesystem_error(error: FilesystemError) -> CliError {
             CliErrorKind::Conflict,
             "state-changed",
             "the selected state changed during the operation",
+        ),
+        FilesystemErrorKind::Unsupported => CliError::new(
+            CliErrorKind::UnsupportedPlatform,
+            "filesystem-capability-unsupported",
+            "the selected filesystem lacks a required atomic or durability capability",
         ),
         _ => filesystem_error(),
     }
@@ -759,7 +768,8 @@ pub(super) fn grouped(fingerprint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_presented_hex_32;
+    use super::{decode_presented_hex_32, map_filesystem_error_kind};
+    use jury_filesystem::FilesystemErrorKind;
 
     #[test]
     fn presented_fingerprint_accepts_display_grouping_and_whitespace() {
@@ -770,5 +780,11 @@ mod tests {
             decode_presented_hex_32(grouped)
         );
         assert!(decode_presented_hex_32("01234567_not_hex").is_none());
+    }
+
+    #[test]
+    fn unsupported_filesystem_capabilities_are_diagnosable() {
+        let error = map_filesystem_error_kind(FilesystemErrorKind::Unsupported);
+        assert_eq!(error.code(), "filesystem-capability-unsupported");
     }
 }

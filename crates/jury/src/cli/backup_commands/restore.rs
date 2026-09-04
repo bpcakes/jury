@@ -10,7 +10,7 @@ use model::{
     RestoredInstallation,
 };
 use publication::{
-    marker_bytes, marker_name, parse_marker, publish_recovered_state,
+    marker_bytes, marker_cleanup_name, marker_name, parse_marker, publish_recovered_state,
     restore_additional_role_identity, validate_restored_state_publication, vault_target_label,
     write_marker,
 };
@@ -217,12 +217,20 @@ fn restore_archive_with_observer(
         .preview_private_file(Path::new(identity_name))
         .map_err(map_filesystem_error)?;
     let marker_name = marker_name(&envelope.header.backup_id);
-    let prior_marker_bytes =
-        match identity_root.read_private_file(Path::new(&marker_name), MAX_RESTORE_MARKER_BYTES) {
-            Ok(bytes) => Some(bytes),
-            Err(error) if error.kind() == FilesystemErrorKind::NotFound => None,
-            Err(error) => return Err(map_filesystem_error(error)),
-        };
+    let marker_cleanup_name = marker_cleanup_name(&envelope.header.backup_id);
+    let read_marker = |name: &str| -> Result<Option<Vec<u8>>, CliError> {
+        match identity_root.read_private_file(Path::new(name), MAX_RESTORE_MARKER_BYTES) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(None),
+            Err(error) => Err(map_filesystem_error(error)),
+        }
+    };
+    let canonical_marker_bytes = read_marker(&marker_name)?;
+    let cleanup_marker_bytes = read_marker(&marker_cleanup_name)?;
+    if canonical_marker_bytes.is_some() && cleanup_marker_bytes.is_some() {
+        return Err(restore_partial_conflict());
+    }
+    let prior_marker_bytes = canonical_marker_bytes.or(cleanup_marker_bytes);
     let prior_marker = prior_marker_bytes
         .as_deref()
         .map(parse_marker)
@@ -513,8 +521,12 @@ fn restore_archive_with_observer(
     }
 
     let marker_bytes = marker_bytes(&marker)?;
-    identity_root
-        .remove_private_file_if_exact(Path::new(&marker_name), &marker_bytes)
+    let cleanup = identity_root
+        .cleanup_private_file_if_exact(
+            Path::new(&marker_name),
+            Path::new(&marker_cleanup_name),
+            &marker_bytes,
+        )
         .map_err(map_filesystem_error)?;
     let mut output_preimage = Vec::new();
     output_preimage.extend_from_slice(recovered.vault_bytes());
@@ -524,7 +536,7 @@ fn restore_archive_with_observer(
         header: recovered.header().clone(),
         coverage: recovered.coverage().clone(),
         output_digest: sha256_digest(&output_preimage),
-        marker_removed: true,
+        marker_removed: cleanup == PrivateFileCleanupOutcome::RemovedAndSynced,
         protection_degraded,
     })
 }

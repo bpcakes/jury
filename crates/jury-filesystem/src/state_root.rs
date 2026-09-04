@@ -11,6 +11,13 @@ use crate::capability::{
 };
 use crate::{FilesystemError, FilesystemErrorKind, FilesystemOperation, RepositoryLocation};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrivateFileCleanupOutcome {
+    RemovedAndSynced,
+    RemovedButParentUnsynced,
+    Retained,
+}
+
 /// Retained owner-only capability for Jury's private platform state.
 pub struct HardenedStateRoot {
     pub(crate) root: HardenedDir,
@@ -261,38 +268,101 @@ impl HardenedStateRoot {
         crate::private_input::read(self, name, maximum_bytes)
     }
 
-    /// Removes a direct owner-only file only when its bounded contents still
-    /// equal the caller's authenticated marker bytes, then syncs the parent.
-    pub fn remove_private_file_if_exact(
+    /// Quarantines and removes a direct owner-only file only when its bounded
+    /// contents equal the caller's authenticated marker bytes. A retained
+    /// quarantine name makes interruption and concurrent replacement safe to
+    /// retry without deleting an unauthenticated object.
+    pub fn cleanup_private_file_if_exact(
         &self,
         name: &Path,
+        quarantine_name: &Path,
         expected: &[u8],
-    ) -> Result<(), FilesystemError> {
+    ) -> Result<PrivateFileCleanupOutcome, FilesystemError> {
+        self.cleanup_private_file_if_exact_with_sync(
+            name,
+            quarantine_name,
+            expected,
+            &mut |directory| directory.open(".").and_then(|parent| parent.sync_all()),
+        )
+    }
+
+    fn cleanup_private_file_if_exact_with_sync(
+        &self,
+        name: &Path,
+        quarantine_name: &Path,
+        expected: &[u8],
+        parent_sync: &mut impl FnMut(&cap_std::fs::Dir) -> std::io::Result<()>,
+    ) -> Result<PrivateFileCleanupOutcome, FilesystemError> {
         let name = crate::capability::single_component(name, FilesystemOperation::Cleanup)?;
+        let quarantine_name =
+            crate::capability::single_component(quarantine_name, FilesystemOperation::Cleanup)?;
+        if name == quarantine_name {
+            return Err(FilesystemError::new(
+                FilesystemOperation::Cleanup,
+                FilesystemErrorKind::Traversal,
+            ));
+        }
         let maximum = expected.len().checked_add(1).ok_or_else(|| {
             FilesystemError::new(
                 FilesystemOperation::Cleanup,
                 FilesystemErrorKind::HardLinkOrSize,
             )
         })?;
-        let observed =
-            crate::private_input::read_from_dir(&self.root.dir, Path::new(&name), maximum)?;
-        if observed != expected {
-            return Err(FilesystemError::new(
-                FilesystemOperation::Cleanup,
-                FilesystemErrorKind::IdentityChanged,
-            ));
+        match crate::private_input::read_from_dir(
+            &self.root.dir,
+            Path::new(&quarantine_name),
+            maximum,
+        ) {
+            Ok(observed) => {
+                if observed != expected || self.private_child_exists(Path::new(&name))? {
+                    return Ok(PrivateFileCleanupOutcome::Retained);
+                }
+                return Ok(self.remove_cleanup_file(&quarantine_name, parent_sync));
+            }
+            Err(error) if error.kind() == FilesystemErrorKind::NotFound => {}
+            Err(_) => return Ok(PrivateFileCleanupOutcome::Retained),
         }
-        self.root.dir.remove_file(&name).map_err(|_| {
-            FilesystemError::new(FilesystemOperation::Cleanup, FilesystemErrorKind::Io)
-        })?;
-        self.root
-            .dir
-            .open(".")
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| {
-                FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
-            })
+        let observed =
+            match crate::private_input::read_from_dir(&self.root.dir, Path::new(&name), maximum) {
+                Ok(observed) => observed,
+                Err(_) => return Ok(PrivateFileCleanupOutcome::Retained),
+            };
+        if observed != expected {
+            return Ok(PrivateFileCleanupOutcome::Retained);
+        }
+        if crate::private_output::rename_noreplace(&self.root.dir, &name, &quarantine_name).is_err()
+        {
+            return Ok(PrivateFileCleanupOutcome::Retained);
+        }
+        let quarantined = match crate::private_input::read_from_dir(
+            &self.root.dir,
+            Path::new(&quarantine_name),
+            maximum,
+        ) {
+            Ok(quarantined) => quarantined,
+            Err(_) => return Ok(PrivateFileCleanupOutcome::Retained),
+        };
+        if quarantined != expected {
+            let _ =
+                crate::private_output::rename_noreplace(&self.root.dir, &quarantine_name, &name);
+            return Ok(PrivateFileCleanupOutcome::Retained);
+        }
+        Ok(self.remove_cleanup_file(&quarantine_name, parent_sync))
+    }
+
+    fn remove_cleanup_file(
+        &self,
+        name: &std::ffi::OsStr,
+        parent_sync: &mut impl FnMut(&cap_std::fs::Dir) -> std::io::Result<()>,
+    ) -> PrivateFileCleanupOutcome {
+        if self.root.dir.remove_file(name).is_err() {
+            return PrivateFileCleanupOutcome::Retained;
+        }
+        if parent_sync(&self.root.dir).is_ok() {
+            PrivateFileCleanupOutcome::RemovedAndSynced
+        } else {
+            PrivateFileCleanupOutcome::RemovedButParentUnsynced
+        }
     }
 }
 
@@ -368,12 +438,55 @@ mod tests {
         )?
         .publish()?;
         assert!(matches!(
-            root.remove_private_file_if_exact(Path::new("marker.json"), b"DifferentMarker"),
-            Err(error) if error.kind() == FilesystemErrorKind::IdentityChanged
+            root.cleanup_private_file_if_exact(
+                Path::new("marker.json"),
+                Path::new("marker.cleanup"),
+                b"DifferentMarker"
+            )?,
+            PrivateFileCleanupOutcome::Retained
         ));
         assert!(root.private_child_exists(Path::new("marker.json"))?);
-        root.remove_private_file_if_exact(Path::new("marker.json"), b"ExampleMarkerV1")?;
+        assert_eq!(
+            root.cleanup_private_file_if_exact(
+                Path::new("marker.json"),
+                Path::new("marker.cleanup"),
+                b"ExampleMarkerV1"
+            )?,
+            PrivateFileCleanupOutcome::RemovedAndSynced
+        );
         assert!(!root.private_child_exists(Path::new("marker.json"))?);
+        assert!(!root.private_child_exists(Path::new("marker.cleanup"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_marker_cleanup_retries_quarantine_and_types_unsynced_removal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = HardenedStateRoot::open_or_create(&temporary.path().join("private"), &[])?;
+        let marker =
+            ProtectedMemory::initialize(15, ProtectionPolicy::EmergencyAllowDegraded, |output| {
+                output.copy_from_slice(b"ExampleMarkerV1");
+                Ok::<usize, ()>(output.len())
+            })?;
+        PreparedPrivateFile::prepare_state(
+            &root,
+            Path::new("marker.cleanup"),
+            &marker,
+            PublicationPolicy::CreateNew,
+        )?
+        .publish()?;
+        assert_eq!(
+            root.cleanup_private_file_if_exact_with_sync(
+                Path::new("marker.json"),
+                Path::new("marker.cleanup"),
+                b"ExampleMarkerV1",
+                &mut |_| Err(std::io::Error::other("injected parent sync failure")),
+            )?,
+            PrivateFileCleanupOutcome::RemovedButParentUnsynced
+        );
+        assert!(!root.private_child_exists(Path::new("marker.json"))?);
+        assert!(!root.private_child_exists(Path::new("marker.cleanup"))?);
         Ok(())
     }
 
