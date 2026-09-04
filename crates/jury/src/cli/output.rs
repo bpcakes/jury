@@ -740,6 +740,7 @@ impl CliError {
         self.kind
     }
 
+    #[cfg(test)]
     pub(super) const fn code(self) -> &'static str {
         self.code
     }

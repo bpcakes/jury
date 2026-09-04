@@ -1,6 +1,6 @@
 //! Mode-neutral, scoped access to one authenticated item revision.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -141,6 +141,17 @@ pub enum WitnessedAccessStatus {
     Unavailable,
     Cancelled,
     InsufficientQuorum,
+}
+
+impl WitnessedAccessStatus {
+    #[must_use]
+    pub const fn merge(self, other: Self) -> Self {
+        if status_priority(self) >= status_priority(other) {
+            self
+        } else {
+            other
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]

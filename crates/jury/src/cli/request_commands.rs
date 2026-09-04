@@ -22,7 +22,7 @@ pub(super) struct CollectedWitnessAuthorization {
     pub(super) prepared: jury_core::witness_client::PreparedWitnessRequest,
     pub(super) approvals: Vec<jury_protocol::witness_v1::ApprovalDecisionV1>,
     pub(super) responses: Vec<jury_protocol::witness_v1::WitnessResponseV1>,
-    pub(super) unavailable: bool,
+    pub(super) failure_status: Option<WitnessedAccessStatus>,
 }
 
 pub(super) fn request_create(
@@ -181,13 +181,6 @@ pub(super) fn request_execute(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     validate_plaintext_sink(cli, arguments.out.as_deref(), arguments.reveal)?;
-    if arguments.wait_seconds > 900 {
-        return Err(CliError::new(
-            CliErrorKind::InvalidArguments,
-            "invalid-approval-wait",
-            "approval wait must not exceed 900 seconds",
-        ));
-    }
     let endpoints = arguments
         .witnesses
         .iter()
@@ -210,184 +203,42 @@ pub(super) fn request_execute(
         arguments.field.as_deref(),
         arguments.field_id.as_deref(),
     )?;
-    let now_ms = timestamp_ms()?;
-    let prepared = WitnessRequestCreator::new(protection)
-        .create_action(
-            WitnessRequestContext {
-                policy: &context.policy,
-                checkpoint: &checkpoint,
-                requester: &context.identity,
-                review_labels,
-                now_ms,
-            },
-            read_action(item_id, field_id, action_output)?,
-        )
-        .map_err(|_| invalid_request_artifact())?;
-    validate_endpoint_set(&endpoints, &prepared.request)?;
-    let artifact = WitnessRequestArtifactV1 {
-        schema: 1,
+    let files = WitnessActionFiles {
+        checkpoint: &arguments.checkpoint,
+        request_out: &arguments.request_out,
+        approvals: &arguments.approvals,
+        wait_seconds: arguments.wait_seconds,
+    };
+    let mut authorization = collect_witness_authorization_with_checkpoint(
+        &context,
+        read_action(item_id, field_id, action_output)?,
+        &endpoints,
+        &files,
+        protection,
         checkpoint,
-        request: prepared.request.clone(),
-        action_manifest: prepared.manifest.clone(),
-        presentation: prepared.presentation.clone(),
-        review_labels: prepared.review_labels.clone(),
-    };
-    publish_request_artifact(&artifact, &arguments.request_out)?;
-
-    let mut responses = Vec::new();
-    let mut unavailable = 0_usize;
-    for endpoint in &endpoints {
-        match endpoint.reserve(&prepared.request, &prepared.manifest) {
-            Ok(progress) => {
-                if let Some(response) = progress.response {
-                    responses.push(response);
-                }
-            }
-            Err(error) if error.code() == "witness-unavailable" => {
-                unavailable = unavailable.saturating_add(1);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let approvals = wait_for_approvals(
-        &context.policy,
-        &artifact,
-        &arguments.approvals,
-        arguments.wait_seconds,
     )?;
-    for endpoint in &endpoints {
-        match endpoint.decide(&prepared.request, &prepared.manifest, &approvals) {
-            Ok(progress) => {
-                if let Some(response) = progress.response {
-                    responses
-                        .retain(|prior| prior.decision.witness_id != response.decision.witness_id);
-                    responses.push(response);
-                }
-            }
-            Err(error) if error.code() == "witness-unavailable" => {
-                unavailable = unavailable.saturating_add(1);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let envelope = context
-        .vault
-        .items
+    let mut state = open_witnessed_body(&context, item_id, &mut authorization)?;
+    let value = state
+        .fields
         .iter()
-        .find(|envelope| envelope.item_id == item_id)
-        .ok_or_else(invalid_request_artifact)?;
-    let capability = witness_operation_capability(prepared.request.operation);
-    let target = RevisionAccessTarget::current(
-        &context.policy,
-        envelope,
-        context.identity.principal_id(),
-        ContentRole::Body,
-        capability,
-    )
-    .map_err(|_| invalid_request_artifact())?;
-    let access_request = RevisionAccessRequest {
-        policy: &context.policy,
-        envelope,
-        target,
-        capability,
-        cancellation: &NeverCancelled,
-    };
-    let mut provider = WitnessedItemAccessProvider::new(
-        &artifact.checkpoint,
-        &prepared.request,
-        &prepared.manifest,
-        &responses,
-        &prepared.session,
-        timestamp_ms()?,
-    );
-    let outcome = provider.access_revision(access_request, |access| {
-        let mut state = access.open_body().map_err(|_| invalid_request_artifact())?;
-        let value = state
-            .fields
-            .iter()
-            .find(|field| field.field_id == field_id)
-            .map(|field| Zeroizing::new(field.value.as_bytes().to_vec()))
-            .ok_or_else(field_unavailable);
-        state.clear_sensitive();
-        value
-    });
-    let value = match outcome {
-        Ok(ItemAccessOutcome::Complete {
-            authority: AccessCompletion::WitnessedApproved,
-            value,
-        }) => value,
-        Ok(ItemAccessOutcome::Complete {
-            authority: AccessCompletion::Direct,
-            ..
-        }) => return Err(invalid_witness_response()),
-        Ok(ItemAccessOutcome::Witnessed(status)) => {
-            if unavailable > 0
-                && matches!(
-                    status,
-                    WitnessedAccessStatus::Pending
-                        | WitnessedAccessStatus::InsufficientQuorum
-                        | WitnessedAccessStatus::Unavailable
-                )
-            {
-                return Err(witness_unavailable());
-            }
-            return Err(map_witnessed_status(status));
-        }
-        Err(ItemAccessError::Consumer(error)) => return Err(error),
-        Err(ItemAccessError::Provider(error)) => return Err(map_witness_provider(error.kind())),
-    };
-    let policy_material = ReceiptPolicyMaterialV1 {
-        schema: 1,
-        journal: context.vault.policy.clone(),
-        witness_policies: context.catalog.witness_policies.clone(),
-    }
-    .encode()
-    .map_err(|_| invalid_request_artifact())?;
-    let receipt = assemble_witness_receipt(
-        &context.policy,
-        &prepared.request,
-        artifact.checkpoint.clone(),
-        WitnessReceiptEvidence {
-            receipt_id: draw_receipt_id()?,
-            presentation_digest: prepared.manifest.presentation_digest.clone(),
-            policy_material,
-            approval_decisions: approvals,
-            witness_decisions: responses
-                .iter()
-                .map(|response| response.decision.clone())
-                .collect(),
-            reason: jury_protocol::witness_v1::WitnessReasonV1::None,
-            issued_at_ms: timestamp_ms()?,
-        },
-    )
-    .map_err(|_| invalid_witness_response())?;
-    let receipt_digest = receipt.digest().map_err(|_| invalid_witness_response())?;
-    let receipt_bytes = receipt
-        .to_json_bytes()
-        .map_err(|_| invalid_witness_response())?;
-    let receipt_destination =
-        preview_public_file(&arguments.receipt).map_err(map_filesystem_error)?;
-    PreparedPublicFile::prepare_bounded_if_unchanged(
-        receipt_destination,
-        &receipt_bytes,
-        MAX_RECEIPT_JSON_BYTES,
-        false,
-    )
-    .map_err(map_filesystem_error)?
-    .publish()
-    .map_err(map_filesystem_error)?;
+        .find(|field| field.field_id == field_id)
+        .map(|field| Zeroizing::new(field.value.as_bytes().to_vec()))
+        .ok_or_else(field_unavailable);
+    state.clear_sensitive();
+    let value = value?;
+    let receipt_digest = publish_witness_receipt(&context, &authorization, &arguments.receipt)?;
     if let Some(path) = &arguments.out {
         let publication =
             write_private_file(&context.home, path, &value, arguments.overwrite, protection)?;
         Ok(CommandOutput::Safe {
             operation: "request-execute",
             fields: serde_json::json!({
-                "request_id": hex(prepared.request.request_id.as_bytes()),
+                "request_id": hex(authorization.prepared.request.request_id.as_bytes()),
                 "phase": "completed",
                 "authority": "witnessed-approved",
                 "sink": "private-file",
                 "durability": durability(publication),
-                "witness_response_count": responses.len(),
+                "witness_response_count": authorization.responses.len(),
                 "session_private_key_persisted": false,
                 "receipt": arguments.receipt,
                 "receipt_digest": hex(receipt_digest.as_bytes()),
@@ -486,6 +337,20 @@ pub(super) fn collect_witness_authorization(
     files: &WitnessActionFiles<'_>,
     protection: ProtectionPolicy,
 ) -> Result<CollectedWitnessAuthorization, CliError> {
+    let checkpoint = read_checkpoint(files.checkpoint)?;
+    collect_witness_authorization_with_checkpoint(
+        context, action, endpoints, files, protection, checkpoint,
+    )
+}
+
+fn collect_witness_authorization_with_checkpoint(
+    context: &VaultPrincipalContext,
+    action: WitnessActionRequest,
+    endpoints: &[WitnessEndpointClient],
+    files: &WitnessActionFiles<'_>,
+    protection: ProtectionPolicy,
+    checkpoint: VaultPolicyCheckpointV1,
+) -> Result<CollectedWitnessAuthorization, CliError> {
     if files.wait_seconds > 900 {
         return Err(CliError::new(
             CliErrorKind::InvalidArguments,
@@ -493,7 +358,6 @@ pub(super) fn collect_witness_authorization(
             "approval wait must not exceed 900 seconds",
         ));
     }
-    let checkpoint = read_checkpoint(files.checkpoint)?;
     let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
     let prepared = WitnessRequestCreator::new(protection)
         .create_action(
@@ -518,7 +382,7 @@ pub(super) fn collect_witness_authorization(
     };
     publish_request_artifact(&artifact, files.request_out)?;
     let mut responses = Vec::new();
-    let mut unavailable = false;
+    let mut failure_status = None;
     for endpoint in endpoints {
         match endpoint.reserve(&prepared.request, &prepared.manifest) {
             Ok(progress) => {
@@ -526,8 +390,7 @@ pub(super) fn collect_witness_authorization(
                     responses.push(response);
                 }
             }
-            Err(error) if error.code() == "witness-unavailable" => unavailable = true,
-            Err(error) => return Err(error),
+            Err(error) => merge_failure_status(&mut failure_status, error.status()),
         }
     }
     let approvals = wait_for_approvals(
@@ -545,8 +408,7 @@ pub(super) fn collect_witness_authorization(
                     responses.push(response);
                 }
             }
-            Err(error) if error.code() == "witness-unavailable" => unavailable = true,
-            Err(error) => return Err(error),
+            Err(error) => merge_failure_status(&mut failure_status, error.status()),
         }
     }
     Ok(CollectedWitnessAuthorization {
@@ -554,14 +416,14 @@ pub(super) fn collect_witness_authorization(
         prepared,
         approvals,
         responses,
-        unavailable,
+        failure_status,
     })
 }
 
 pub(super) fn open_witnessed_body(
     context: &VaultPrincipalContext,
     item_id: ItemId,
-    authorization: &CollectedWitnessAuthorization,
+    authorization: &mut CollectedWitnessAuthorization,
 ) -> Result<jury_protocol::vault_v1::ItemStateV1, CliError> {
     let envelope = context
         .vault
@@ -593,34 +455,34 @@ pub(super) fn open_witnessed_body(
         &authorization.prepared.session,
         timestamp_ms()?,
     );
-    match provider.access_revision(access_request, |access| {
+    let outcome = provider.access_revision(access_request, |access| {
         access.open_body().map_err(|_| invalid_request_artifact())
-    }) {
+    });
+    let counted_responses = provider.counted_responses();
+    match outcome {
         Ok(ItemAccessOutcome::Complete {
             authority: AccessCompletion::WitnessedApproved,
             value,
-        }) => Ok(value),
+        }) => {
+            authorization.responses = counted_responses;
+            Ok(value)
+        }
         Ok(ItemAccessOutcome::Complete {
             authority: AccessCompletion::Direct,
             ..
         }) => Err(invalid_witness_response()),
-        Ok(ItemAccessOutcome::Witnessed(status)) => {
-            if authorization.unavailable
-                && matches!(
-                    status,
-                    WitnessedAccessStatus::Pending
-                        | WitnessedAccessStatus::InsufficientQuorum
-                        | WitnessedAccessStatus::Unavailable
-                )
-            {
-                Err(witness_unavailable())
-            } else {
-                Err(map_witnessed_status(status))
-            }
-        }
+        Ok(ItemAccessOutcome::Witnessed(status)) => Err(map_witnessed_status(
+            authorization
+                .failure_status
+                .map_or(status, |failure| status.merge(failure)),
+        )),
         Err(ItemAccessError::Consumer(error)) => Err(error),
         Err(ItemAccessError::Provider(error)) => Err(map_witness_provider(error.kind())),
     }
+}
+
+fn merge_failure_status(current: &mut Option<WitnessedAccessStatus>, next: WitnessedAccessStatus) {
+    *current = Some(current.map_or(next, |current| current.merge(next)));
 }
 
 pub(super) fn publish_witness_receipt(

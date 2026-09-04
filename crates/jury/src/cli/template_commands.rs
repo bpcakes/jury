@@ -247,7 +247,7 @@ fn witnessed_template_inject(
         output_limit_bytes: u32::try_from(MAX_TEMPLATE_OUTPUT_BYTES)
             .map_err(|_| invalid_template())?,
     };
-    let authorization = collect_witness_authorization(
+    let mut authorization = collect_witness_authorization(
         &context,
         action,
         &endpoints,
@@ -259,7 +259,7 @@ fn witnessed_template_inject(
         },
         protection,
     )?;
-    let mut state = open_witnessed_body(&context, item_id, &authorization)?;
+    let mut state = open_witnessed_body(&context, item_id, &mut authorization)?;
     let mut values = BTreeMap::<(String, String), Zeroizing<Vec<u8>>>::new();
     for (name, (_, field_id)) in target_ids {
         let field = state

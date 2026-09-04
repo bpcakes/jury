@@ -9,10 +9,11 @@ pub struct WitnessedItemAccessProvider<'a> {
     responses: &'a [WitnessResponseV1],
     session: &'a RequestSessionIdentity,
     now_ms: u64,
+    counted_response_indices: Vec<usize>,
 }
 impl<'a> WitnessedItemAccessProvider<'a> {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         checkpoint: &'a VaultPolicyCheckpointV1,
         signed_request: &'a WitnessRequestV1,
         manifest: &'a ActionManifestV1,
@@ -27,7 +28,18 @@ impl<'a> WitnessedItemAccessProvider<'a> {
             responses,
             session,
             now_ms,
+            counted_response_indices: Vec::new(),
         }
+    }
+
+    /// Returns only the independently validated responses whose opened shares
+    /// contributed to the successful threshold reconstruction.
+    #[must_use]
+    pub fn counted_responses(&self) -> Vec<WitnessResponseV1> {
+        self.counted_response_indices
+            .iter()
+            .filter_map(|index| self.responses.get(*index).cloned())
+            .collect()
     }
 }
 
@@ -37,6 +49,7 @@ impl ItemAccessProvider for WitnessedItemAccessProvider<'_> {
         request: RevisionAccessRequest<'_>,
         consumer: impl FnOnce(&mut ScopedRevisionAccess<'_>) -> Result<T, E>,
     ) -> Result<ItemAccessOutcome<T>, ItemAccessError<E>> {
+        self.counted_response_indices.clear();
         if request.cancellation.is_cancelled() {
             return Ok(ItemAccessOutcome::Witnessed(
                 WitnessedAccessStatus::Cancelled,
@@ -77,27 +90,40 @@ impl ItemAccessProvider for WitnessedItemAccessProvider<'_> {
         }
 
         let mut approved = BTreeMap::new();
+        let mut approved_witnesses = BTreeSet::new();
         let mut terminal_status = None;
-        for response in self.responses {
-            validate_witness_response(
+        for (response_index, response) in self.responses.iter().enumerate() {
+            if validate_witness_response(
                 request.policy,
                 self.checkpoint,
                 self.signed_request,
                 self.manifest,
                 response,
             )
-            .map_err(|_| {
-                ItemAccessError::Provider(AccessProviderError::new(
-                    AccessProviderErrorKind::ProviderFailure,
-                ))
-            })?;
+            .is_err()
+            {
+                terminal_status = merge_witness_status(
+                    terminal_status,
+                    WitnessedAccessStatus::Unavailable,
+                );
+                continue;
+            }
             if response.decision.decision == WitnessDecisionKindV1::Approve {
-                if approved
-                    .insert(response.decision.witness_id, response)
-                    .is_some()
+                let Some(share_index) = response.decision.share_index else {
+                    terminal_status = merge_witness_status(
+                        terminal_status,
+                        WitnessedAccessStatus::Unavailable,
+                    );
+                    continue;
+                };
+                if !approved_witnesses.insert(response.decision.witness_id)
+                    || approved.contains_key(&share_index)
                 {
-                    return Ok(ItemAccessOutcome::Witnessed(WitnessedAccessStatus::Replay));
+                    terminal_status =
+                        merge_witness_status(terminal_status, WitnessedAccessStatus::Replay);
+                    continue;
                 }
+                approved.insert(share_index, (response_index, response));
             } else {
                 terminal_status = merge_witness_status(
                     terminal_status,
@@ -112,17 +138,24 @@ impl ItemAccessProvider for WitnessedItemAccessProvider<'_> {
             ));
         }
 
-        let mut counted = approved.into_values().collect::<Vec<_>>();
-        counted.sort_by_key(|response| response.decision.share_index);
-        counted.truncate(threshold);
-        let secret = reconstruct_revision_secret(
+        let approved = approved.into_values().collect::<Vec<_>>();
+        let Some((secret, counted_response_indices)) = reconstruct_revision_secret(
             self.session,
             self.checkpoint,
             self.signed_request,
             self.manifest,
-            &counted,
+            &approved,
+            threshold,
         )
-        .map_err(ItemAccessError::Provider)?;
+        .map_err(ItemAccessError::Provider)?
+        else {
+            return Ok(ItemAccessOutcome::Witnessed(
+                terminal_status
+                    .unwrap_or(WitnessedAccessStatus::Unavailable)
+                    .merge(WitnessedAccessStatus::Unavailable),
+            ));
+        };
+        self.counted_response_indices = counted_response_indices;
         match request.target.content_role {
             ContentRole::Descriptor => {
                 open_descriptor(request.envelope, &secret).map_err(|_| {
@@ -229,8 +262,9 @@ fn reconstruct_revision_secret(
     checkpoint: &VaultPolicyCheckpointV1,
     request: &WitnessRequestV1,
     manifest: &ActionManifestV1,
-    responses: &[&WitnessResponseV1],
-) -> Result<ProtectedRevisionSecret, AccessProviderError> {
+    responses: &[(usize, &WitnessResponseV1)],
+    threshold: usize,
+) -> Result<Option<(ProtectedRevisionSecret, Vec<usize>)>, AccessProviderError> {
     let request_digest = request
         .digest()
         .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::InvalidRequest))?;
@@ -241,11 +275,14 @@ fn reconstruct_revision_secret(
         .digest()
         .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::InvalidRequest))?;
     let mut shares = Zeroizing::new(Vec::with_capacity(responses.len()));
-    for response in responses {
-        let contribution = response
+    let mut counted_response_indices = Vec::with_capacity(threshold);
+    for (response_index, response) in responses {
+        let Some(contribution) = response
             .contribution
             .as_ref()
-            .ok_or_else(|| AccessProviderError::new(AccessProviderErrorKind::ProviderFailure))?;
+        else {
+            continue;
+        };
         let mut info = jce("jury-witness-v1/contribution/info");
         info.extend_from_slice(request_digest.as_bytes());
         info.extend_from_slice(manifest_digest.as_bytes());
@@ -260,17 +297,17 @@ fn reconstruct_revision_secret(
         aad.extend_from_slice(contribution.capsule_context_digest.as_bytes());
         aad.extend_from_slice(request.request_session_key_fingerprint.as_bytes());
         aad.extend_from_slice(&request.expires_at_ms.to_be_bytes());
-        let share = crypto::open_hpke(
+        let Ok(share) = crypto::open_hpke(
             &session.private_key,
             &contribution.encapsulation,
             contribution.ciphertext.as_bytes(),
             &info,
             &aad,
             33,
-        )
-        .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::ProviderFailure))?;
-        let valid = share
-            .expose(|bytes| {
+        ) else {
+            continue;
+        };
+        let Ok(valid) = share.expose(|bytes| {
                 let mut digest = Sha256::new();
                 digest.update(jce("jury-witness-v1/share/commitment"));
                 digest.update(contribution.capsule_context_digest.as_bytes());
@@ -283,17 +320,23 @@ fn reconstruct_revision_secret(
                             .ct_eq(contribution.share_commitment.as_bytes()),
                     )
             })
-            .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::ProviderFailure))?;
+        else {
+            continue;
+        };
         if !valid {
-            return Err(AccessProviderError::new(
-                AccessProviderErrorKind::ProviderFailure,
-            ));
+            continue;
         }
-        shares.push(
-            share
-                .expose(<[u8]>::to_vec)
-                .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::ProviderFailure))?,
-        );
+        let Ok(share_bytes) = share.expose(<[u8]>::to_vec) else {
+            continue;
+        };
+        shares.push(share_bytes);
+        counted_response_indices.push(*response_index);
+        if shares.len() == threshold {
+            break;
+        }
+    }
+    if shares.len() < threshold {
+        return Ok(None);
     }
     let reconstructed = Zeroizing::new(
         Gf256::combine_bytes(shares.as_slice())
@@ -309,7 +352,10 @@ fn reconstruct_revision_secret(
         Ok::<usize, ()>(output.len())
     })
     .map_err(|_| AccessProviderError::new(AccessProviderErrorKind::ProviderFailure))?;
-    Ok(ProtectedRevisionSecret { bytes })
+    Ok(Some((
+        ProtectedRevisionSecret { bytes },
+        counted_response_indices,
+    )))
 }
 
 const fn witnessed_status(reason: WitnessReasonV1) -> WitnessedAccessStatus {
@@ -364,8 +410,5 @@ fn merge_witness_status(
     current: Option<WitnessedAccessStatus>,
     next: WitnessedAccessStatus,
 ) -> Option<WitnessedAccessStatus> {
-    Some(match current {
-        Some(current) if status_priority(current) >= status_priority(next) => current,
-        _ => next,
-    })
+    Some(current.map_or(next, |current| current.merge(next)))
 }

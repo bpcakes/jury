@@ -20,7 +20,7 @@ use jury_protocol::{
 use crate::access_provider::{
     AccessCompletion, AccessProviderErrorKind, ItemAccessError, ItemAccessOutcome,
     ItemAccessProvider, NeverCancelled, RevisionAccessRequest, RevisionAccessTarget,
-    WitnessedItemAccessProvider,
+    WitnessedAccessStatus, WitnessedItemAccessProvider,
 };
 use crate::domain::Capability;
 use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};

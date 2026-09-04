@@ -182,7 +182,7 @@ fn execute_witnessed_prepared(
         timeout_ms,
         output_limit_bytes,
     };
-    let authorization = collect_witness_authorization(
+    let mut authorization = collect_witness_authorization(
         &context,
         action,
         &endpoints,
@@ -194,7 +194,7 @@ fn execute_witnessed_prepared(
         },
         protection,
     )?;
-    let mut state = open_witnessed_body(&context, item_id, &authorization)?;
+    let mut state = open_witnessed_body(&context, item_id, &mut authorization)?;
     let mut values = BTreeMap::new();
     let mut total_value_bytes = 0_usize;
     for (reference, (_, field_id)) in target_ids {

@@ -24,6 +24,48 @@ pub(super) struct TransportProgress {
     pub(super) response: Option<jury_protocol::witness_v1::WitnessResponseV1>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WitnessTransportErrorKind {
+    Unavailable,
+    Authentication,
+    InvalidResponse,
+    Pending,
+    Denied,
+    Expired,
+    Stale,
+    Replay,
+    Cancelled,
+    InsufficientQuorum,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct WitnessTransportError {
+    kind: WitnessTransportErrorKind,
+}
+
+impl WitnessTransportError {
+    const fn new(kind: WitnessTransportErrorKind) -> Self {
+        Self { kind }
+    }
+
+    pub(super) const fn status(self) -> WitnessedAccessStatus {
+        match self.kind {
+            WitnessTransportErrorKind::Pending => WitnessedAccessStatus::Pending,
+            WitnessTransportErrorKind::Denied => WitnessedAccessStatus::Denied,
+            WitnessTransportErrorKind::Expired => WitnessedAccessStatus::Expired,
+            WitnessTransportErrorKind::Stale => WitnessedAccessStatus::Stale,
+            WitnessTransportErrorKind::Replay => WitnessedAccessStatus::Replay,
+            WitnessTransportErrorKind::Cancelled => WitnessedAccessStatus::Cancelled,
+            WitnessTransportErrorKind::InsufficientQuorum => {
+                WitnessedAccessStatus::InsufficientQuorum
+            }
+            WitnessTransportErrorKind::Unavailable
+            | WitnessTransportErrorKind::Authentication
+            | WitnessTransportErrorKind::InvalidResponse => WitnessedAccessStatus::Unavailable,
+        }
+    }
+}
+
 pub(super) struct WitnessEndpointClient {
     pub(super) witness_id: PrincipalId,
     client: Client,
@@ -154,7 +196,7 @@ impl WitnessEndpointClient {
         &self,
         request: &jury_protocol::witness_v1::WitnessRequestV1,
         manifest: &jury_protocol::witness_v1::ActionManifestV1,
-    ) -> Result<TransportProgress, CliError> {
+    ) -> Result<TransportProgress, WitnessTransportError> {
         self.post(
             self.reserve_url.clone(),
             &ReservePayload { request, manifest },
@@ -166,7 +208,7 @@ impl WitnessEndpointClient {
         request: &jury_protocol::witness_v1::WitnessRequestV1,
         manifest: &jury_protocol::witness_v1::ActionManifestV1,
         approvals: &[jury_protocol::witness_v1::ApprovalDecisionV1],
-    ) -> Result<TransportProgress, CliError> {
+    ) -> Result<TransportProgress, WitnessTransportError> {
         self.post(
             self.decide_url.clone(),
             &DecidePayload {
@@ -181,7 +223,7 @@ impl WitnessEndpointClient {
         &self,
         request: &jury_protocol::witness_v1::WitnessRequestV1,
         cancellation: &jury_protocol::witness_v1::RequestCancellationV1,
-    ) -> Result<TransportProgress, CliError> {
+    ) -> Result<TransportProgress, WitnessTransportError> {
         self.post(
             self.cancel_url.clone(),
             &CancelPayload {
@@ -191,18 +233,29 @@ impl WitnessEndpointClient {
         )
     }
 
-    fn post(&self, url: Url, payload: &impl Serialize) -> Result<TransportProgress, CliError> {
+    fn post(
+        &self,
+        url: Url,
+        payload: &impl Serialize,
+    ) -> Result<TransportProgress, WitnessTransportError> {
         let response = self
             .client
             .post(url)
             .header(reqwest::header::AUTHORIZATION, self.authorization.clone())
             .json(payload)
             .send()
-            .map_err(|_| witness_unavailable())?;
+            .map_err(|_| WitnessTransportError::new(WitnessTransportErrorKind::Unavailable))?;
         if response.status() != StatusCode::OK {
+            if is_availability_status(response.status()) {
+                return Err(WitnessTransportError::new(
+                    WitnessTransportErrorKind::Unavailable,
+                ));
+            }
             let refusal: RefusalResponse = bounded_json(response)?;
             if refusal.status != "refused" {
-                return Err(invalid_witness_response());
+                return Err(WitnessTransportError::new(
+                    WitnessTransportErrorKind::InvalidResponse,
+                ));
             }
             return Err(map_refusal(refusal.reason));
         }
@@ -213,7 +266,11 @@ impl WitnessEndpointClient {
             "stable" => TransportProgressKind::Stable,
             "cancelled" => TransportProgressKind::Cancelled,
             "too-late" => TransportProgressKind::TooLate,
-            _ => return Err(invalid_witness_response()),
+            _ => {
+                return Err(WitnessTransportError::new(
+                    WitnessTransportErrorKind::InvalidResponse,
+                ));
+            }
         };
         let is_terminal = matches!(
             kind,
@@ -227,7 +284,9 @@ impl WitnessEndpointClient {
                 .as_ref()
                 .is_some_and(|response| response.decision.witness_id != self.witness_id)
         {
-            return Err(invalid_witness_response());
+            return Err(WitnessTransportError::new(
+                WitnessTransportErrorKind::InvalidResponse,
+            ));
         }
         Ok(TransportProgress {
             kind,
@@ -236,58 +295,45 @@ impl WitnessEndpointClient {
     }
 }
 
-const fn map_refusal(reason: RefusalReason) -> CliError {
+const fn map_refusal(reason: RefusalReason) -> WitnessTransportError {
     use jury_protocol::witness_v1::WitnessReasonV1;
-    match reason {
-        RefusalReason::TransportAuthentication => CliError::new(
-            CliErrorKind::AuthenticationFailed,
-            "witness-transport-authentication-failed",
-            "a witness rejected the configured client credential",
-        ),
-        RefusalReason::Invalid => invalid_witness_response(),
-        RefusalReason::Protocol(WitnessReasonV1::Expired) => CliError::new(
-            CliErrorKind::Conflict,
-            "request-expired",
-            "the witnessed request expired",
-        ),
+    let kind = match reason {
+        RefusalReason::TransportAuthentication => WitnessTransportErrorKind::Authentication,
+        RefusalReason::Invalid => WitnessTransportErrorKind::InvalidResponse,
+        RefusalReason::Protocol(WitnessReasonV1::Expired) => WitnessTransportErrorKind::Expired,
         RefusalReason::Protocol(
             WitnessReasonV1::StalePolicy
             | WitnessReasonV1::WitnessBehind
             | WitnessReasonV1::CheckpointFork,
-        ) => CliError::new(
-            CliErrorKind::Conflict,
-            "request-stale",
-            "the request or witness checkpoint is stale",
-        ),
-        RefusalReason::Protocol(WitnessReasonV1::ReplayConflict) => CliError::new(
-            CliErrorKind::Conflict,
-            "request-replay",
-            "the witness rejected a conflicting replay",
-        ),
+        ) => WitnessTransportErrorKind::Stale,
+        RefusalReason::Protocol(
+            WitnessReasonV1::ReplayConflict | WitnessReasonV1::CancellationTooLate,
+        ) => WitnessTransportErrorKind::Replay,
         RefusalReason::Protocol(
             WitnessReasonV1::PolicyDenied
             | WitnessReasonV1::ApprovalDenied
             | WitnessReasonV1::ApprovalConflict,
-        ) => CliError::new(
-            CliErrorKind::AccessDenied,
-            "request-denied",
-            "the witness denied this exact request",
-        ),
-        RefusalReason::Protocol(WitnessReasonV1::Cancelled) => CliError::new(
-            CliErrorKind::Conflict,
-            "request-cancelled",
-            "the witnessed request was cancelled",
-        ),
-        RefusalReason::Protocol(WitnessReasonV1::InsufficientQuorum) => CliError::new(
-            CliErrorKind::Conflict,
-            "insufficient-witness-quorum",
-            "too few distinct current witnesses approved this request",
-        ),
+        ) => WitnessTransportErrorKind::Denied,
+        RefusalReason::Protocol(WitnessReasonV1::Cancelled) => WitnessTransportErrorKind::Cancelled,
+        RefusalReason::Protocol(WitnessReasonV1::InsufficientQuorum) => {
+            WitnessTransportErrorKind::InsufficientQuorum
+        }
+        RefusalReason::Protocol(
+            WitnessReasonV1::MissingApproval | WitnessReasonV1::NotYetValid,
+        ) => WitnessTransportErrorKind::Pending,
         RefusalReason::RateLimited
         | RefusalReason::Unavailable
         | RefusalReason::InternalFailure
-        | RefusalReason::Protocol(_) => witness_unavailable(),
-    }
+        | RefusalReason::Protocol(_) => WitnessTransportErrorKind::Unavailable,
+    };
+    WitnessTransportError::new(kind)
+}
+
+fn is_availability_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT | StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS
+    ) || status.is_server_error()
 }
 
 fn validate_url(url: &Url, allow_insecure_loopback: bool) -> Result<(), CliError> {
@@ -307,23 +353,28 @@ fn validate_url(url: &Url, allow_insecure_loopback: bool) -> Result<(), CliError
 
 fn bounded_json<T: serde::de::DeserializeOwned>(
     mut response: reqwest::blocking::Response,
-) -> Result<T, CliError> {
+) -> Result<T, WitnessTransportError> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_WITNESS_HTTP_BYTES as u64)
     {
-        return Err(invalid_witness_response());
+        return Err(WitnessTransportError::new(
+            WitnessTransportErrorKind::InvalidResponse,
+        ));
     }
     let mut bytes = Vec::with_capacity(16 * 1024);
     response
         .by_ref()
         .take((MAX_WITNESS_HTTP_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .map_err(|_| witness_unavailable())?;
+        .map_err(|_| WitnessTransportError::new(WitnessTransportErrorKind::Unavailable))?;
     if bytes.len() > MAX_WITNESS_HTTP_BYTES {
-        return Err(invalid_witness_response());
+        return Err(WitnessTransportError::new(
+            WitnessTransportErrorKind::InvalidResponse,
+        ));
     }
-    serde_json::from_slice(&bytes).map_err(|_| invalid_witness_response())
+    serde_json::from_slice(&bytes)
+        .map_err(|_| WitnessTransportError::new(WitnessTransportErrorKind::InvalidResponse))
 }
 
 const fn invalid_witness_endpoint() -> CliError {
@@ -372,5 +423,20 @@ mod tests {
         assert!(validate_url(&Url::parse("http://192.0.2.1:7443")?, true).is_err());
         assert!(validate_url(&Url::parse("https://user@example.invalid")?, false).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn timeout_size_rate_limit_and_server_statuses_are_availability_failures() {
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(is_availability_status(status));
+        }
+        assert!(!is_availability_status(StatusCode::UNAUTHORIZED));
+        assert!(!is_availability_status(StatusCode::UNPROCESSABLE_ENTITY));
     }
 }

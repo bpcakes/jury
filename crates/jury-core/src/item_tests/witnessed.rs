@@ -567,6 +567,90 @@ fn assert_witnessed_provider_round_trip(
             value,
         } if value == *fixture.expected_body
     ));
+    assert_eq!(provider.counted_responses().len(), usize::from(body_slot.threshold));
+
+    let mut corrupt_responses = witnessed_responses_with_count(
+        WitnessResponseFixture {
+            prepared: &prepared,
+            checkpoint: &checkpoint,
+            slot: body_slot,
+            witness_private_keys: fixture.witness_private_keys,
+            witness_policy: fixture.witness_policy,
+            session_public_key: prepared.session.public_key(),
+        },
+        body_slot.capsules.len(),
+        Some(2),
+    )?;
+    corrupt_responses.swap(0, 2);
+    let mut tolerant_provider = WitnessedItemAccessProvider::new(
+        &checkpoint,
+        &prepared.request,
+        &prepared.manifest,
+        &corrupt_responses,
+        &prepared.session,
+        1_800_000_000_002,
+    );
+    let tolerant = tolerant_provider
+        .access_revision(
+            RevisionAccessRequest {
+                policy: &fixture.created_item.policy.state,
+                envelope: &fixture.created_item.envelope,
+                target: target.clone(),
+                capability: Capability::Read,
+                cancellation: &NeverCancelled,
+            },
+            |access| access.open_body(),
+        )
+        .map_err(|_| "one invalid contribution vetoed a valid threshold")?;
+    assert!(matches!(
+        tolerant,
+        ItemAccessOutcome::Complete {
+            authority: AccessCompletion::WitnessedApproved,
+            value,
+        } if value == *fixture.expected_body
+    ));
+    assert_eq!(
+        tolerant_provider.counted_responses().len(),
+        usize::from(body_slot.threshold)
+    );
+    assert!(
+        tolerant_provider
+            .counted_responses()
+            .iter()
+            .all(|response| response.decision.share_index != Some(31))
+    );
+
+    let mut malformed_responses = responses.clone();
+    let mut malformed = corrupt_responses[0].clone();
+    malformed.decision.signature = Signature64::new([0; 64]);
+    malformed_responses.insert(0, malformed);
+    let mut malformed_provider = WitnessedItemAccessProvider::new(
+        &checkpoint,
+        &prepared.request,
+        &prepared.manifest,
+        &malformed_responses,
+        &prepared.session,
+        1_800_000_000_002,
+    );
+    let malformed_tolerated = malformed_provider
+        .access_revision(
+            RevisionAccessRequest {
+                policy: &fixture.created_item.policy.state,
+                envelope: &fixture.created_item.envelope,
+                target: target.clone(),
+                capability: Capability::Read,
+                cancellation: &NeverCancelled,
+            },
+            |access| access.open_body(),
+        )
+        .map_err(|_| "one malformed response vetoed a valid threshold")?;
+    assert!(matches!(
+        malformed_tolerated,
+        ItemAccessOutcome::Complete {
+            authority: AccessCompletion::WitnessedApproved,
+            value,
+        } if value == *fixture.expected_body
+    ));
 
     let (_, wrong_session_public_key) = crypto::generate_recipient_keypair(
         ProtectionPolicy::EmergencyAllowDegraded,
@@ -604,9 +688,11 @@ fn assert_witnessed_provider_round_trip(
     );
     assert!(matches!(
         wrong_session,
-        Err(ItemAccessError::Provider(error))
-            if error.kind() == AccessProviderErrorKind::ProviderFailure
+        Ok(ItemAccessOutcome::Witnessed(
+            WitnessedAccessStatus::Unavailable
+        ))
     ));
+    assert!(wrong_session_provider.counted_responses().is_empty());
     assert!(!callback_called.get());
     Ok(WitnessedRoundTrip {
         checkpoint,
@@ -623,6 +709,42 @@ fn witnessed_responses(
     witness_policy: &WitnessPolicy,
     session_public_key: &RecipientPublicKey1216,
 ) -> Result<Vec<WitnessResponseV1>, Box<dyn std::error::Error>> {
+    witnessed_responses_with_count(
+        WitnessResponseFixture {
+            prepared,
+            checkpoint,
+            slot,
+            witness_private_keys,
+            witness_policy,
+            session_public_key,
+        },
+        usize::from(slot.threshold),
+        None,
+    )
+}
+
+struct WitnessResponseFixture<'a> {
+    prepared: &'a PreparedWitnessRequest,
+    checkpoint: &'a VaultPolicyCheckpointV1,
+    slot: &'a WitnessedSlotV1,
+    witness_private_keys: &'a [ProtectedMemory],
+    witness_policy: &'a WitnessPolicy,
+    session_public_key: &'a RecipientPublicKey1216,
+}
+
+fn witnessed_responses_with_count(
+    fixture: WitnessResponseFixture<'_>,
+    count: usize,
+    corrupt_share_at: Option<usize>,
+) -> Result<Vec<WitnessResponseV1>, Box<dyn std::error::Error>> {
+    let WitnessResponseFixture {
+        prepared,
+        checkpoint,
+        slot,
+        witness_private_keys,
+        witness_policy,
+        session_public_key,
+    } = fixture;
     let request_digest = prepared.request.digest()?;
     let manifest_digest = prepared.manifest.digest()?;
     let checkpoint_digest = checkpoint.digest()?;
@@ -631,7 +753,7 @@ fn witnessed_responses(
         .capsules
         .iter()
         .zip(witness_private_keys)
-        .take(usize::from(slot.threshold))
+        .take(count)
         .enumerate()
     {
         let share = crypto::open_hpke(
@@ -642,6 +764,21 @@ fn witnessed_responses(
             &capsule.aad_preimage(),
             33,
         )?;
+        let share = if corrupt_share_at == Some(index) {
+            let mut bytes = Zeroizing::new(share.expose(<[u8]>::to_vec)?);
+            let byte = bytes.get_mut(1).ok_or("share fixture is too short")?;
+            *byte ^= 0x01;
+            ProtectedMemory::initialize(
+                bytes.len(),
+                ProtectionPolicy::EmergencyAllowDegraded,
+                |output| {
+                    output.copy_from_slice(&bytes);
+                    Ok::<usize, ()>(output.len())
+                },
+            )?
+        } else {
+            share
+        };
         let response_id =
             ResponseId::from_bytes([0xc0_u8.saturating_add(u8::try_from(index)?); 32])?;
         let mut info = crate::canonical::jce_v1("jury-witness-v1/contribution/info");

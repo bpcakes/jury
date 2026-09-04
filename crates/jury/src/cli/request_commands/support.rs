@@ -57,27 +57,64 @@ pub(super) fn request_cancel(
     .map_err(map_filesystem_error)?
     .publish()
     .map_err(map_filesystem_error)?;
-    let mut too_late = false;
+    let witness_threshold = usize::from(
+        context
+            .policy
+            .witness_access_rule(
+                &artifact.request.item_id,
+                request_policy_operation(artifact.request.operation),
+            )
+            .map_err(|_| invalid_request_artifact())?
+            .witness_threshold,
+    );
+    let mut cancelled_count = 0_usize;
+    let mut too_late_count = 0_usize;
+    let mut failed_count = 0_usize;
     for endpoint in &endpoints {
-        let progress = endpoint.cancel(&artifact.request, &cancellation)?;
-        let response = progress.response.ok_or_else(invalid_witness_response)?;
-        jury_core::witness_engine::validate_witness_response(
+        let Ok(progress) = endpoint.cancel(&artifact.request, &cancellation) else {
+            failed_count = failed_count.saturating_add(1);
+            continue;
+        };
+        let Some(response) = progress.response else {
+            failed_count = failed_count.saturating_add(1);
+            continue;
+        };
+        if jury_core::witness_engine::validate_witness_response(
             &context.policy,
             &artifact.checkpoint,
             &artifact.request,
             &artifact.action_manifest,
             &response,
         )
-        .map_err(|_| invalid_witness_response())?;
+        .is_err()
+        {
+            failed_count = failed_count.saturating_add(1);
+            continue;
+        }
         match progress.kind {
             TransportProgressKind::Cancelled
                 if response.decision.reason
-                    == jury_protocol::witness_v1::WitnessReasonV1::Cancelled => {}
-            TransportProgressKind::TooLate => too_late = true,
-            _ => return Err(invalid_witness_response()),
+                    == jury_protocol::witness_v1::WitnessReasonV1::Cancelled =>
+            {
+                cancelled_count = cancelled_count.saturating_add(1);
+            }
+            TransportProgressKind::TooLate => {
+                too_late_count = too_late_count.saturating_add(1);
+            }
+            _ => failed_count = failed_count.saturating_add(1),
         }
     }
-    let phase = if too_late { "too-late" } else { "cancelled" };
+    let quorum_precluded = too_late_count == 0
+        && cancelled_count > endpoints.len().saturating_sub(witness_threshold);
+    let phase = if too_late_count > 0 {
+        "too-late"
+    } else if cancelled_count == endpoints.len() {
+        "cancelled"
+    } else if quorum_precluded {
+        "quorum-precluded"
+    } else {
+        "partial"
+    };
     Ok(CommandOutput::Safe {
         operation: "request-cancel",
         fields: serde_json::json!({
@@ -87,13 +124,20 @@ pub(super) fn request_cancel(
             "out": arguments.out,
             "durability": durability(publication),
             "witnesses_contacted": true,
-            "witness_response_count": endpoints.len(),
-            "already_approved_was_too_late": too_late,
+            "witness_contact_count": endpoints.len(),
+            "witness_response_count": cancelled_count.saturating_add(too_late_count),
+            "cancelled_response_count": cancelled_count,
+            "too_late_response_count": too_late_count,
+            "failed_response_count": failed_count,
+            "quorum_precluded": quorum_precluded,
+            "already_approved_was_too_late": too_late_count > 0,
         }),
         lines: vec![
             "Cancellation intent signed and stored locally before witness contact".to_owned(),
             format!("Cancellation phase: {phase}"),
             format!("Witnesses contacted: {}", endpoints.len()),
+            format!("Cancellation acknowledgements: {cancelled_count}"),
+            format!("Unacknowledged or invalid responses: {failed_count}"),
         ],
     })
 }

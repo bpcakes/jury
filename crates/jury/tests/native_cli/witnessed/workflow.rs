@@ -286,7 +286,15 @@ fn exercise_too_late_cancellation(context: &WorkflowContext<'_>) -> TestResult {
             .to_owned(),
         "--allow-insecure-loopback".to_owned(),
     ];
-    for endpoint in context.endpoints {
+    let unavailable_listener = TcpListener::bind("127.0.0.1:0")?;
+    let unavailable_address = unavailable_listener.local_addr()?;
+    drop(unavailable_listener);
+    let first_parts = context.endpoints[0].split(',').collect::<Vec<_>>();
+    let unavailable_first = format!(
+        "{},http://{},{}",
+        first_parts[0], unavailable_address, first_parts[2]
+    );
+    for endpoint in std::iter::once(&unavailable_first).chain(context.endpoints.iter().skip(1)) {
         arguments.extend(["--witness".to_owned(), endpoint.clone()]);
     }
     let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
@@ -299,6 +307,11 @@ fn exercise_too_late_cancellation(context: &WorkflowContext<'_>) -> TestResult {
     )?)?;
     assert_eq!(result["phase"], "too-late");
     assert_eq!(result["already_approved_was_too_late"], true);
+    assert_eq!(result["witness_contact_count"], 2);
+    assert_eq!(result["witness_response_count"], 1);
+    assert_eq!(result["too_late_response_count"], 1);
+    assert_eq!(result["failed_response_count"], 1);
+    assert_eq!(result["quorum_precluded"], false);
     assert!(cancellation.is_file());
     Ok(())
 }
