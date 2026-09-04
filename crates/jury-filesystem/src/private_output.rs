@@ -25,7 +25,6 @@ pub enum PublicationPolicy {
 pub enum PublicationOutcome {
     PublishedAndSynced,
     PublishedButParentUnsynced,
-    PublishedButTemporaryCleanupFailed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,21 +265,7 @@ impl PreparedPrivateFile {
                     FilesystemError::new(FilesystemOperation::Publish, FilesystemErrorKind::Io)
                 })?;
         } else {
-            self.parent
-                .hard_link(&self.temporary, &self.parent, &self.destination)
-                .map_err(|error| {
-                    let kind = if error.kind() == std::io::ErrorKind::AlreadyExists {
-                        FilesystemErrorKind::AlreadyExists
-                    } else {
-                        FilesystemErrorKind::Io
-                    };
-                    FilesystemError::new(FilesystemOperation::Publish, kind)
-                })?;
-            self.published = true;
-            if self.parent.remove_file(&self.temporary).is_err() {
-                let _ = parent_sync(&self.parent);
-                return Ok(PublicationOutcome::PublishedButTemporaryCleanupFailed);
-            }
+            rename_noreplace(&self.parent, &self.temporary, &self.destination)?;
         }
         self.published = true;
         match parent_sync(&self.parent) {
@@ -288,6 +273,45 @@ impl PreparedPrivateFile {
             Err(_) => Ok(PublicationOutcome::PublishedButParentUnsynced),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace(
+    parent: &Dir,
+    source: &OsStr,
+    destination: &OsStr,
+) -> Result<(), FilesystemError> {
+    use std::os::fd::AsFd as _;
+
+    rustix::fs::renameat_with(
+        parent.as_fd(),
+        Path::new(source),
+        parent.as_fd(),
+        Path::new(destination),
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(|error| {
+        let kind = match error {
+            rustix::io::Errno::EXIST => FilesystemErrorKind::AlreadyExists,
+            rustix::io::Errno::NOSYS | rustix::io::Errno::INVAL | rustix::io::Errno::OPNOTSUPP => {
+                FilesystemErrorKind::Unsupported
+            }
+            _ => FilesystemErrorKind::Io,
+        };
+        FilesystemError::new(FilesystemOperation::Publish, kind)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rename_noreplace(
+    _parent: &Dir,
+    _source: &OsStr,
+    _destination: &OsStr,
+) -> Result<(), FilesystemError> {
+    Err(FilesystemError::new(
+        FilesystemOperation::Publish,
+        FilesystemErrorKind::Unsupported,
+    ))
 }
 
 impl fmt::Debug for PreparedPrivateFile {
@@ -667,6 +691,16 @@ mod tests {
         assert_eq!(
             std::fs::read(temporary.path().join("state/value.bin"))?,
             b"ExampleSecret123"
+        );
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::nlink(&std::fs::metadata(
+                temporary.path().join("state/value.bin")
+            )?),
+            1
+        );
+        assert_eq!(
+            std::fs::read_dir(temporary.path().join("state"))?.count(),
+            1
         );
         Ok(())
     }

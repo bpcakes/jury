@@ -733,9 +733,6 @@ pub(super) const fn durability(outcome: PublicationOutcome) -> &'static str {
     match outcome {
         PublicationOutcome::PublishedAndSynced => "published-and-synced",
         PublicationOutcome::PublishedButParentUnsynced => "published-parent-unsynced",
-        PublicationOutcome::PublishedButTemporaryCleanupFailed => {
-            "published-temporary-cleanup-failed"
-        }
     }
 }
 

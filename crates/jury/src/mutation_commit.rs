@@ -83,7 +83,6 @@ pub enum LocalRecoveryReason {
     CheckpointPrepareFailed,
     CheckpointPublishFailed,
     CheckpointParentUnsynced,
-    CheckpointTemporaryCleanupFailed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -462,11 +461,6 @@ impl MutationCommitTarget<'_> {
                 LocalRecoveryReason::CheckpointParentUnsynced,
                 plan,
             )),
-            PublicationOutcome::PublishedButTemporaryCleanupFailed => Ok(committed_recovery(
-                shared_publication,
-                LocalRecoveryReason::CheckpointTemporaryCleanupFailed,
-                plan,
-            )),
         }
     }
 
@@ -630,11 +624,6 @@ impl MutationCommitTarget<'_> {
             PublicationOutcome::PublishedButParentUnsynced => Ok(committed_recovery(
                 shared_publication,
                 LocalRecoveryReason::CheckpointParentUnsynced,
-                plan,
-            )),
-            PublicationOutcome::PublishedButTemporaryCleanupFailed => Ok(committed_recovery(
-                shared_publication,
-                LocalRecoveryReason::CheckpointTemporaryCleanupFailed,
                 plan,
             )),
         }
