@@ -205,6 +205,16 @@ impl PolicyState {
         &self.terminal_revision_hash
     }
 
+    /// Hash of the exact policy state from which the current revision was made.
+    ///
+    /// Witness policies carried by the current revision bind this predecessor
+    /// because binding the revision hash that embeds their own digest would be
+    /// circular.
+    pub(crate) fn current_predecessor_hash(&self) -> Option<&Digest32> {
+        let predecessor = usize::try_from(self.sequence).ok()?.checked_sub(1)?;
+        self.revision_hashes.get(predecessor)
+    }
+
     #[must_use]
     pub(crate) fn is_direct_descendant_of(&self, prior: &Self) -> bool {
         self.vault_id == prior.vault_id

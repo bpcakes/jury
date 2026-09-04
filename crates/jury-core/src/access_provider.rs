@@ -1,17 +1,32 @@
 //! Mode-neutral, scoped access to one authenticated item revision.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use jury_protected::ProtectedMemory;
 use jury_protocol::vault_v1::{
     AccessRole, ContentRole, Digest32, ItemAccessMode, ItemDescriptorV1, ItemEnvelopeV1, ItemId,
     ItemStateV1, PrincipalId, RevisionSealId, VaultId,
 };
+use jury_protocol::witness_v1::{
+    ACCEPTED_CLOCK_SKEW_MS, ActionManifestV1, VaultPolicyCheckpointV1, WitnessDecisionKindV1,
+    WitnessReasonV1, WitnessRequestV1, WitnessResponseV1,
+};
+use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
+use vsss_rs::Gf256;
+use zeroize::Zeroizing;
 
+use crate::canonical::jce_v1 as jce;
+use crate::crypto;
 use crate::domain::Capability;
 use crate::identity::{IdentityErrorKind, ProtectedRevisionSecret, VaultPrincipalIdentity};
 use crate::item::{open_body, open_descriptor, verify_item_ancestry};
 use crate::policy::{AccessPath, AccessReason, PolicyState};
+use crate::witness_client::RequestSessionIdentity;
+use crate::witness_engine::{validate_public_request, validate_witness_response};
+use crate::witness_validation::operation_capability;
 
 const SUITE: u16 = 1;
 
@@ -362,6 +377,8 @@ impl ItemAccessProvider for DirectItemAccessProvider<'_> {
         })
     }
 }
+
+include!("access_provider/witnessed.rs");
 
 fn preflight_direct<'a>(
     principal_id: PrincipalId,

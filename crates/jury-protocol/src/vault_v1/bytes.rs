@@ -297,6 +297,7 @@ identifier!(ReceiptId);
 identifier!(RotationId);
 identifier!(RecoveryId);
 identifier!(LabelId);
+identifier!(PresentationNonce);
 
 pub type Digest32 = FixedBytes<32>;
 pub type Signature64 = FixedBytes<64>;

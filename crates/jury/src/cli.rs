@@ -10,8 +10,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use jury_core::access_provider::{
-    AccessProviderErrorKind, DirectItemAccessProvider, ItemAccessError, ItemAccessOutcome,
-    ItemAccessProvider, NeverCancelled, RevisionAccessRequest, RevisionAccessTarget,
+    AccessCompletion, AccessProviderErrorKind, DirectItemAccessProvider, ItemAccessError,
+    ItemAccessOutcome, ItemAccessProvider, NeverCancelled, RevisionAccessRequest,
+    RevisionAccessTarget, WitnessedAccessStatus, WitnessedItemAccessProvider,
 };
 use jury_core::domain::{Capability, FieldSelector, ItemSelector};
 use jury_core::identity::{IdentityCreator, UnlockedIdentity, VaultPrincipalIdentity, unlock};
@@ -25,39 +26,54 @@ use jury_core::local_state::{
 };
 use jury_core::mutation::{DirectDowngradeAcknowledgement, MutationKind, VaultMutationPlan};
 use jury_core::policy::{
-    AccessPath, DescriptorStatus, OperationRule, PlatformAssurance, PolicyCreator, PolicyState,
-    WitnessOperation, WitnessPolicy, replay_policy, replay_policy_with_witness_policies,
+    AccessPath, AutomaticReadTarget, DescriptorStatus, OperationRule, PlatformAssurance,
+    PolicyCreator, PolicyState, WitnessOperation, WitnessPolicy, replay_policy,
+    replay_policy_with_witness_policies,
 };
 use jury_core::registration::{
     RegistrationChallengeV1, RegistrationCreator, RegistrationErrorKind, RegistrationProofV1,
     RegistrationRoleDescriptorV1, answer_challenge, verify_proof,
 };
 use jury_core::transfer::{
-    ArtifactRelation, TransferCreator, TransferPublicCatalogV1, ValidatedTransfer,
-    compare_artifacts, item_deltas,
+    ArtifactRelation, ReviewLabelSetV1, TransferCreator, TransferPublicCatalogV1,
+    ValidatedTransfer, compare_artifacts, item_deltas,
 };
 use jury_core::{
+    witness_approval::{
+        ApprovalDecisionChoice, ApprovalDecisionCreator, ApprovalReviewInput,
+        OwnerReviewLabelCreator, OwnerReviewLabelInput, ReviewLabelSubject,
+        render_complete_approval_review,
+    },
+    witness_client::{
+        RequestCancellationCreator, VaultPolicyCheckpointCreator, WitnessActionRequest,
+        WitnessRequestContext, WitnessRequestCreator,
+    },
+    witness_operation_capability,
     witness_operations::verify_checkpoint_propagation,
-    witness_receipt::{ReceiptPolicyMaterialV1, VerifiedWitnessReceipt, verify_witness_receipt},
+    witness_receipt::{
+        ReceiptPolicyMaterialV1, VerifiedWitnessReceipt, WitnessReceiptEvidence,
+        assemble_witness_receipt, verify_witness_receipt,
+    },
 };
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, LockedVaultState,
     PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicationOutcome,
     PublicationPolicy, RepositoryLocation, VaultStateDirectory, VaultStateFile,
-    list_named_identities, preview_public_file, read_public_file, resolve_linux_state_root,
+    list_named_identities, preview_public_file, read_private_file, read_public_file,
+    resolve_linux_state_root,
 };
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::identity_v1::{IdentityFileV1, KdfProfile, MAX_IDENTITY_FILE_BYTES};
 use jury_protocol::transfer_v1::MAX_TRANSFER_BYTES;
 use jury_protocol::vault_v1::{
-    AccessRole, ContentRole, Digest32, ItemAccessMode, ItemDescriptorV1, ItemEnvelopeV1,
-    ItemFieldKind, ItemFieldV1, ItemFieldValue, ItemKind, ItemStateV1, MAX_FIELD_VALUE_BYTES,
-    MAX_ITEM_REVISION_PROOFS, MAX_ITEMS, MAX_POLICY_REVISIONS, MAX_PUBLIC_LABEL_BYTES,
-    MAX_VAULT_BYTES, PolicyOperationV1, PrincipalDescriptorV1, PrincipalId, PrincipalKind,
-    RemovalReason, VaultFileV1, VaultHeaderV1, WitnessPolicyId,
+    AccessRole, ContentRole, Digest32, FieldId, ItemAccessMode, ItemDescriptorV1, ItemEnvelopeV1,
+    ItemFieldKind, ItemFieldV1, ItemFieldValue, ItemId, ItemKind, ItemStateV1,
+    MAX_FIELD_VALUE_BYTES, MAX_ITEM_REVISION_PROOFS, MAX_ITEMS, MAX_POLICY_REVISIONS,
+    MAX_PUBLIC_LABEL_BYTES, MAX_VAULT_BYTES, PolicyOperationV1, PrincipalDescriptorV1, PrincipalId,
+    PrincipalKind, ReceiptId, RemovalReason, VaultFileV1, VaultHeaderV1, WitnessPolicyId,
 };
 use jury_protocol::witness_v1::{
-    MAX_RECEIPT_JSON_BYTES, PolicyMaterialBytes, VaultPolicyCheckpointV1,
+    MAX_RECEIPT_JSON_BYTES, PolicyMaterialBytes, ReviewLabelBytes, VaultPolicyCheckpointV1,
     WitnessCheckpointAcknowledgementV1, WitnessReceiptV1,
 };
 use sha2::{Digest as _, Sha256};
@@ -75,8 +91,9 @@ pub use self::output::{CliError, CliErrorKind, CommandOutput, FieldSummary, Iden
 use self::{
     access_commands::*, context::*, environment::*, execution_commands::*, identity_commands::*,
     item_commands::*, mutation_commands::*, policy_commands::*, principal_commands::*,
-    receipt_commands::*, support::*, template_commands::*, transfer_commands::*, transfer_state::*,
-    trust_confirmation::*, vault_commands::*, witness_commands::*,
+    receipt_commands::*, request_commands::*, support::*, template_commands::*,
+    transfer_commands::*, transfer_state::*, trust_confirmation::*, vault_commands::*,
+    witness_commands::*, witness_transport::*,
 };
 
 mod access_commands;
@@ -92,6 +109,7 @@ mod output;
 mod policy_commands;
 mod principal_commands;
 mod receipt_commands;
+mod request_commands;
 mod support;
 mod template_commands;
 mod transfer_commands;
@@ -99,6 +117,10 @@ mod transfer_state;
 mod trust_confirmation;
 mod vault_commands;
 mod witness_commands;
+mod witness_transport;
+
+include!("cli/access_execution_args.rs");
+include!("cli/witness_args.rs");
 
 const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: do not use with real secrets";
 
@@ -216,6 +238,13 @@ pub enum Command {
         #[command(subcommand)]
         command: WitnessCommand,
     },
+    /// Create, inspect, observe, execute, or cancel witnessed requests.
+    Request {
+        #[command(subcommand)]
+        command: RequestCommand,
+    },
+    /// Render and sign an independent approval or denial.
+    Approve(ApproveArgs),
     /// Resolve one field to an explicitly selected private sink.
     Read(ReadArgs),
     /// Resolve a bounded template to an explicitly selected private sink.
@@ -387,83 +416,6 @@ pub struct FieldRemoveArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct ReadArgs {
-    #[arg(value_name = "ITEM")]
-    pub item: String,
-    #[arg(value_name = "FIELD")]
-    pub field: String,
-    /// Atomically create a private file instead of writing to the terminal.
-    #[arg(long, value_name = "FILE", conflicts_with = "reveal")]
-    pub out: Option<PathBuf>,
-    /// Permit raw terminal/stdout output. Never valid with `--json`.
-    #[arg(long)]
-    pub reveal: bool,
-    /// Replace an existing private output file.
-    #[arg(long, requires = "out")]
-    pub overwrite: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct InjectArgs {
-    /// Bounded UTF-8 template containing `{{Item.Field}}` references.
-    #[arg(long, value_name = "FILE")]
-    pub template: PathBuf,
-    /// Atomically create the resolved private output file.
-    #[arg(long, value_name = "FILE", conflicts_with = "reveal")]
-    pub out: Option<PathBuf>,
-    /// Permit resolved output on the terminal/stdout. Never valid with `--json`.
-    #[arg(long)]
-    pub reveal: bool,
-    /// Replace an existing private output file.
-    #[arg(long, requires = "out")]
-    pub overwrite: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct ExecArgs {
-    /// Restricted dotenv file containing literal or `{{Item.Field}}` values.
-    #[arg(long, value_name = "FILE")]
-    pub env_file: Option<PathBuf>,
-    /// Replace inherited stdin with one exact `Item.Field` value.
-    #[arg(long, value_name = "ITEM.FIELD")]
-    pub stdin: Option<String>,
-    /// Expose one field through a sealed anonymous file named by an env var.
-    #[arg(long = "file", value_name = "VAR=ITEM.FIELD")]
-    pub files: Vec<String>,
-    /// Run from this existing directory; defaults to the current directory.
-    #[arg(long, value_name = "DIRECTORY")]
-    pub cwd: Option<PathBuf>,
-    /// Exact command and non-secret arguments; `--` is required.
-    #[arg(last = true, required = true, allow_hyphen_values = true)]
-    pub command: Vec<OsString>,
-}
-
-#[derive(Debug, Args)]
-pub struct RunArgs {
-    /// Inject one field as `VAR=Item.Field`; may be repeated.
-    #[arg(long = "env", value_name = "VAR=ITEM.FIELD")]
-    pub env: Vec<String>,
-    /// Expose one field through a sealed anonymous file named by an env var.
-    #[arg(long = "file", value_name = "VAR=ITEM.FIELD")]
-    pub files: Vec<String>,
-    /// Deliver one exact `Item.Field` value on child stdin.
-    #[arg(long, value_name = "ITEM.FIELD")]
-    pub stdin: Option<String>,
-    /// Run from this existing directory; defaults to the current directory.
-    #[arg(long, value_name = "DIRECTORY")]
-    pub cwd: Option<PathBuf>,
-    /// Terminate the complete process tree after this many seconds.
-    #[arg(long, value_name = "SECONDS", default_value_t = 1_800)]
-    pub timeout: u64,
-    /// Retain at most this many post-redaction bytes per output stream.
-    #[arg(long, value_name = "BYTES", default_value_t = 1_048_576)]
-    pub output_limit: usize,
-    /// Exact command and non-secret arguments; `--` is required.
-    #[arg(last = true, required = true, allow_hyphen_values = true)]
-    pub command: Vec<OsString>,
-}
-
-#[derive(Debug, Args)]
 pub struct InternalExecArgs {
     #[arg(long, hide = true)]
     pub executable_fd: i32,
@@ -524,6 +476,8 @@ pub struct ReceiptVerifyArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum WitnessCommand {
+    /// Create one exact owner-signed checkpoint for a witnessed item.
+    Checkpoint(WitnessCheckpointArgs),
     /// Export the exact public journal and witnessed-policy catalog for distribution.
     PolicyMaterial(WitnessPolicyMaterialArgs),
     /// Classify one checkpoint as proposed, partial, or durably accepted.

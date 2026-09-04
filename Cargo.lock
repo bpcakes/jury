@@ -1453,6 +1453,7 @@ dependencies = [
  "jury-process",
  "jury-protected",
  "jury-protocol",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",

@@ -17,11 +17,12 @@ carry no quorum claim.
 The native Linux CLI currently handles:
 
 - portable identity and vault setup;
-- direct item, field, principal, and access operations;
-- witnessed-policy configuration;
-- controlled read and template-injection sinks;
+- direct item, field, principal, and access operations with explicit unilateral status;
+- witnessed-policy configuration and owner-signed review labels;
+- governed witnessed read, template injection, transparent exec, and brokered run;
+- request creation, complete inspection, offline status, interactive approval/denial, foreground execution, and cancellation;
 - privacy cover and local audit verification;
-- direct transparent execution and bounded brokered execution;
+- direct transparent execution and bounded brokered execution behind `--direct`;
 - signed portable-ciphertext export, inspection, and strict import;
 - public witness-policy export and per-witness checkpoint propagation status;
 - bounded offline inspection and verification of witnessed-decision receipts;
@@ -41,11 +42,41 @@ $ jury access matrix
 $ jury policy require witnessed --item ExampleItem \
     --approver PRINCIPAL --approvals 1 \
     --witness WITNESS_ONE --witness WITNESS_TWO --witness-quorum 2 \
-    --operation read-stdout --request-lifetime 300
-$ jury read ExampleItem ExampleField --out value.txt
-$ jury inject --template template.txt --out rendered.txt
-$ jury exec --env-file /absolute/path/to/example.env -- example-command
-$ jury run --env TOKEN=ExampleItem.ExampleField --timeout 300 -- example-command
+    --operation read-stdout --operation write-private-file \
+    --operation template-injection --operation child-environment \
+    --review-label ExampleItem \
+    --field-review-label ExampleField=ExampleField --request-lifetime 300
+$ jury witness checkpoint --item-id ITEM_ID \
+    --output /absolute/public/path/ExampleCheckpoint.json
+$ jury request create --item ExampleItem --field ExampleField \
+    --checkpoint /absolute/public/path/ExampleCheckpoint.json \
+    --out /absolute/public/path/ExampleRequest.json
+$ jury request inspect /absolute/public/path/ExampleRequest.json
+$ jury request status /absolute/public/path/ExampleRequest.json
+```
+
+For a foreground request, start the governed operation first so its fresh
+request-session receiver remains in memory while approval is collected:
+
+```console
+# Requesting terminal
+$ jury read ExampleItem ExampleField \
+    --checkpoint /absolute/public/path/ExampleCheckpoint.json \
+    --request-out /absolute/public/path/ForegroundRequest.json \
+    --approval /absolute/public/path/ForegroundApproval.json \
+    --witness 'WITNESS_ID,https://127.0.0.1:7443,/absolute/private/client-token,/absolute/public/ca.pem' \
+    --receipt /absolute/public/path/ExampleReceipt.json \
+    --out /absolute/private/path/value.txt
+
+# Separate approver terminal, after ForegroundRequest.json appears
+$ jury --identity ExampleApprover approve /absolute/public/path/ForegroundRequest.json \
+    --out /absolute/public/path/ForegroundApproval.json
+
+# Explicit unilateral operations
+$ jury read ExampleItem ExampleField --direct --out /absolute/private/path/value.txt
+$ jury inject --direct --template template.txt --out /absolute/private/path/rendered.txt
+$ jury exec --direct --env-file /absolute/path/to/example.env -- example-command
+$ jury run --direct --env TOKEN=ExampleItem.ExampleField --timeout 300 -- example-command
 $ jury privacy cover --item ExampleItem
 $ jury vault audit verify
 $ jury history status
@@ -69,8 +100,20 @@ Identity files and authenticated local state stay in separate Linux data
 and state roots. This storage layout is pre-alpha plumbing, not evidence that
 Jury protects secrets.
 
-The CLI can configure a witnessed-only policy, but witnessed requests,
-approvals, and open execution remain J22 work. `jury transfer export` packages
+The CLI can configure a witnessed-only policy and perform foreground governed
+operations. A foreground operation publishes the complete public request,
+retains its fresh protected request-session receiver only in that process,
+waits for the declared approval files, obtains signed responses from the exact
+witness set, and opens the exact revision only after quorum. A detached
+`request create` artifact remains inspectable, approvable, and cancellable, but
+cannot later execute: Jury deliberately persists neither its session private
+key nor witness contributions. Create a fresh foreground request instead.
+Interactive approval renders the complete authenticated manifest, meaningful
+item/field/path displays, and a lossless byte-escaped view of the executable,
+public arguments, environment names, and typed secret targets. It does not
+truncate that review to the terminal width.
+
+`jury transfer export` packages
 the exact encrypted vault with the bounded public policy catalog required for
 fresh validation; it does not include identities, audit, checkpoints, receipts,
 or plaintext names. Public inspection is value-free by default, and import
@@ -87,8 +130,8 @@ that its trust root is only the internally consistent embedded owner-signed
 policy chain. Aggregate receipt reason/time fields are collector metadata unless
 a verified endpoint record authenticates the receipt core. It does not prove
 endpoint execution, output, non-exfiltration, or forgetting. A witnessed-only
-configuration is not yet an operational secret-access path because the
-end-user request/open workflow remains J22 work.
+configuration or successful request is not evidence that Jury protects real
+secrets.
 
 Artifact publication is the export commit point. If the separate local receipt
 cannot be recorded afterward, export still reports the published artifact as a
@@ -109,37 +152,47 @@ owned by the recipient. Both `principal add` and `principal replace` require
 the selected descriptor against the candidate descriptor authenticated by the
 proof.
 
-`jury exec` inherits the ordinary environment and stdin, removes every
-`JURY_*` variable, and redacts the child's stdout and stderr independently.
+In explicit `--direct` mode, `jury exec` inherits the ordinary environment and
+stdin, removes every `JURY_*` variable, and redacts the child's stdout and
+stderr independently.
 `jury run` starts with a small environment allowlist, an explicit timeout, and
 bounded output capture. Both commands resolve and authorize every
 `Item.Field` reference before starting a child. They support protected stdin
 and sealed anonymous-file delivery, and they own the Linux process group
 through cleanup.
 
-These commands implement direct access only. J22 must bind a verified action
-manifest and witnessed authorization before this delivery layer may serve the
-witnessed path. An authorized child can copy or retain every plaintext value
-it receives.
+Without `--direct`, read, inject, exec, and run use witnessed authority and
+require an exact checkpoint, request output, receipt output, and witness
+endpoint set. Governed template and child requests currently accept one item
+per request, matching the frozen protocol's item scope. Governed child input is
+either typed field environment/file injection or one typed stdin field;
+uncommitted literal environment values and a combined stdin/environment shape
+are refused. An authorized child can copy or retain every plaintext value it
+receives.
 
-## Target interface
+## Request lifetime and evidence
 
 ```console
-$ jury init
-$ jury item create ExampleSecret --allow-direct
-$ jury policy require witnessed --item ExampleSecret \
-    --approver APPROVER_ONE --approver APPROVER_TWO --approvals 2 \
-    --witness WITNESS_ONE --witness WITNESS_TWO --witness-quorum 2 \
-    --operation child-environment --request-lifetime 300
-$ jury request exec -- example-command
-$ jury approve REQUEST_ID
-$ jury request run REQUEST_ID
+$ jury request status /absolute/public/path/ExampleRequest.json
+$ jury request cancel /absolute/public/path/ExampleRequest.json \
+    --out /absolute/public/path/ExampleCancellation.json \
+    --witness 'WITNESS_ID,https://127.0.0.1:7443,/absolute/private/client-token,/absolute/public/ca.pem'
 ```
 
-The request and approval commands above, including the request-bound execution
-spellings, are design targets rather than implemented interfaces. The native
-Linux CLI implements direct `jury exec` and `jury run`, along with the item and
-policy configuration commands shown earlier.
+Each endpoint specification is
+`WITNESS_ID,BASE_URL,CREDENTIAL_FILE[,CA_CERTIFICATE]`. HTTPS requires the
+explicit CA certificate; plaintext HTTP is accepted only for a literal loopback
+IP with `--allow-insecure-loopback`. Redirects are disabled. Credentials and
+endpoint routing are deployment-local and never enter the vault, request,
+manifest, or receipt.
+
+A verified receipt proves the authenticated policy, exact request/manifest,
+counted independent decisions, and witness state generations encoded in it. It
+does not prove transport health, global freshness, endpoint execution, output,
+non-exfiltration, or forgetting; an authorized endpoint or child may retain
+plaintext. Aggregate receipt reason/time remains collector metadata unless an
+authenticated endpoint record covers it. These limitations are especially
+important because Jury is externally unreviewed pre-alpha software.
 
 ## Design constraints
 

@@ -47,7 +47,6 @@ pub(crate) fn validate_request_policy(
     if request.vault_id != policy.vault_id()
         || request.genesis_fingerprint != *policy.genesis_fingerprint()
         || request.vault_policy_sequence != policy.sequence()
-        || request.vault_policy_hash != *policy.terminal_revision_hash()
     {
         return Err(RequestPolicyError::StalePolicy);
     }
@@ -110,6 +109,12 @@ pub(crate) fn validate_request_policy(
         .witness_policy(&request.witness_policy_digest)
         .ok_or(RequestPolicyError::StalePolicy)?
         .clone();
+    if witness_policy.vault_policy_sequence != request.vault_policy_sequence
+        || witness_policy.vault_policy_hash != request.vault_policy_hash
+        || policy.current_predecessor_hash() != Some(&request.vault_policy_hash)
+    {
+        return Err(RequestPolicyError::StalePolicy);
+    }
     let expected_witnesses = witness_policy
         .witness_descriptors
         .iter()
@@ -168,7 +173,7 @@ pub(crate) fn validate_request_policy(
     })
 }
 
-pub(crate) const fn operation_capability(operation: WitnessOperationV1) -> Capability {
+pub const fn operation_capability(operation: WitnessOperationV1) -> Capability {
     match operation {
         WitnessOperationV1::ReadStdout
         | WitnessOperationV1::TemplateInjection

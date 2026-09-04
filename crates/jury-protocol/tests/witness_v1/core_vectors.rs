@@ -18,6 +18,137 @@ fn action_manifest_matches_the_frozen_vector() -> TestResult {
 }
 
 #[test]
+fn review_label_and_private_presentation_match_the_frozen_vectors() -> TestResult {
+    let corpus = corpus()?;
+    let label = OwnerReviewLabelV1 {
+        schema: 1,
+        label_id: LabelId::from_bytes([0x71; 32])?,
+        label_revision: 1,
+        subject_kind: PresentationSubjectV1::Item,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: repeated_digest(0x02),
+        item_id: Some(ItemId::from_bytes([0x03; 32])?),
+        field_id: None,
+        subject_commitment: None,
+        public_label: ReviewLabelBytes::new(b"ExampleItem".to_vec())?,
+        vault_policy_sequence: 7,
+        issued_at_ms: ISSUED_AT - 1_000,
+        expires_at_ms: None,
+        issuer_owner_id: PrincipalId::from_bytes([0x09; 32])?,
+        issuer_key_fingerprint: fixed_hex(hex::decode(
+            "20367a13894f8ebbb319f692e58c68369ddd3d547ed886b08fcb05ef74f1932c",
+        )?)?,
+        issuer_key_epoch: 1,
+        signature: fixed_hex(vector_hex(&corpus, "owner_review_label", "signature_hex")?)?,
+    };
+    assert_eq!(
+        label.signature_preimage()?,
+        vector_hex(&corpus, "owner_review_label", "preimage_hex")?
+    );
+    assert_eq!(
+        label.canonical_bytes()?,
+        vector_hex(&corpus, "owner_review_label", "message_hex")?
+    );
+    assert_eq!(
+        label.digest()?,
+        digest_hex(&corpus, "owner_review_label", "digest_hex")?
+    );
+    assert_eq!(
+        owner_review_label_set_digest(std::slice::from_ref(&label))?,
+        fixed_hex(hex::decode(
+            "da3e0c4bc71493d609254bd71fc7f182947aa6f61bb63129cdcb3baea42082c5",
+        )?)?
+    );
+
+    let entry = ApprovalPresentationEntryV1 {
+        subject_kind: PresentationSubjectV1::Item,
+        item_id: Some(ItemId::from_bytes([0x03; 32])?),
+        field_id: None,
+        subject_commitment: None,
+        presentation_kind: PresentationKindV1::OwnerReviewLabel,
+        display_bytes: PresentationDisplayBytes::new(b"ExampleItem".to_vec())?,
+        source_revision: Some(4),
+        source_revision_seal_id: Some(RevisionSealId::from_bytes([0x06; 32])?),
+        owner_review_label: Some(label),
+        blinding_nonce: PresentationNonce::from_bytes([0x73; 32])?,
+    };
+    assert_eq!(
+        entry.canonical_bytes()?,
+        vector_hex(&corpus, "approval_presentation", "entry_hex")?
+    );
+    assert_eq!(
+        entry.commitment()?,
+        digest_hex(&corpus, "approval_presentation", "entry_commitment_hex")?
+    );
+    let presentation = ApprovalPresentationV1 {
+        entries: vec![entry],
+    };
+    assert_eq!(
+        presentation.canonical_bytes()?,
+        vector_hex(&corpus, "approval_presentation", "list_hex")?
+    );
+    assert_eq!(
+        presentation.digest()?,
+        digest_hex(&corpus, "approval_presentation", "digest_hex")?
+    );
+    Ok(())
+}
+
+#[test]
+fn private_presentation_rejects_opaque_or_noncanonical_human_targets() -> TestResult {
+    let corpus = corpus()?;
+    let label = OwnerReviewLabelV1 {
+        schema: 1,
+        label_id: LabelId::from_bytes([0x71; 32])?,
+        label_revision: 1,
+        subject_kind: PresentationSubjectV1::Item,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: repeated_digest(0x02),
+        item_id: Some(ItemId::from_bytes([0x03; 32])?),
+        field_id: None,
+        subject_commitment: None,
+        public_label: ReviewLabelBytes::new(b"ExampleItem".to_vec())?,
+        vault_policy_sequence: 7,
+        issued_at_ms: ISSUED_AT - 1_000,
+        expires_at_ms: None,
+        issuer_owner_id: PrincipalId::from_bytes([0x09; 32])?,
+        issuer_key_fingerprint: repeated_digest(0x20),
+        issuer_key_epoch: 1,
+        signature: fixed_hex(vector_hex(&corpus, "owner_review_label", "signature_hex")?)?,
+    };
+    let entry = ApprovalPresentationEntryV1 {
+        subject_kind: PresentationSubjectV1::Item,
+        item_id: Some(ItemId::from_bytes([0x03; 32])?),
+        field_id: None,
+        subject_commitment: None,
+        presentation_kind: PresentationKindV1::OwnerReviewLabel,
+        display_bytes: PresentationDisplayBytes::new(b"ExampleItem".to_vec())?,
+        source_revision: Some(4),
+        source_revision_seal_id: Some(RevisionSealId::from_bytes([0x06; 32])?),
+        owner_review_label: Some(label),
+        blinding_nonce: PresentationNonce::from_bytes([0x73; 32])?,
+    };
+
+    let mut missing_opening = entry.clone();
+    missing_opening.owner_review_label = None;
+    assert!(missing_opening.validate_shape().is_err());
+
+    let mut opaque_field = entry.clone();
+    opaque_field.subject_kind = PresentationSubjectV1::Field;
+    assert!(opaque_field.validate_shape().is_err());
+
+    let mut mismatched_display = entry.clone();
+    mismatched_display.display_bytes = PresentationDisplayBytes::new(b"AnotherItem".to_vec())?;
+    assert!(mismatched_display.validate_shape().is_err());
+
+    let duplicate = ApprovalPresentationV1 {
+        entries: vec![entry.clone(), entry],
+    };
+    assert!(duplicate.validate_shape().is_err());
+    Ok(())
+}
+
+#[test]
 fn request_matches_the_frozen_vector_and_rejects_unknown_versions() -> TestResult {
     let corpus = corpus()?;
     let request = witness_request(&corpus)?;

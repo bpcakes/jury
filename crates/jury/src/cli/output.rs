@@ -87,6 +87,7 @@ pub enum CommandOutput {
         field: Option<String>,
         sink: &'static str,
         durability: Option<&'static str>,
+        authority: &'static str,
     },
     Execution {
         operation: &'static str,
@@ -100,6 +101,10 @@ pub enum CommandOutput {
         streamed: bool,
         protection_degraded: bool,
         local_audit_recorded: bool,
+        authority: &'static str,
+        receipt: Option<String>,
+        receipt_digest: Option<String>,
+        receipt_nonclaim: Option<&'static str>,
     },
     Silent,
     Safe {
@@ -364,6 +369,7 @@ impl CommandOutput {
                 field,
                 sink,
                 durability,
+                authority,
             } => serde_json::json!({
                 "ok": true,
                 "operation": operation,
@@ -371,6 +377,7 @@ impl CommandOutput {
                 "field": field,
                 "sink": sink,
                 "durability": durability,
+                "authority": authority,
                 "plaintext_in_structured_output": false,
                 "maturity": "pre-alpha"
             }),
@@ -386,6 +393,10 @@ impl CommandOutput {
                 streamed,
                 protection_degraded,
                 local_audit_recorded,
+                authority,
+                receipt,
+                receipt_digest,
+                receipt_nonclaim,
             } => serde_json::json!({
                 "ok": exit_code == &Some(0) && exit_signal.is_none(),
                 "operation": operation,
@@ -400,6 +411,10 @@ impl CommandOutput {
                 "output_encoding": "utf8-lossy",
                 "protection_degraded": protection_degraded,
                 "local_audit_recorded": local_audit_recorded,
+                "authority": authority,
+                "receipt": receipt,
+                "receipt_digest": receipt_digest,
+                "receipt_nonclaim": receipt_nonclaim,
                 "authorized_child_may_retain_plaintext": true,
                 "maturity": "pre-alpha"
             }),
@@ -611,6 +626,7 @@ impl CommandOutput {
                 field,
                 sink,
                 durability,
+                authority,
             } => {
                 println!("Operation: {operation}");
                 if let Some(item) = item {
@@ -623,6 +639,7 @@ impl CommandOutput {
                 if let Some(durability) = durability {
                     println!("Durability: {durability}");
                 }
+                println!("Authority: {authority}");
             }
             Self::Execution {
                 operation,
@@ -635,6 +652,10 @@ impl CommandOutput {
                 stderr_truncated,
                 protection_degraded,
                 local_audit_recorded,
+                authority,
+                receipt,
+                receipt_digest,
+                receipt_nonclaim,
                 ..
             } => {
                 println!("Operation: {operation}");
@@ -646,6 +667,16 @@ impl CommandOutput {
                 println!("Stderr: {}", String::from_utf8_lossy(stderr));
                 println!("Protection degraded: {protection_degraded}");
                 println!("Local audit recorded: {local_audit_recorded}");
+                println!("Authority: {authority}");
+                if let Some(receipt) = receipt {
+                    println!("Receipt: {receipt}");
+                }
+                if let Some(receipt_digest) = receipt_digest {
+                    println!("Receipt digest: {}", grouped(receipt_digest));
+                }
+                if let Some(nonclaim) = receipt_nonclaim {
+                    println!("{nonclaim}");
+                }
                 println!("An authorized child may retain plaintext.");
             }
             Self::Silent => {}
@@ -707,6 +738,10 @@ impl CliError {
 
     pub(super) const fn kind(self) -> CliErrorKind {
         self.kind
+    }
+
+    pub(super) const fn code(self) -> &'static str {
+        self.code
     }
 
     #[must_use]

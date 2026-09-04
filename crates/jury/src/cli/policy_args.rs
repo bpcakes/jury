@@ -33,7 +33,7 @@ pub struct PolicyItemArgs {
 pub struct PolicyRequireWitnessedArgs {
     #[arg(long, value_name = "ITEM")]
     pub item: String,
-    #[arg(long = "approver", value_name = "PRINCIPAL", required = true)]
+    #[arg(long = "approver", value_name = "PRINCIPAL")]
     pub approvers: Vec<String>,
     #[arg(long = "witness", value_name = "PRINCIPAL", required = true)]
     pub witnesses: Vec<String>,
@@ -43,6 +43,15 @@ pub struct PolicyRequireWitnessedArgs {
     pub witness_quorum: u16,
     #[arg(long = "operation", value_name = "OPERATION", required = true)]
     pub operations: Vec<String>,
+    /// Deliberately publish this non-secret item label for human approval.
+    #[arg(long, value_name = "PUBLIC_LABEL")]
+    pub review_label: Option<String>,
+    /// Publish FIELD=PUBLIC_LABEL for a field that humans may approve.
+    #[arg(long = "field-review-label", value_name = "FIELD=PUBLIC_LABEL")]
+    pub field_review_labels: Vec<String>,
+    /// Permit automatic read-stdout only for this exact private field; may be repeated.
+    #[arg(long = "automatic-read", value_name = "FIELD")]
+    pub automatic_read_fields: Vec<String>,
     #[arg(long, value_name = "SECONDS")]
     pub request_lifetime: u64,
     #[arg(long, value_name = "DIGEST")]

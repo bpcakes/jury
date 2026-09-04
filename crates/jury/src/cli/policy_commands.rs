@@ -8,12 +8,15 @@ pub(super) fn policy_require_witnessed(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     ItemSelector::parse(arguments.item.clone()).map_err(|_| invalid_item_selector())?;
-    let approver_ids = parse_unique_principal_ids(&arguments.approvers)?;
+    let approver_ids = if arguments.approvers.is_empty() {
+        Vec::new()
+    } else {
+        parse_unique_principal_ids(&arguments.approvers)?
+    };
     let witness_ids = parse_unique_principal_ids(&arguments.witnesses)?;
     let approval_threshold = u8::try_from(arguments.approvals).map_err(|_| invalid_quorum())?;
     let witness_threshold = u8::try_from(arguments.witness_quorum).map_err(|_| invalid_quorum())?;
-    if approval_threshold == 0
-        || usize::from(approval_threshold) > approver_ids.len()
+    if usize::from(approval_threshold) > approver_ids.len()
         || witness_ids.len() < 2
         || usize::from(witness_threshold) < 2
         || usize::from(witness_threshold) > witness_ids.len()
@@ -26,6 +29,23 @@ pub(super) fn policy_require_witnessed(
         .filter(|lifetime| (1..=900_000).contains(lifetime))
         .ok_or_else(invalid_policy_controls)?;
     let operations = parse_witness_operations(&arguments.operations)?;
+    let automatic = approval_threshold == 0;
+    if (automatic
+        && (!approver_ids.is_empty()
+            || operations.as_slice() != [WitnessOperation::ReadStdout]
+            || arguments.automatic_read_fields.is_empty()
+            || arguments.review_label.is_some()
+            || !arguments.field_review_labels.is_empty()))
+        || (!automatic
+            && (approver_ids.is_empty()
+                || !arguments.automatic_read_fields.is_empty()
+                || arguments.review_label.is_none()))
+    {
+        return Err(invalid_policy_controls());
+    }
+    if arguments.workload.is_some() {
+        return Err(invalid_policy_controls());
+    }
     let context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
     let accessible = selected_accessible_item(&context, &arguments.item)?;
@@ -35,6 +55,7 @@ pub(super) fn policy_require_witnessed(
         .item(&envelope.item_id)
         .ok_or_else(invalid_vault)?;
     let catalog = read_policy_catalog(&context.state)?;
+    let state = open_item_body(&context, &accessible, Capability::Administer)?;
     let approver_descriptors = approver_ids
         .iter()
         .map(|principal_id| {
@@ -105,19 +126,108 @@ pub(super) fn policy_require_witnessed(
     } else {
         (random_witness_policy_id()?, 1, Digest32::new([0; 32]))
     };
-    let review_label_set_digest = if let Some(workload) = &arguments.workload {
-        Digest32::new(decode_hex_32(workload).ok_or_else(invalid_policy_controls)?)
-    } else {
-        let mut digest = Sha256::new();
-        digest.update(b"jury-v1/cli/review-label-set\0");
-        digest.update(envelope.item_id.as_bytes());
-        Digest32::new(digest.finalize().into())
-    };
     let next_sequence = context
         .policy
         .sequence()
         .checked_add(1)
         .ok_or_else(invalid_policy_controls)?;
+    let timestamp = timestamp_ms()?;
+    let mut label_creator = OwnerReviewLabelCreator::new();
+    let mut review_labels = Vec::new();
+    if let Some(public_label) = &arguments.review_label {
+        let public_label = ReviewLabelBytes::new(public_label.as_bytes().to_vec())
+            .map_err(|_| invalid_policy_controls())?;
+        let review_label = label_creator
+            .create(
+                OwnerReviewLabelInput {
+                    policy: &context.policy,
+                    owner: &context.identity,
+                    label_revision: 1,
+                    subject: ReviewLabelSubject::Item(envelope.item_id),
+                    public_label,
+                    target_policy_sequence: next_sequence,
+                    issued_at_ms: timestamp,
+                    expires_at_ms: None,
+                },
+                |candidate| {
+                    catalog
+                        .review_label_sets
+                        .iter()
+                        .flat_map(|set| &set.labels)
+                        .any(|label| label.label_id == *candidate)
+                },
+            )
+            .map_err(|_| invalid_policy_controls())?;
+        review_labels.push(review_label);
+    }
+    let mut reviewed_fields = BTreeSet::new();
+    for mapping in &arguments.field_review_labels {
+        let (field_name, public_label) = mapping
+            .split_once('=')
+            .filter(|(field, label)| !field.is_empty() && !label.is_empty())
+            .ok_or_else(invalid_policy_controls)?;
+        let field = state
+            .fields
+            .iter()
+            .find(|field| field.name == field_name)
+            .ok_or_else(invalid_policy_controls)?;
+        if !reviewed_fields.insert(field.field_id) {
+            return Err(invalid_policy_controls());
+        }
+        let public_label = ReviewLabelBytes::new(public_label.as_bytes().to_vec())
+            .map_err(|_| invalid_policy_controls())?;
+        let label = label_creator
+            .create(
+                OwnerReviewLabelInput {
+                    policy: &context.policy,
+                    owner: &context.identity,
+                    label_revision: 1,
+                    subject: ReviewLabelSubject::Field {
+                        item_id: envelope.item_id,
+                        field_id: field.field_id,
+                    },
+                    public_label,
+                    target_policy_sequence: next_sequence,
+                    issued_at_ms: timestamp,
+                    expires_at_ms: None,
+                },
+                |candidate| {
+                    catalog
+                        .review_label_sets
+                        .iter()
+                        .flat_map(|set| &set.labels)
+                        .chain(&review_labels)
+                        .any(|label| label.label_id == *candidate)
+                },
+            )
+            .map_err(|_| invalid_policy_controls())?;
+        review_labels.push(label);
+    }
+    let review_label_set =
+        ReviewLabelSetV1::new(review_labels).map_err(|_| invalid_policy_controls())?;
+    let review_label_set_digest = review_label_set.digest.clone();
+    let mut automatic_read_targets = arguments
+        .automatic_read_fields
+        .iter()
+        .map(|field_name| {
+            state
+                .fields
+                .iter()
+                .find(|field| &field.name == field_name)
+                .map(|field| AutomaticReadTarget {
+                    item_id: envelope.item_id,
+                    field_id: Some(field.field_id),
+                })
+                .ok_or_else(invalid_policy_controls)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    automatic_read_targets.sort_unstable();
+    if automatic_read_targets
+        .windows(2)
+        .any(|pair| pair[0] == pair[1])
+    {
+        return Err(invalid_policy_controls());
+    }
     let operation_rules = operations
         .iter()
         .map(|operation| OperationRule {
@@ -127,9 +237,14 @@ pub(super) fn policy_require_witnessed(
             allowed_request_lifetime_ms: lifetime_ms,
             max_timeout_ms: lifetime_ms.min(30_000),
             max_output_bytes: u32::try_from(MAX_TEMPLATE_OUTPUT_BYTES).unwrap_or(u32::MAX),
-            max_target_count: 1,
+            max_target_count: u8::try_from(if automatic {
+                automatic_read_targets.len()
+            } else {
+                reviewed_fields.len().saturating_add(1)
+            })
+            .unwrap_or(u8::MAX),
             required_platform_assurance: PlatformAssurance::NormalizedPathOnly,
-            automatic_read_targets: Vec::new(),
+            automatic_read_targets: automatic_read_targets.clone(),
         })
         .collect::<Vec<_>>();
     let witness_policy = WitnessPolicy {
@@ -161,11 +276,9 @@ pub(super) fn policy_require_witnessed(
     let planning_policy =
         replay_policy_with_witness_policies(&context.vault.policy, &witness_policies)
             .map_err(|_| invalid_policy_catalog())?;
-    let state = open_item_body(&context, &accessible, Capability::Administer)?;
     let mut access = retained_access_plan(&planning_policy, envelope)?;
     access.direct_recipient_ids.clear();
     access.witness_policy_digest = Some(witness_digest);
-    let timestamp = timestamp_ms()?;
     let inventory = ItemArtifactInventory::from_vault(&context.vault)
         .map_err(|error| map_item_error(error.kind()))?;
     let prepared = ItemCreator::new(protection)
@@ -187,6 +300,7 @@ pub(super) fn policy_require_witnessed(
         )
         .map_err(|error| map_item_error(error.kind()))?;
     let mut context = context;
+    add_catalog_review_label_set(&mut context.catalog, review_label_set)?;
     add_catalog_witness_policy(&mut context.catalog, &context.policy, &witness_policy)?;
     context.policy = planning_policy;
     finish_item_mutation(

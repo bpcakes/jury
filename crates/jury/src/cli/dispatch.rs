@@ -66,11 +66,32 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
             command: ReceiptCommand::Verify(arguments),
         } => receipt_verify(arguments),
         Command::Witness {
+            command: WitnessCommand::Checkpoint(arguments),
+        } => witness_checkpoint(&cli, arguments, &environment, &current, protection),
+        Command::Witness {
             command: WitnessCommand::PolicyMaterial(arguments),
         } => witness_policy_material(&cli, arguments, &environment, &current),
         Command::Witness {
             command: WitnessCommand::PolicyStatus(arguments),
         } => witness_policy_status(arguments),
+        Command::Request {
+            command: RequestCommand::Create(arguments),
+        } => request_create(&cli, arguments, &environment, &current, protection),
+        Command::Request {
+            command: RequestCommand::Inspect(arguments),
+        } => request_inspect(&cli, arguments, &environment, &current),
+        Command::Request {
+            command: RequestCommand::Status(arguments),
+        } => request_status(&cli, arguments, &environment, &current),
+        Command::Request {
+            command: RequestCommand::Execute(arguments),
+        } => request_execute(&cli, arguments, &environment, &current, protection),
+        Command::Request {
+            command: RequestCommand::Cancel(arguments),
+        } => request_cancel(&cli, arguments, &environment, &current, protection),
+        Command::Approve(arguments) => {
+            approve_request(&cli, arguments, &environment, &current, protection)
+        }
         Command::Item {
             command: ItemCommand::Create(arguments),
         } => item_create(&cli, arguments, &environment, &current, protection),

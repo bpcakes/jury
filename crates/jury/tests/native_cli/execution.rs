@@ -97,6 +97,7 @@ pub(super) fn exercise_successful_execution(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "exec",
+            "--direct",
             "--env-file",
             exec_environment.to_str().ok_or("non-UTF-8 env path")?,
             "--stdin",
@@ -130,7 +131,7 @@ pub(super) fn exercise_successful_execution(
         executed.stdout,
         b"ExampleValue|[REDACTED]|ExampleValue|literal"
     );
-    assert_eq!(executed.stderr, b"[REDACTED]");
+    assert_eq!(executed.stderr, b"Authority: direct-unilateral\n[REDACTED]");
     assert!(
         !executed
             .stdout
@@ -147,6 +148,7 @@ pub(super) fn exercise_successful_execution(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--env",
             "TOKEN=ExampleItem.ExampleSecret",
             "--file",
@@ -183,6 +185,7 @@ pub(super) fn exercise_successful_execution(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--file",
             "BINARY_FILE=ExampleItem.ExampleBinary",
             "--stdin",
@@ -217,6 +220,7 @@ fn assert_atomic_preflight(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--env",
             "PUBLIC=ExampleItem.ExampleField",
             "--env",
@@ -260,6 +264,7 @@ fn assert_atomic_preflight(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--env",
             "BINARY=ExampleItem.ExampleBinary",
             "--timeout",
@@ -298,6 +303,7 @@ fn assert_execution_sandbox(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "exec",
+            "--direct",
             "--",
             "/bin/sh",
             "-c",
@@ -311,7 +317,10 @@ fn assert_execution_sandbox(
     )?;
     assert_eq!(stripped_environment.status.code(), Some(0));
     assert!(stripped_environment.stdout.is_empty());
-    assert!(stripped_environment.stderr.is_empty());
+    assert_eq!(
+        stripped_environment.stderr,
+        b"Authority: direct-unilateral\n"
+    );
 
     let inherited_descriptor_path = temporary.join("inherited-descriptor");
     let inherited_descriptor = fs::File::create(&inherited_descriptor_path)?;
@@ -328,6 +337,7 @@ fn assert_execution_sandbox(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "exec",
+            "--direct",
             "--",
             "/bin/sh",
             "-c",
@@ -337,7 +347,10 @@ fn assert_execution_sandbox(
     )?;
     assert_eq!(descriptor_scrubbed.status.code(), Some(0));
     assert!(descriptor_scrubbed.stdout.is_empty());
-    assert!(descriptor_scrubbed.stderr.is_empty());
+    assert_eq!(
+        descriptor_scrubbed.stderr,
+        b"Authority: direct-unilateral\n"
+    );
     Ok(())
 }
 
@@ -356,6 +369,7 @@ fn assert_output_limit_and_timeout(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--output-limit",
             "16",
             "--timeout",
@@ -381,6 +395,7 @@ fn assert_output_limit_and_timeout(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "run",
+            "--direct",
             "--timeout",
             "1",
             "--",
@@ -419,6 +434,7 @@ fn assert_signal_cleanup(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "exec",
+            "--direct",
             "--",
             "/bin/sh",
             "-c",

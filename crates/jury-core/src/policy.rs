@@ -30,5 +30,5 @@ pub use witness::{
 };
 pub(crate) use witness_v1_bridge::{
     approval_mode_tag, core_operation, operation_tag, platform_assurance_tag,
-    protocol_approval_mode,
+    protocol_approval_mode, protocol_platform_assurance,
 };

@@ -342,6 +342,39 @@ pub(super) fn field_read(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
+    if !arguments.direct {
+        return request_execute(
+            cli,
+            &RequestExecuteArgs {
+                item: Some(arguments.item.clone()),
+                item_id: None,
+                field: Some(arguments.field.clone()),
+                field_id: None,
+                checkpoint: arguments
+                    .checkpoint
+                    .clone()
+                    .ok_or_else(witnessed_execution_arguments_required)?,
+                request_out: arguments
+                    .request_out
+                    .clone()
+                    .ok_or_else(witnessed_execution_arguments_required)?,
+                receipt: arguments
+                    .receipt
+                    .clone()
+                    .ok_or_else(witnessed_execution_arguments_required)?,
+                approvals: arguments.approvals.clone(),
+                witnesses: arguments.witnesses.clone(),
+                allow_insecure_loopback: arguments.allow_insecure_loopback,
+                wait_seconds: arguments.wait_seconds,
+                out: arguments.out.clone(),
+                reveal: arguments.reveal,
+                overwrite: arguments.overwrite,
+            },
+            environment,
+            current,
+            protection,
+        );
+    }
     FieldSelector::parse(arguments.item.clone(), arguments.field.clone())
         .map_err(|_| invalid_field_selector())?;
     validate_plaintext_sink(cli, arguments.out.as_deref(), arguments.reveal)?;
@@ -369,8 +402,10 @@ pub(super) fn field_read(
             field: Some(arguments.field.clone()),
             sink: "private-file",
             durability: Some(durability(outcome)),
+            authority: "direct-unilateral",
         }
     } else {
+        eprintln!("Authority: direct-unilateral");
         let mut output = std::io::stdout().lock();
         output
             .write_all(field.value.as_bytes())
@@ -380,4 +415,12 @@ pub(super) fn field_read(
     };
     state.clear_sensitive();
     Ok(result)
+}
+
+const fn witnessed_execution_arguments_required() -> CliError {
+    CliError::new(
+        CliErrorKind::InvalidArguments,
+        "witnessed-execution-arguments-required",
+        "governed read requires --checkpoint, --request-out, --receipt, and the exact --witness set; use --direct only for visible unilateral access",
+    )
 }

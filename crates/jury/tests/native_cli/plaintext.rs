@@ -13,12 +13,14 @@ fn exercise_read_sinks(repository: &Path, data: &Path, state: &Path, private: &P
             "read",
             "ExampleItem",
             "ExampleField",
+            "--direct",
             "--out",
             output_path.to_str().ok_or("non-UTF-8 output path")?,
         ],
         b"ExamplePass1234\n",
     )?)?;
     assert_eq!(read["operation"], "field-read");
+    assert_eq!(read["authority"], "direct-unilateral");
     assert_eq!(read["plaintext_in_structured_output"], false);
     assert!(!read.to_string().contains("ExampleValue"));
     assert_eq!(fs::read(&output_path)?, b"ExampleValue");
@@ -37,13 +39,14 @@ fn exercise_read_sinks(repository: &Path, data: &Path, state: &Path, private: &P
             "read",
             "ExampleItem",
             "ExampleField",
+            "--direct",
             "--reveal",
         ],
         b"ExamplePass1234\n",
     )?;
     assert!(revealed.status.success());
     assert_eq!(revealed.stdout, b"ExampleValue");
-    assert!(revealed.stderr.is_empty());
+    assert_eq!(revealed.stderr, b"Authority: direct-unilateral\n");
     Ok(())
 }
 
@@ -70,6 +73,7 @@ fn exercise_template_sinks(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "inject",
+            "--direct",
             "--template",
             template_path.to_str().ok_or("non-UTF-8 template path")?,
             "--out",
@@ -78,6 +82,7 @@ fn exercise_template_sinks(
         b"ExamplePass1234\n",
     )?)?;
     assert_eq!(injected["operation"], "template-inject");
+    assert_eq!(injected["authority"], "direct-unilateral");
     assert_eq!(injected["plaintext_in_structured_output"], false);
     assert!(!injected.to_string().contains("ExampleValue"));
     assert_eq!(fs::read(&injected_path)?, b"prefix=ExampleValue;suffix");
@@ -90,6 +95,7 @@ fn exercise_template_sinks(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "inject",
+            "--direct",
             "--template",
             template_path.to_str().ok_or("non-UTF-8 template path")?,
             "--reveal",
@@ -98,7 +104,7 @@ fn exercise_template_sinks(
     )?;
     assert!(revealed_injection.status.success());
     assert_eq!(revealed_injection.stdout, b"prefix=ExampleValue;suffix");
-    assert!(revealed_injection.stderr.is_empty());
+    assert_eq!(revealed_injection.stderr, b"Authority: direct-unilateral\n");
     Ok(())
 }
 
@@ -125,6 +131,7 @@ fn exercise_atomic_template_denial(
             "--passphrase-stdin",
             "--allow-degraded-protection",
             "inject",
+            "--direct",
             "--template",
             denied_template
                 .to_str()

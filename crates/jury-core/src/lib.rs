@@ -20,10 +20,14 @@ pub mod registration;
 mod registration_tests;
 pub mod session;
 pub mod transfer;
+pub mod witness_approval;
+pub mod witness_client;
 pub mod witness_engine;
 pub mod witness_operations;
 pub mod witness_receipt;
 mod witness_validation;
+
+pub use witness_validation::operation_capability as witness_operation_capability;
 
 /// Human-readable product name.
 pub const PRODUCT_NAME: &str = "Jury";

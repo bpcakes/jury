@@ -1,12 +1,22 @@
 use super::*;
 
-struct PolicyActors {
-    approver_id: String,
-    witness_one_id: String,
-    witness_two_id: String,
+pub(super) struct PolicyActors {
+    pub(super) approver_id: String,
+    pub(super) witness_one_id: String,
+    pub(super) witness_two_id: String,
 }
 
-fn initialize_policy_actors(
+pub(super) fn encode_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    output
+}
+
+pub(super) fn initialize_policy_actors(
     repository: &Path,
     data: &Path,
     state: &Path,
@@ -52,6 +62,23 @@ fn initialize_policy_actors(
             "--allow-direct",
         ],
         b"OwnerPassphrase1234\n",
+    )?)?;
+    success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "vault",
+            "field",
+            "set",
+            "ExampleWitnessedItem",
+            "ExampleField",
+            "--value-stdin",
+        ],
+        b"OwnerPassphrase1234\nExampleFieldValue",
     )?)?;
 
     let approver = register_role_principal(
@@ -212,6 +239,10 @@ fn commit_witnessed_policy(
             "read-stdout",
             "--request-lifetime",
             "300",
+            "--review-label",
+            "ExampleWitnessedItem",
+            "--field-review-label",
+            "ExampleField=ExampleWitnessedField",
             "--dry-run",
         ],
         b"OwnerPassphrase1234\n",
@@ -248,6 +279,10 @@ fn commit_witnessed_policy(
             "read-stdout",
             "--request-lifetime",
             "300",
+            "--review-label",
+            "ExampleWitnessedItem",
+            "--field-review-label",
+            "ExampleField=ExampleWitnessedField",
         ],
         b"OwnerPassphrase1234\n",
     )?)?;
@@ -292,6 +327,7 @@ fn commit_witnessed_policy(
     assert!(ReceiptPolicyMaterialV1::decode(&PolicyMaterialBytes::new(padded_material)?).is_err());
 
     let vault = VaultFileV1::parse(&fs::read(vault_path)?)?;
+    assert_request_artifact_workflow(repository, data, state, artifacts, &vault)?;
     let (direct_slots, witnessed_state) = vault
         .policy
         .revisions
@@ -316,6 +352,195 @@ fn commit_witnessed_policy(
             .iter()
             .all(|slot| slot.threshold == 2 && slot.member_count == 2)
     );
+    Ok(())
+}
+
+fn assert_request_artifact_workflow(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    artifacts: &Path,
+    vault: &VaultFileV1,
+) -> TestResult {
+    let checkpoint_path = artifacts.join("ExampleCheckpoint.json");
+    let item_id = encode_hex(
+        vault
+            .items
+            .first()
+            .ok_or("witnessed item is absent")?
+            .item_id
+            .as_bytes(),
+    );
+    let checkpoint_output = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "witness",
+            "checkpoint",
+            "--item-id",
+            &item_id,
+            "--output",
+            checkpoint_path.to_str().ok_or("invalid checkpoint path")?,
+        ],
+        b"OwnerPassphrase1234\n",
+    )?)?;
+    assert_eq!(checkpoint_output["operation"], "witness-checkpoint");
+    assert_eq!(checkpoint_output["item_id"], item_id);
+    assert_eq!(checkpoint_output["contains_private_material"], false);
+    let checkpoint_bytes = fs::read(&checkpoint_path)?;
+    let checkpoint: jury_protocol::witness_v1::VaultPolicyCheckpointV1 =
+        serde_json::from_slice(&checkpoint_bytes)?;
+    assert_eq!(serde_json::to_vec(&checkpoint)?, checkpoint_bytes);
+    assert_eq!(
+        checkpoint_output["checkpoint_digest"],
+        encode_hex(checkpoint.digest()?.as_bytes())
+    );
+    assert_request_create_and_inspect(repository, data, state, artifacts, &checkpoint_path)
+}
+
+fn assert_request_create_and_inspect(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    artifacts: &Path,
+    checkpoint_path: &Path,
+) -> TestResult {
+    let request_path = artifacts.join("ExampleRequest.json");
+    let request_output = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "request",
+            "create",
+            "--item",
+            "ExampleWitnessedItem",
+            "--field",
+            "ExampleWitnessedField",
+            "--checkpoint",
+            checkpoint_path.to_str().ok_or("invalid checkpoint path")?,
+            "--out",
+            request_path.to_str().ok_or("invalid request path")?,
+        ],
+        b"OwnerPassphrase1234\n",
+    )?)?;
+    assert_eq!(request_output["operation"], "request-create");
+    assert_eq!(request_output["phase"], "pending-review");
+    assert_eq!(request_output["session_private_key_persisted"], false);
+    assert_eq!(request_output["later_execution_available"], false);
+    let request_bytes = fs::read(&request_path)?;
+    assert!(
+        !request_bytes
+            .windows(17)
+            .any(|window| window == b"ExampleFieldValue")
+    );
+    let inspected = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "request",
+            "inspect",
+            request_path.to_str().ok_or("invalid request path")?,
+        ],
+        b"",
+    )?)?;
+    assert_eq!(inspected["operation"], "request-inspect");
+    assert_eq!(inspected["complete"], true);
+    assert_eq!(inspected["lossy"], false);
+    let displays = inspected["complete_review"]["meaningful_displays"]
+        .as_array()
+        .ok_or("missing meaningful approval displays")?;
+    assert!(
+        displays
+            .iter()
+            .any(|display| display == "ExampleWitnessedItem")
+    );
+    assert!(
+        displays
+            .iter()
+            .any(|display| display == "ExampleWitnessedField")
+    );
+    assert_review_is_not_terminal_width_dependent(repository, data, state, &request_path)?;
+    let noninteractive_approval = artifacts.join("NoninteractiveApproval.json");
+    let refused = run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--identity",
+            "approver",
+            "approve",
+            request_path.to_str().ok_or("invalid request path")?,
+            "--out",
+            noninteractive_approval
+                .to_str()
+                .ok_or("invalid approval path")?,
+        ],
+        b"approve\n",
+    )?;
+    assert_eq!(refused.status.code(), Some(2));
+    let refusal: serde_json::Value = serde_json::from_slice(&refused.stderr)?;
+    assert_eq!(refusal["error"]["code"], "interactive-approval-required");
+    assert!(!noninteractive_approval.exists());
+    let status = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "request",
+            "status",
+            request_path.to_str().ok_or("invalid request path")?,
+        ],
+        b"",
+    )?)?;
+    assert_eq!(status["phase"], "pending");
+    assert_eq!(status["session_private_key_present"], false);
+    assert_eq!(status["witnesses_contacted"], false);
+    Ok(())
+}
+
+fn assert_review_is_not_terminal_width_dependent(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    request: &Path,
+) -> TestResult {
+    let request = request.to_str().ok_or("invalid request path")?;
+    let mut reference = None;
+    for columns in ["1", "20", "40", "80", "240"] {
+        let output = run_with_environment(
+            repository,
+            data,
+            state,
+            &["request", "inspect", request],
+            b"",
+            &[("COLUMNS", columns)],
+        )?;
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        assert!(
+            !output
+                .stdout
+                .windows(3)
+                .any(|window| window == "…".as_bytes())
+        );
+        if let Some(reference) = &reference {
+            assert_eq!(&output.stdout, reference);
+        } else {
+            reference = Some(output.stdout);
+        }
+    }
     Ok(())
 }
 

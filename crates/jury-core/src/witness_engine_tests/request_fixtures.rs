@@ -91,7 +91,7 @@ fn fixture_checkpoint(
         vault_id: VaultId::from_bytes([0x01; 32])?,
         genesis_fingerprint: Digest32::new([0x02; 32]),
         vault_policy_sequence: 1,
-        vault_policy_hash: Digest32::new([0x72; 32]),
+        vault_policy_hash: Digest32::new([0x02; 32]),
         witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
         witness_policy_revision: 1,
         witness_policy_digest: witness_policy_digest.clone(),
@@ -144,7 +144,7 @@ fn fixture_manifest(
         revision: 1,
         revision_seal_id: RevisionSealId::from_bytes([0x06; 32])?,
         vault_policy_sequence: 1,
-        vault_policy_hash: Digest32::new([0x72; 32]),
+        vault_policy_hash: Digest32::new([0x02; 32]),
         witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
         witness_policy_revision: 1,
         witness_policy_digest: witness_policy_digest.clone(),
@@ -206,7 +206,7 @@ fn fixture_request(
         revision: 1,
         revision_seal_id: RevisionSealId::from_bytes([0x06; 32])?,
         vault_policy_sequence: 1,
-        vault_policy_hash: Digest32::new([0x72; 32]),
+        vault_policy_hash: Digest32::new([0x02; 32]),
         policy_checkpoint_digest: checkpoint.digest()?,
         witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
         witness_policy_revision: 1,
@@ -513,7 +513,8 @@ fn descendant_policy_and_checkpoint_at_sequence(
     next_witness_policy.revision = 2;
     next_witness_policy.predecessor_policy_digest = prior_digest;
     next_witness_policy.vault_policy_sequence = next_sequence;
-    next_witness_policy.vault_policy_hash = Digest32::new([0x74; 32]);
+    let predecessor_hash = if next_sequence == 2 { 0x72 } else { 0x74 };
+    next_witness_policy.vault_policy_hash = Digest32::new([predecessor_hash; 32]);
     if let Some(replacement) = replacement {
         next_witness_policy.witness_descriptors[0] = witness_policy_descriptor(replacement, 1)?;
     }
@@ -597,7 +598,7 @@ fn descendant_policy_and_checkpoint_at_sequence(
         vault_id: next_policy.vault_id(),
         genesis_fingerprint: next_policy.genesis_fingerprint().clone(),
         vault_policy_sequence: next_sequence,
-        vault_policy_hash: Digest32::new([0x74; 32]),
+        vault_policy_hash: Digest32::new([predecessor_hash; 32]),
         witness_policy_id: next_witness_policy.witness_policy_id,
         witness_policy_revision: 2,
         witness_policy_digest: next_digest,

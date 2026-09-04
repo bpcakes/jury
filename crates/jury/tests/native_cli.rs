@@ -29,6 +29,9 @@ mod native_cli_plaintext;
 #[path = "native_cli/transfer.rs"]
 mod native_cli_transfer;
 
+#[path = "native_cli/witnessed.rs"]
+mod native_cli_witnessed;
+
 #[path = "native_cli/support.rs"]
 mod support;
 

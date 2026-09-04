@@ -1,5 +1,402 @@
 
 #[test]
+fn role_bound_checkpoint_and_cancellation_creators_produce_shared_validated_evidence()
+-> TestResult {
+    let fixture = fixture()?;
+    let checkpoint = VaultPolicyCheckpointCreator::create(
+        &fixture.policy,
+        &fixture.request.witness_policy_digest,
+        Digest32::new([0; 32]),
+        &fixture.actors.owner,
+        NOW_MS - 1,
+    )?;
+    validate_checkpoint_public(&fixture.policy, &checkpoint)?;
+    assert_eq!(checkpoint.vault_policy_hash, fixture.request.vault_policy_hash);
+
+    let mut creator = RequestCancellationCreator::from_source(TestRandom::new(0x1234_5678));
+    let cancellation = creator.create(
+        &fixture.policy,
+        &fixture.request,
+        &fixture.actors.owner,
+        NOW_MS,
+    )?;
+    validate_request_cancellation(
+        &fixture.policy,
+        &fixture.request,
+        &cancellation,
+        NOW_MS,
+    )?;
+    assert_ne!(cancellation.cancellation_id, cancellation.nonce);
+    assert_eq!(
+        cancellation.canceller_role,
+        CancellerRoleV1::OriginalRequester
+    );
+    Ok(())
+}
+#[test]
+fn automatic_read_builder_uses_only_the_exact_policy_target_and_empty_presentation() -> TestResult {
+    let principals = fixture_principals()?;
+    let item_id = ItemId::from_bytes([0x03; 32])?;
+    let field_id = FieldId::from_bytes([0x44; 32])?;
+    let mut witness_policy = fixture_witness_policy(&principals)?;
+    witness_policy.approver_descriptors.clear();
+    witness_policy.review_label_set_digest = owner_review_label_set_digest(&[])?;
+    witness_policy.operation_rules[0].eligible_approver_ids.clear();
+    witness_policy.operation_rules[0].approval_threshold = 0;
+    witness_policy.operation_rules[0].automatic_read_targets = vec![AutomaticReadTarget {
+        item_id,
+        field_id: Some(field_id),
+    }];
+    witness_policy.validate()?;
+    let witness_digest = witness_policy.digest()?;
+    let policy = fixture_policy(&principals, &witness_policy, &witness_digest)?;
+    let checkpoint = VaultPolicyCheckpointCreator::create(
+        &policy,
+        &witness_digest,
+        Digest32::new([0; 32]),
+        &principals.actors.owner,
+        NOW_MS - 1,
+    )?;
+    let mut creator = WitnessRequestCreator::from_source(
+        TestRandom::new(0xfeed_beef),
+        ProtectionPolicy::EmergencyAllowDegraded,
+    );
+    let prepared = creator.create_read_stdout(
+        WitnessRequestContext {
+            policy: &policy,
+            checkpoint: &checkpoint,
+            requester: &principals.actors.owner,
+            review_labels: Vec::new(),
+            now_ms: NOW_MS,
+        },
+        item_id,
+        field_id,
+    )?;
+    assert!(prepared.presentation.entries.is_empty());
+    assert!(prepared.review_labels.is_empty());
+    assert_eq!(
+        prepared.manifest.approval_target.entries[0].presentation_commitment,
+        Digest32::new([0; 32])
+    );
+    validate_public_request(
+        &policy,
+        &checkpoint,
+        &prepared.request,
+        &prepared.manifest,
+    )?;
+
+    assert!(
+        creator
+            .create_read_stdout(
+                WitnessRequestContext {
+                    policy: &policy,
+                    checkpoint: &checkpoint,
+                    requester: &principals.actors.owner,
+                    review_labels: Vec::new(),
+                    now_ms: NOW_MS,
+                },
+                item_id,
+                FieldId::from_bytes([0x45; 32])?,
+            )
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestResult {
+    let principals = fixture_principals()?;
+    let mut witness_policy = fixture_witness_policy(&principals)?;
+    for (descriptor, identity) in witness_policy
+        .approver_descriptors
+        .iter_mut()
+        .zip(&principals.actors.approvers)
+    {
+        descriptor.allowed_operations = vec![WitnessOperation::TemplateInjection];
+        descriptor.self_signature = Signature64::new([0; 64]);
+        descriptor.self_signature =
+            identity.sign_validated_approval(&descriptor.self_signature_preimage()?)?;
+    }
+    let item_id = ItemId::from_bytes([0x03; 32])?;
+    let field_id = FieldId::from_bytes([0x44; 32])?;
+    witness_policy.operation_rules[0].operation = WitnessOperation::TemplateInjection;
+    witness_policy.operation_rules[0].max_target_count = 2;
+    witness_policy
+        .validate()
+        .map_err(|error| format!("template policy before labels: {error:?}"))?;
+    let provisional_digest = witness_policy.digest()?;
+    let provisional_policy = fixture_policy(&principals, &witness_policy, &provisional_digest)?;
+    let mut label_creator = OwnerReviewLabelCreator::from_source(TestRandom::new(0x1111_2222));
+    let item_label = label_creator.create(
+        OwnerReviewLabelInput {
+            policy: &provisional_policy,
+            owner: &principals.actors.owner,
+            label_revision: 1,
+            subject: ReviewLabelSubject::Item(item_id),
+            public_label: ReviewLabelBytes::new(b"ExampleItem".to_vec())?,
+            target_policy_sequence: 1,
+            issued_at_ms: NOW_MS - 1_000,
+            expires_at_ms: None,
+        },
+        |_| false,
+    )?;
+    let field_label = label_creator.create(
+        OwnerReviewLabelInput {
+            policy: &provisional_policy,
+            owner: &principals.actors.owner,
+            label_revision: 1,
+            subject: ReviewLabelSubject::Field { item_id, field_id },
+            public_label: ReviewLabelBytes::new(b"ExampleField".to_vec())?,
+            target_policy_sequence: 1,
+            issued_at_ms: NOW_MS - 1_000,
+            expires_at_ms: None,
+        },
+        |candidate| candidate == &item_label.label_id,
+    )?;
+    let labels = vec![item_label, field_label];
+    witness_policy.review_label_set_digest = owner_review_label_set_digest(&labels)?;
+    witness_policy
+        .validate()
+        .map_err(|error| format!("template policy after labels: {error:?}"))?;
+    let witness_digest = witness_policy.digest()?;
+    let policy = fixture_policy(&principals, &witness_policy, &witness_digest)?;
+    let checkpoint = VaultPolicyCheckpointCreator::create(
+        &policy,
+        &witness_digest,
+        Digest32::new([0; 32]),
+        &principals.actors.owner,
+        NOW_MS - 1,
+    )?;
+    let action = |suffix: &[u8]| -> TestResult<WitnessActionRequest> {
+        Ok(WitnessActionRequest {
+            item_id,
+            field_ids: vec![field_id],
+            operation_context: OperationContextV1::TemplateInjection,
+            executable_identity: Some(OperationBytes::new(b"jury-template-renderer-v1".to_vec())?),
+            arguments: vec![
+                ManifestArgumentV1::PublicLiteral {
+                    bytes: OperationBytes::new([b"prefix=".as_slice(), suffix].concat())?,
+                },
+                ManifestArgumentV1::SecretPlaceholder {
+                    target: WitnessTargetV1 {
+                        item_id,
+                        field_id: Some(field_id),
+                    },
+                },
+            ],
+            working_directory: Some(OperationBytes::new(b"/ExampleDirectory".to_vec())?),
+            environment_injections: Vec::new(),
+            stdin_target: None,
+            stdin_mode: StdinModeV1::None,
+            output_sink: OutputSinkV1::Stdout,
+            output_destination: None,
+            timeout_ms: 0,
+            output_limit_bytes: 4_096,
+        })
+    };
+    let mut creator = WitnessRequestCreator::from_source(
+        TestRandom::new(0x3333_4444),
+        ProtectionPolicy::EmergencyAllowDegraded,
+    );
+    let first = creator.create_action(
+        WitnessRequestContext {
+            policy: &policy,
+            checkpoint: &checkpoint,
+            requester: &principals.actors.owner,
+            review_labels: labels.clone(),
+            now_ms: NOW_MS,
+        },
+        action(b"one")?,
+    )?;
+    let second = creator.create_action(
+        WitnessRequestContext {
+            policy: &policy,
+            checkpoint: &checkpoint,
+            requester: &principals.actors.owner,
+            review_labels: labels,
+            now_ms: NOW_MS,
+        },
+        action(b"two")?,
+    )?;
+    assert!(first.presentation.entries.iter().any(|entry| {
+        entry.subject_kind == PresentationSubjectV1::Item
+            && entry.display_bytes.as_bytes() == b"ExampleItem"
+    }));
+    assert!(first.presentation.entries.iter().any(|entry| {
+        entry.subject_kind == PresentationSubjectV1::Field
+            && entry.display_bytes.as_bytes() == b"ExampleField"
+    }));
+    assert!(first.presentation.entries.iter().any(|entry| {
+        entry.subject_kind == PresentationSubjectV1::WorkingDirectory
+            && entry.display_bytes.as_bytes() == b"/ExampleDirectory"
+    }));
+    assert_ne!(first.manifest.workload_digest()?, second.manifest.workload_digest()?);
+    assert_ne!(first.manifest.digest()?, second.manifest.digest()?);
+    Ok(())
+}
+
+#[test]
+fn policy_authenticated_presentation_opens_the_signed_request_and_rejects_tampering()
+-> TestResult {
+    let principals = fixture_principals()?;
+    let item_id = ItemId::from_bytes([0x03; 32])?;
+    let public_label = ReviewLabelBytes::new(b"ExampleItem".to_vec())?;
+    let mut label = OwnerReviewLabelV1 {
+        schema: 1,
+        label_id: LabelId::from_bytes([0xb0; 32])?,
+        label_revision: 1,
+        subject_kind: PresentationSubjectV1::Item,
+        vault_id: VaultId::from_bytes([0x01; 32])?,
+        genesis_fingerprint: Digest32::new([0x02; 32]),
+        item_id: Some(item_id),
+        field_id: None,
+        subject_commitment: None,
+        public_label: public_label.clone(),
+        vault_policy_sequence: 1,
+        issued_at_ms: NOW_MS - 5_000,
+        expires_at_ms: Some(NOW_MS + 5_000),
+        issuer_owner_id: principals.owner_descriptor.principal_id,
+        issuer_key_fingerprint: signing_key_fingerprint(
+            1,
+            &principals.owner_descriptor.principal_id,
+            1,
+            &principals.owner_descriptor.verification_public_key,
+        ),
+        issuer_key_epoch: 1,
+        signature: Signature64::new([0; 64]),
+    };
+    label.signature = principals
+        .actors
+        .owner
+        .sign_validated_statement(&label.signature_preimage()?)?;
+    let labels = vec![label.clone()];
+
+    let mut witness_policy = fixture_witness_policy(&principals)?;
+    witness_policy.review_label_set_digest = owner_review_label_set_digest(&labels)?;
+    witness_policy.validate()?;
+    let witness_policy_digest = witness_policy.digest()?;
+    let policy = fixture_policy(&principals, &witness_policy, &witness_policy_digest)?;
+    let checkpoint = fixture_checkpoint(&principals, &witness_policy, &witness_policy_digest)?;
+
+    let entry = ApprovalPresentationEntryV1 {
+        subject_kind: PresentationSubjectV1::Item,
+        item_id: Some(item_id),
+        field_id: None,
+        subject_commitment: None,
+        presentation_kind: PresentationKindV1::OwnerReviewLabel,
+        display_bytes: PresentationDisplayBytes::new(b"ExampleItem".to_vec())?,
+        source_revision: Some(1),
+        source_revision_seal_id: Some(RevisionSealId::from_bytes([0x06; 32])?),
+        owner_review_label: Some(label),
+        blinding_nonce: PresentationNonce::from_bytes([0xb1; 32])?,
+    };
+    let presentation = ApprovalPresentationV1 {
+        entries: vec![entry.clone()],
+    };
+    let (mut manifest, _) = fixture_manifest(&principals.owner_descriptor, &witness_policy_digest)?;
+    manifest.presentation_digest = presentation.digest()?;
+    manifest.approval_target = ApprovalTargetV1 {
+        entries: vec![ApprovalTargetEntryV1 {
+            item_id,
+            field_id: None,
+            presentation_commitment: entry.commitment()?,
+        }],
+        presentation_digest: manifest.presentation_digest.clone(),
+    };
+    manifest.approval_target_digest = manifest.approval_target.digest()?;
+    let mut creator = WitnessRequestCreator::from_source(
+        TestRandom::new(0xcafe_babe_1122_3344),
+        ProtectionPolicy::EmergencyAllowDegraded,
+    );
+    let prepared = creator.create(
+        WitnessRequestContext {
+            policy: &policy,
+            checkpoint: &checkpoint,
+            requester: &principals.actors.owner,
+            review_labels: labels,
+            now_ms: NOW_MS,
+        },
+        manifest,
+        presentation,
+    )?;
+    let request = &prepared.request;
+    let manifest = &prepared.manifest;
+    let presentation = &prepared.presentation;
+    let labels = &prepared.review_labels;
+    assert_ne!(request.request_id, request.client_nonce);
+    assert_eq!(
+        request.request_session_key_fingerprint,
+        *prepared.session.fingerprint()
+    );
+
+    let review_input = ApprovalReviewInput {
+        policy: &policy,
+        checkpoint: &checkpoint,
+        request,
+        manifest,
+        presentation,
+        review_labels: labels,
+        now_ms: NOW_MS,
+    };
+    let validated = validate_policy_authenticated_presentation(review_input)?;
+    assert!(validated.is_human());
+    assert_eq!(validated.manifest(), manifest);
+    let review = render_complete_approval_review(review_input)?;
+    assert!(review.text().contains("ExampleItem"));
+    assert!(!review.text().contains('…'));
+    let mut approval_creator = ApprovalDecisionCreator::from_source(TestRandom::new(
+        0xfeed_face_5566_7788,
+    ));
+    let approval = approval_creator.create(
+        &policy,
+        &checkpoint,
+        &review,
+        &principals.actors.approvers[0],
+        ApprovalDecisionChoice {
+            decision: ApprovalDecisionKindV1::Approve,
+            reason: WitnessReasonV1::None,
+            now_ms: NOW_MS,
+        },
+    )?;
+    validate_approval_decision(&policy, &checkpoint, request, manifest, &approval, NOW_MS)?;
+    let mut replayed_for_another_request = approval;
+    replayed_for_another_request.request_digest = Digest32::new([0xbd; 32]);
+    assert!(matches!(
+        validate_approval_decision(
+            &policy,
+            &checkpoint,
+            request,
+            manifest,
+            &replayed_for_another_request,
+            NOW_MS,
+        )
+        .map_err(WitnessEngineError::reason),
+        Err(WitnessReasonV1::Invalid)
+    ));
+
+    assert!(matches!(
+        validate_policy_authenticated_presentation(ApprovalReviewInput {
+            review_labels: &[],
+            ..review_input
+        })
+        .map_err(|error| error.kind()),
+        Err(ReviewLabelErrorKind::InvalidScope)
+    ));
+    let mut tampered = presentation.clone();
+    tampered.entries[0].source_revision_seal_id =
+        Some(RevisionSealId::from_bytes([0xb2; 32])?);
+    assert!(matches!(
+        validate_policy_authenticated_presentation(ApprovalReviewInput {
+            presentation: &tampered,
+            ..review_input
+        })
+        .map_err(|error| error.kind()),
+        Err(ReviewLabelErrorKind::InvalidScope)
+    ));
+    Ok(())
+}
+
+#[test]
 fn response_is_stable_and_escapes_only_after_anchor_publication() -> TestResult {
     let fixture = fixture()?;
     let witness_id = fixture.actors.witnesses[0].principal_id();
@@ -186,514 +583,5 @@ fn receipt_material_is_bound_to_the_request_policy_and_counted_members() -> Test
         .map_err(WitnessEngineError::reason),
         Err(WitnessReasonV1::WrongScope)
     );
-    Ok(())
-}
-
-#[test]
-fn distinct_second_approve_from_one_identity_is_an_approval_conflict() -> TestResult {
-    let fixture = fixture()?;
-    let mut repeated = fixture.approvals[0].clone();
-    repeated.approval_id = ApprovalId::from_bytes([0xe1; 32])?;
-    repeated.nonce = ApprovalId::from_bytes([0xe2; 32])?;
-    repeated.signature =
-        fixture.actors.approvers[0].sign_validated_approval(&repeated.signature_preimage()?)?;
-    let mut store = empty_store(&fixture);
-    let mut anchor = MemoryAnchor::default();
-    let clock = FixedClock {
-        wall_ms: NOW_MS,
-        monotonic_ms: 43,
-    };
-    let mut random = TestRandom::new(0x0123_4567_89ab_cdef);
-    register_fixture(&fixture, &mut store, &mut anchor, &clock, &mut random)?;
-    let progress = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &clock,
-            &mut random,
-        );
-        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?;
-        engine.decide(
-            &fixture.policy,
-            &fixture.request,
-            &fixture.manifest,
-            &[
-                fixture.approvals[0].clone(),
-                repeated,
-                fixture.approvals[1].clone(),
-            ],
-        )?
-    };
-    let WitnessProgress::Stable(response) = progress else {
-        return Err("expected stable denial".into());
-    };
-    assert_eq!(response.decision.decision, WitnessDecisionKindV1::Deny);
-    assert_eq!(response.decision.reason, WitnessReasonV1::ApprovalConflict);
-    assert!(response.contribution.is_none());
-    assert_eq!(
-        store
-            .state
-            .logical
-            .replay
-            .values()
-            .next()
-            .ok_or("missing replay entry")?
-            .approvals
-            .len(),
-        3
-    );
-    Ok(())
-}
-
-#[test]
-fn an_expired_stored_approval_stops_counting_without_poisoning_the_request() -> TestResult {
-    let fixture = fixture()?;
-    let mut short = fixture.approvals[0].clone();
-    short.expires_at_ms = NOW_MS + 1;
-    short.signature =
-        fixture.actors.approvers[0].sign_validated_approval(&short.signature_preimage()?)?;
-    let mut store = empty_store(&fixture);
-    let mut anchor = MemoryAnchor::default();
-    let initial_clock = FixedClock {
-        wall_ms: NOW_MS,
-        monotonic_ms: 44,
-    };
-    let mut random = TestRandom::new(0x1234_0000_5678_0000);
-    register_fixture(
-        &fixture,
-        &mut store,
-        &mut anchor,
-        &initial_clock,
-        &mut random,
-    )?;
-    {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &initial_clock,
-            &mut random,
-        );
-        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?;
-        assert_eq!(
-            engine.decide(
-                &fixture.policy,
-                &fixture.request,
-                &fixture.manifest,
-                &[short],
-            )?,
-            WitnessProgress::Pending
-        );
-    }
-
-    let later_clock = FixedClock {
-        wall_ms: NOW_MS + 2,
-        monotonic_ms: 45,
-    };
-    {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &later_clock,
-            &mut random,
-        );
-        assert_eq!(
-            engine.decide(
-                &fixture.policy,
-                &fixture.request,
-                &fixture.manifest,
-                &fixture.approvals[1..],
-            )?,
-            WitnessProgress::Pending
-        );
-    }
-    let retained = &store
-        .state
-        .logical
-        .replay
-        .values()
-        .next()
-        .ok_or("missing replay entry")?
-        .approvals;
-    assert_eq!(retained.len(), 1);
-    assert_eq!(retained[0].approver_id, fixture.approvals[1].approver_id);
-
-    let mut renewed = fixture.approvals[0].clone();
-    renewed.approval_id = ApprovalId::from_bytes([0xe3; 32])?;
-    renewed.nonce = ApprovalId::from_bytes([0xe4; 32])?;
-    renewed.issued_at_ms = NOW_MS + 2;
-    renewed.signature =
-        fixture.actors.approvers[0].sign_validated_approval(&renewed.signature_preimage()?)?;
-    let progress = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &later_clock,
-            &mut random,
-        );
-        engine.decide(
-            &fixture.policy,
-            &fixture.request,
-            &fixture.manifest,
-            &[renewed],
-        )?
-    };
-    let WitnessProgress::Stable(response) = progress else {
-        return Err("expected stable approval".into());
-    };
-    assert_eq!(response.decision.decision, WitnessDecisionKindV1::Approve);
-    Ok(())
-}
-
-#[test]
-fn request_time_boundaries_apply_skew_not_before_and_strict_expiry() -> TestResult {
-    let fixture = fixture()?;
-
-    let (request, manifest) = signed_time_variant(
-        &fixture,
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS,
-        None,
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 1,
-    )?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x101)?,
-        WitnessProgress::Reserved
-    );
-
-    let (request, manifest) = signed_time_variant(
-        &fixture,
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 1,
-        None,
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 2,
-    )?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x102)
-            .map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::NotYetValid)
-    );
-
-    let (request, manifest) = signed_time_variant(
-        &fixture,
-        NOW_MS - 1_000,
-        Some(NOW_MS + ACCEPTED_CLOCK_SKEW_MS),
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 1,
-    )?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x103)?,
-        WitnessProgress::Reserved
-    );
-
-    let (request, manifest) = signed_time_variant(
-        &fixture,
-        NOW_MS - 1_000,
-        Some(NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 1),
-        NOW_MS + ACCEPTED_CLOCK_SKEW_MS + 2,
-    )?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x104)
-            .map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::NotYetValid)
-    );
-
-    let (request, manifest) = signed_time_variant(&fixture, NOW_MS - 1_000, None, NOW_MS + 1)?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x105)?,
-        WitnessProgress::Reserved
-    );
-
-    let (request, manifest) = signed_time_variant(&fixture, NOW_MS - 1_000, None, NOW_MS)?;
-    assert_eq!(
-        reserve_once(&fixture, request, &manifest, NOW_MS, 0x106)
-            .map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::Expired)
-    );
-    Ok(())
-}
-
-#[test]
-fn forward_clock_jump_turns_a_reserved_request_into_a_stable_expiry_denial() -> TestResult {
-    let fixture = fixture()?;
-    let mut store = empty_store(&fixture);
-    let mut anchor = MemoryAnchor::default();
-    let initial_clock = FixedClock {
-        wall_ms: NOW_MS,
-        monotonic_ms: 48,
-    };
-    let mut random = TestRandom::new(0x4567_89ab_cdef_0123);
-    register_fixture(
-        &fixture,
-        &mut store,
-        &mut anchor,
-        &initial_clock,
-        &mut random,
-    )?;
-    {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &initial_clock,
-            &mut random,
-        );
-        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?;
-    }
-    let expiry_clock = FixedClock {
-        wall_ms: fixture.request.expires_at_ms,
-        monotonic_ms: 49,
-    };
-    let denied = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &expiry_clock,
-            &mut random,
-        );
-        engine.decide(
-            &fixture.policy,
-            &fixture.request,
-            &fixture.manifest,
-            &fixture.approvals,
-        )?
-    };
-    let WitnessProgress::Stable(denied) = denied else {
-        return Err("expected expiry denial".into());
-    };
-    assert_eq!(denied.decision.reason, WitnessReasonV1::Expired);
-    assert!(denied.contribution.is_none());
-    let retry = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &expiry_clock,
-            &mut random,
-        );
-        engine.decide(&fixture.policy, &fixture.request, &fixture.manifest, &[])?
-    };
-    let WitnessProgress::Stable(retry) = retry else {
-        return Err("expected stable expiry retry".into());
-    };
-    assert_eq!(retry.canonical_bytes()?, denied.canonical_bytes()?);
-    Ok(())
-}
-
-#[test]
-fn conflicting_request_id_terminalizes_only_the_original_reservation() -> TestResult {
-    let fixture = fixture()?;
-    let mut conflicting = fixture.request.clone();
-    conflicting.request_session_public_key = fixture.actors.witnesses[1]
-        .public_descriptor()?
-        .recipient_public_key;
-    conflicting.request_session_key_fingerprint =
-        recipient_public_key_fingerprint(&conflicting.request_session_public_key);
-    conflicting.client_signature = fixture
-        .actors
-        .owner
-        .sign_validated_statement(&conflicting.signature_preimage()?)?;
-    let mut store = empty_store(&fixture);
-    let mut anchor = MemoryAnchor::default();
-    let clock = FixedClock {
-        wall_ms: NOW_MS,
-        monotonic_ms: 46,
-    };
-    let mut random = TestRandom::new(0x2345_6789_abcd_ef01);
-    register_fixture(&fixture, &mut store, &mut anchor, &clock, &mut random)?;
-    let conflict_response = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &clock,
-            &mut random,
-        );
-        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?;
-        let progress = engine.reserve(&fixture.policy, conflicting.clone(), &fixture.manifest)?;
-        let WitnessProgress::Stable(response) = progress else {
-            return Err("expected replay-conflict denial".into());
-        };
-        response
-    };
-    assert_eq!(
-        conflict_response.decision.reason,
-        WitnessReasonV1::ReplayConflict
-    );
-    assert_eq!(
-        conflict_response.decision.request_digest,
-        fixture.request.digest()?
-    );
-    assert!(conflict_response.contribution.is_none());
-
-    let original_retry = {
-        let mut engine = WitnessEngine::new(
-            &fixture.actors.witnesses[0],
-            &mut store,
-            &mut anchor,
-            &clock,
-            &mut random,
-        );
-        engine.reserve(&fixture.policy, fixture.request.clone(), &fixture.manifest)?
-    };
-    let WitnessProgress::Stable(original_retry) = original_retry else {
-        return Err("expected stable original denial".into());
-    };
-    assert_eq!(
-        original_retry.canonical_bytes()?,
-        conflict_response.canonical_bytes()?
-    );
-
-    let mut engine = WitnessEngine::new(
-        &fixture.actors.witnesses[0],
-        &mut store,
-        &mut anchor,
-        &clock,
-        &mut random,
-    );
-    assert_eq!(
-        engine
-            .reserve(&fixture.policy, conflicting, &fixture.manifest)
-            .map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::ReplayConflict)
-    );
-    Ok(())
-}
-
-#[test]
-fn common_scope_check_rejects_each_changed_duplicate() -> TestResult {
-    let fixture = fixture()?;
-    assert_request_scope_mismatches(&fixture)?;
-    assert_manifest_scope_mismatches(&fixture)?;
-    let mut request = fixture.request.clone();
-    request.protocol_version = 2;
-    assert_eq!(
-        validate_request_manifest(&request, &fixture.manifest).map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::UnsupportedVersion)
-    );
-    Ok(())
-}
-
-fn assert_wrong_scope(
-    fixture: &Fixture,
-    name: &str,
-    change: impl FnOnce(&mut ActionManifestV1) -> TestResult,
-) -> TestResult {
-    let mut changed = fixture.manifest.clone();
-    change(&mut changed)?;
-    assert!(changed.validate_shape().is_ok(), "{name} fixture");
-    assert_eq!(
-        validate_request_manifest(&fixture.request, &changed).map_err(WitnessEngineError::reason),
-        Err(WitnessReasonV1::WrongScope),
-        "{name}"
-    );
-    Ok(())
-}
-
-fn assert_request_scope_mismatches(fixture: &Fixture) -> TestResult {
-    assert_wrong_scope(fixture, "request ID", |manifest| {
-        manifest.request_id = RequestId::from_bytes([0xd0; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "vault", |manifest| {
-        manifest.vault_id = VaultId::from_bytes([0xd1; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "genesis", |manifest| {
-        manifest.genesis_fingerprint = Digest32::new([0xd2; 32]);
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "item", |manifest| {
-        let item_id = ItemId::from_bytes([0xd3; 32])?;
-        manifest.item_id = item_id;
-        manifest.approval_target.entries[0].item_id = item_id;
-        manifest.approval_target_digest = manifest.approval_target.digest()?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "key epoch", |manifest| {
-        manifest.key_epoch = 2;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "access mode", |manifest| {
-        manifest.item_access_mode = ItemAccessMode::Mixed;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "slot", |manifest| {
-        manifest.slot_id = SlotId::from_bytes([0xd4; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "content role", |manifest| {
-        manifest.content_role = ContentRole::Descriptor;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "revision", |manifest| {
-        manifest.revision = 2;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "revision seal", |manifest| {
-        manifest.revision_seal_id = RevisionSealId::from_bytes([0xd5; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "policy sequence", |manifest| {
-        manifest.vault_policy_sequence = 2;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "policy hash", |manifest| {
-        manifest.vault_policy_hash = Digest32::new([0xd6; 32]);
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "witness policy ID", |manifest| {
-        manifest.witness_policy_id = WitnessPolicyId::from_bytes([0xd7; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "witness policy revision", |manifest| {
-        manifest.witness_policy_revision = 2;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "witness policy digest", |manifest| {
-        manifest.witness_policy_digest = Digest32::new([0xd8; 32]);
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "requester", |manifest| {
-        manifest.requester_principal_id = PrincipalId::from_bytes([0xd9; 32])?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "requested role", |manifest| {
-        manifest.requested_access_role = AccessRole::Reader;
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn assert_manifest_scope_mismatches(fixture: &Fixture) -> TestResult {
-    assert_wrong_scope(fixture, "operation", |manifest| {
-        manifest.operation = WitnessOperationV1::WritePrivateFile;
-        manifest.operation_context = OperationContextV1::WritePrivateFile;
-        manifest.output_sink = OutputSinkV1::PrivateFile;
-        manifest.output_sink_commitment = Some(Digest32::new([0xda; 32]));
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "approval target", |manifest| {
-        manifest.approval_target.entries[0].presentation_commitment = Digest32::new([0xdb; 32]);
-        manifest.approval_target_digest = manifest.approval_target.digest()?;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "issued time", |manifest| {
-        manifest.issued_at_ms -= 1;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "not before", |manifest| {
-        manifest.not_before_ms = Some(NOW_MS);
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "expiry", |manifest| {
-        manifest.expires_at_ms -= 1;
-        Ok(())
-    })?;
-    assert_wrong_scope(fixture, "workload", |manifest| {
-        manifest.output_limit_bytes -= 1;
-        Ok(())
-    })?;
     Ok(())
 }

@@ -1,14 +1,32 @@
 use super::*;
 
+use std::cell::Cell;
+
 use jury_protected::{ProtectedMemory, ProtectionPolicy};
 use jury_protocol::{
     identity_v1::KdfProfile,
-    vault_v1::{ItemFieldKind, ItemFieldV1, ItemFieldValue},
+    vault_v1::{
+        ItemFieldKind, ItemFieldV1, ItemFieldValue, RequestId, ResponseId, ShareCiphertext49,
+    },
+    witness_v1::{
+        ActionManifestV1, ApprovalPresentationV1, ApprovalTargetEntryV1, ApprovalTargetV1,
+        OperationContextV1, OutputSinkV1, PlatformAssuranceV1, StdinModeV1,
+        VaultPolicyCheckpointV1, WitnessContributionEnvelopeV1, WitnessDecisionKindV1,
+        WitnessDecisionV1, WitnessOperationV1, WitnessReasonV1, WitnessResponseV1,
+        owner_review_label_set_digest, signing_key_fingerprint,
+    },
 };
 
+use crate::access_provider::{
+    AccessCompletion, AccessProviderErrorKind, ItemAccessError, ItemAccessOutcome,
+    ItemAccessProvider, NeverCancelled, RevisionAccessRequest, RevisionAccessTarget,
+    WitnessedItemAccessProvider,
+};
+use crate::domain::Capability;
 use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};
 use crate::local_state::{CheckpointCandidate, PrincipalLocalState};
-use crate::policy::PolicyCreator;
+use crate::policy::{AutomaticReadTarget, PolicyCreator};
+use crate::witness_client::{PreparedWitnessRequest, WitnessRequestContext, WitnessRequestCreator};
 use vsss_rs::IdentifierGf256;
 
 struct FillByte(u8);
@@ -16,6 +34,16 @@ struct FillByte(u8);
 impl RandomSource for FillByte {
     fn fill(&mut self, destination: &mut [u8]) -> Result<(), jury_protected::EntropyError> {
         destination.fill(self.0);
+        Ok(())
+    }
+}
+
+struct IncrementingRandom(u8);
+
+impl RandomSource for IncrementingRandom {
+    fn fill(&mut self, destination: &mut [u8]) -> Result<(), jury_protected::EntropyError> {
+        destination.fill(self.0);
+        self.0 = self.0.wrapping_add(1);
         Ok(())
     }
 }
@@ -480,310 +508,4 @@ fn direct_create_and_rekey_round_trip_with_revision_separation()
     Ok(())
 }
 
-#[test]
-fn witnessed_only_capsules_reconstruct_only_the_selected_revision_secret()
--> Result<(), Box<dyn std::error::Error>> {
-    let protection = ProtectionPolicy::EmergencyAllowDegraded;
-    let passphrase = ProtectedMemory::initialize(15, protection, |output| {
-        output.copy_from_slice(b"ExamplePass1234");
-        Ok::<usize, ()>(output.len())
-    })?;
-    let mut identities = IdentityCreator::new();
-    let created = identities.create(
-        PrincipalKind::Human,
-        KdfProfile::PortableV1,
-        1,
-        &passphrase,
-        |_| false,
-    )?;
-    let UnlockedIdentity::VaultPrincipal(owner) = unlock(&created.file, &passphrase)? else {
-        return Err("owner identity role differs".into());
-    };
-    let mut policies = PolicyCreator::new();
-    let mut created_policy = policies.create(&owner, 1, |_| false)?;
-    let (mut witness_policy, _, _) = crate::policy::witness_tests::frozen_policy()?;
-
-    let mut witness_private_keys = Vec::new();
-    let mut additions = Vec::new();
-    for (index, descriptor) in witness_policy.witness_descriptors.iter().enumerate() {
-        let marker = 0x61_u8.saturating_add(u8::try_from(index)?);
-        let (private, public) =
-            crypto::generate_recipient_keypair(protection, &mut FillByte(marker))?;
-        assert!(public == descriptor.contribution_public_key);
-        witness_private_keys.push(private);
-        additions.push(principal_add(
-            descriptor.witness_id,
-            PrincipalKind::Witness,
-            public,
-            0x31_u8.saturating_add(u8::try_from(index)?),
-        )?);
-    }
-    for (index, descriptor) in witness_policy.approver_descriptors.iter().enumerate() {
-        let (_, recipient) = crypto::generate_recipient_keypair(
-            protection,
-            &mut FillByte(0x71_u8.saturating_add(u8::try_from(index)?)),
-        )?;
-        additions.push(principal_add(
-            descriptor.approver_id,
-            PrincipalKind::Approver,
-            recipient,
-            0x21_u8.saturating_add(u8::try_from(index)?),
-        )?);
-    }
-    additions.sort_by_key(|operation| match operation {
-        PolicyOperationV1::PrincipalAdd { descriptor, .. } => descriptor.principal_id,
-        _ => owner.principal_id(),
-    });
-    let added = created_policy
-        .state
-        .prepare_revision(&owner, 2, additions)?;
-    created_policy.journal.revisions.push(added.revision);
-    witness_policy.vault_id = created_policy.state.vault_id();
-    witness_policy.genesis_fingerprint = created_policy.state.genesis_fingerprint().clone();
-    witness_policy.vault_policy_sequence = 2;
-    let witness_digest = witness_policy.digest()?;
-    let policy = crate::policy::replay_policy_with_witness_policies(
-        &created_policy.journal,
-        std::slice::from_ref(&witness_policy),
-    )?;
-
-    let descriptor = ItemDescriptorV1::new("ExampleWitnessedItem".to_owned())?;
-    let state = ItemStateV1 {
-        plaintext_schema: 1,
-        fields: Vec::new(),
-    };
-    let mut items = ItemCreator::new(protection);
-    let created_item = items.prepare_create(
-        &policy,
-        &owner,
-        3,
-        NewItem {
-            kind: ItemKind::Canonical,
-            descriptor: descriptor.clone(),
-            state: state.clone(),
-            bucket_id: 1,
-            access: ItemAccessPlan {
-                grants: Vec::new(),
-                direct_recipient_ids: Vec::new(),
-                witness_policy_digest: Some(witness_digest.clone()),
-            },
-        },
-        &ItemArtifactInventory::default(),
-    )?;
-    let witnessed = created_item
-        .policy
-        .revision
-        .operations
-        .iter()
-        .find_map(|operation| match operation {
-            PolicyOperationV1::ItemCreate {
-                direct_slots,
-                witnessed_state,
-                ..
-            } if direct_slots.is_empty() => witnessed_state.as_ref(),
-            _ => None,
-        })
-        .ok_or("witnessed-only slots absent")?;
-    assert!(witnessed.has_item_quorum_claim(0));
-    let descriptor_secret =
-        reconstruct_slot_secret(&witnessed.slots[0], &witness_private_keys, protection)?;
-    let body_secret =
-        reconstruct_slot_secret(&witnessed.slots[1], &witness_private_keys, protection)?;
-    assert!(open_descriptor(&created_item.envelope, &descriptor_secret)? == descriptor);
-    assert!(open_body(&created_item.envelope, &body_secret)? == state);
-    assert!(matches!(
-        open_body(&created_item.envelope, &descriptor_secret),
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
-
-    let partial_secret = reconstruct_slot_secret_with_count(
-        &witnessed.slots[1],
-        &witness_private_keys,
-        protection,
-        1,
-    );
-    assert!(partial_secret.is_err());
-
-    let mixed = items.prepare_create(
-        &policy,
-        &owner,
-        3,
-        NewItem {
-            kind: ItemKind::Canonical,
-            descriptor: descriptor.clone(),
-            state: state.clone(),
-            bucket_id: 1,
-            access: ItemAccessPlan {
-                grants: Vec::new(),
-                direct_recipient_ids: vec![owner.principal_id()],
-                witness_policy_digest: Some(witness_digest.clone()),
-            },
-        },
-        &ItemArtifactInventory::default(),
-    )?;
-    let (mixed_direct, mixed_witnessed) = mixed
-        .policy
-        .revision
-        .operations
-        .iter()
-        .find_map(|operation| match operation {
-            PolicyOperationV1::ItemCreate {
-                direct_slots,
-                witnessed_state: Some(witnessed_state),
-                ..
-            } => Some((direct_slots, witnessed_state)),
-            _ => None,
-        })
-        .ok_or("mixed slots absent")?;
-    assert!(!mixed_direct.is_empty());
-    assert!(!mixed_witnessed.has_item_quorum_claim(mixed_direct.len()));
-
-    let mut duplicate_operation = created_item.policy.revision.operations[0].clone();
-    if let PolicyOperationV1::ItemCreate {
-        witnessed_state: Some(state),
-        ..
-    } = &mut duplicate_operation
-    {
-        state.slots[0].capsules[1] = state.slots[0].capsules[0].clone();
-        state.slots[0].capsule_set_digest = state.slots[0].recomputed_capsule_set_digest()?;
-        state.digest = state.recomputed_digest()?;
-    }
-    assert!(
-        jury_protocol::vault_v1::validate_policy_operation_context(
-            &duplicate_operation,
-            2,
-            &policy.vault_id(),
-            policy.genesis_fingerprint(),
-        )
-        .is_err()
-    );
-
-    let mut next_witness_policy = witness_policy.clone();
-    next_witness_policy.revision = 2;
-    next_witness_policy.predecessor_policy_digest = witness_digest;
-    next_witness_policy.vault_policy_sequence = 3;
-    next_witness_policy.vault_policy_hash = FixedBytes::new([0x73; 32]);
-    let next_witness_digest = next_witness_policy.digest()?;
-    let mut journal = created_policy.journal.clone();
-    journal.revisions.push(created_item.policy.revision.clone());
-    let rekey_policy = crate::policy::replay_policy_with_witness_policies(
-        &journal,
-        &[witness_policy, next_witness_policy],
-    )?;
-    let mut inventory = ItemArtifactInventory::default();
-    inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.descriptor.revision_seal_id);
-    inventory
-        .revision_seal_ids
-        .insert(created_item.envelope.current_revision.revision_seal_id);
-    inventory
-        .nonces
-        .insert(created_item.envelope.descriptor.nonce.clone());
-    inventory
-        .nonces
-        .insert(created_item.envelope.current_revision.nonce.clone());
-    inventory
-        .slot_ids
-        .extend(witnessed.slots.iter().map(|slot| slot.slot_id));
-    let rekeyed = items.prepare_rekey(
-        &rekey_policy,
-        &owner,
-        4,
-        &created_item.envelope,
-        RekeyedItem {
-            descriptor,
-            state: state.clone(),
-            bucket_id: 1,
-            access: ItemAccessPlan {
-                grants: Vec::new(),
-                direct_recipient_ids: Vec::new(),
-                witness_policy_digest: Some(next_witness_digest),
-            },
-            principal_replacement: None,
-            principal_registration: None,
-            owner_change: None,
-        },
-        &inventory,
-    )?;
-    let replacement = rekeyed
-        .policy
-        .revision
-        .operations
-        .iter()
-        .find_map(|operation| match operation {
-            PolicyOperationV1::ItemSlotsReplace {
-                witnessed_state: Some(state),
-                ..
-            } => Some(state),
-            _ => None,
-        })
-        .ok_or("witnessed replacement absent")?;
-    let next_body_secret =
-        reconstruct_slot_secret(&replacement.slots[1], &witness_private_keys, protection)?;
-    assert!(matches!(
-        open_body(&rekeyed.envelope, &body_secret),
-        Err(error) if error.kind() == ItemErrorKind::AuthenticationFailed
-    ));
-    assert!(open_body(&rekeyed.envelope, &next_body_secret)? == state);
-    Ok(())
-}
-
-fn principal_add(
-    principal_id: PrincipalId,
-    kind: PrincipalKind,
-    recipient_public_key: RecipientPublicKey1216,
-    signing_seed: u8,
-) -> Result<PolicyOperationV1, Box<dyn std::error::Error>> {
-    let seed = [signing_seed; 32];
-    let mut descriptor = jury_protocol::vault_v1::PrincipalDescriptorV1 {
-        descriptor_version: 1,
-        principal_id,
-        principal_kind: kind,
-        recipient_public_key,
-        verification_public_key: crypto::verification_public_key_bytes(&seed)?,
-        self_signature: Signature64::new([0; 64]),
-    };
-    descriptor.self_signature = crypto::sign_bytes(&seed, &descriptor.self_signature_preimage()?)?;
-    Ok(PolicyOperationV1::PrincipalAdd {
-        descriptor,
-        display_label: format!("Example{signing_seed}"),
-        registration_proof_digest: FixedBytes::new([signing_seed; 32]),
-    })
-}
-
-fn reconstruct_slot_secret(
-    slot: &WitnessedSlotV1,
-    private_keys: &[ProtectedMemory],
-    protection: ProtectionPolicy,
-) -> Result<ProtectedRevisionSecret, Box<dyn std::error::Error>> {
-    reconstruct_slot_secret_with_count(slot, private_keys, protection, usize::from(slot.threshold))
-}
-
-fn reconstruct_slot_secret_with_count(
-    slot: &WitnessedSlotV1,
-    private_keys: &[ProtectedMemory],
-    protection: ProtectionPolicy,
-    count: usize,
-) -> Result<ProtectedRevisionSecret, Box<dyn std::error::Error>> {
-    let mut shares = Zeroizing::new(Vec::new());
-    for (capsule, private) in slot.capsules.iter().zip(private_keys).take(count) {
-        let share = crypto::open_hpke(
-            private,
-            &capsule.encapsulation,
-            capsule.ciphertext.as_bytes(),
-            &capsule.info_preimage(),
-            &capsule.aad_preimage(),
-            33,
-        )?;
-        let bytes = share.expose(<[u8]>::to_vec)?;
-        shares.push(bytes);
-    }
-    let reconstructed = Zeroizing::new(
-        Gf256::combine_bytes(shares.as_slice())
-            .map_err(|error| format!("combine witnessed shares: {error:?}"))?,
-    );
-    Ok(ProtectedRevisionSecret {
-        bytes: protect(&reconstructed, protection)?,
-    })
-}
+include!("item_tests/witnessed.rs");

@@ -13,10 +13,10 @@ mod validate;
 pub use bytes::{
     ApprovalId, BoundedBytes, ByteStringError, CancellationId, DescriptorCiphertext272, Digest32,
     DirectCiphertext48, Encapsulation1120, FieldId, FixedBytes, IdentityPayloadCiphertext149,
-    ItemCiphertext, ItemId, LabelId, MigrationId, Nonce12, PrincipalId, ReceiptId,
-    RecipientPublicKey1216, RecoveryId, RegistrationId, RequestId, ResponseId, RevisionSealId,
-    RolloverId, RootWrapCiphertext48, RotationId, Salt16, ShareCiphertext49, Signature64, SlotId,
-    VaultId, VerificationPublicKey32, WitnessPolicyId,
+    ItemCiphertext, ItemId, LabelId, MigrationId, Nonce12, PresentationNonce, PrincipalId,
+    ReceiptId, RecipientPublicKey1216, RecoveryId, RegistrationId, RequestId, ResponseId,
+    RevisionSealId, RolloverId, RootWrapCiphertext48, RotationId, Salt16, ShareCiphertext49,
+    Signature64, SlotId, VaultId, VerificationPublicKey32, WitnessPolicyId,
 };
 pub use plaintext::{
     ITEM_DESCRIPTOR_PLAINTEXT_BYTES, ItemDescriptorV1, ItemFieldKind, ItemFieldV1, ItemFieldValue,

@@ -663,10 +663,6 @@ impl WitnessIdentity {
 }
 
 impl ApproverIdentity {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "J20 consumes the role-bound signing seam")
-    )]
     pub(crate) fn sign_validated_approval(
         &self,
         preimage: &[u8],

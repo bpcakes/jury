@@ -486,10 +486,10 @@ struct ValidatedRequest {
 }
 
 #[derive(Clone)]
-struct ValidatedPublicRequest {
-    rule: WitnessAccessRule,
-    policy: WitnessPolicy,
-    slot: jury_protocol::vault_v1::WitnessedSlotV1,
+pub(crate) struct ValidatedPublicRequest {
+    pub(crate) rule: WitnessAccessRule,
+    pub(crate) policy: WitnessPolicy,
+    pub(crate) slot: jury_protocol::vault_v1::WitnessedSlotV1,
 }
 
 pub struct WitnessEngine<'a, S, A, C, R, I: ?Sized = WitnessIdentity> {
@@ -714,7 +714,7 @@ where
                 return Err(refused(WitnessReasonV1::ReplayConflict));
             }
             if let Some(response) = &known.response {
-                validate_cancellation(policy, request, cancellation, now_ms)?;
+                validate_request_cancellation(policy, request, cancellation, now_ms)?;
                 return Ok(if known.state == ReplayStateV1::Cancelled {
                     CancellationProgress::Cancelled(Box::new(response.clone()))
                 } else {
@@ -723,7 +723,7 @@ where
             }
         }
         self.validate_embedded_request(policy, &state, request, now_ms)?;
-        validate_cancellation(policy, request, cancellation, now_ms)?;
+        validate_request_cancellation(policy, request, cancellation, now_ms)?;
         let cancellation_bytes = CancellationBytes::new(
             cancellation
                 .canonical_bytes()
@@ -1586,7 +1586,7 @@ fn validate_registered_checkpoint<I: WitnessEngineIdentity + ?Sized>(
     validate_checkpoint(policy, checkpoint, identity)
 }
 
-fn validate_checkpoint_public<'a>(
+pub(crate) fn validate_checkpoint_public<'a>(
     policy: &'a PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
 ) -> Result<&'a WitnessPolicy, WitnessEngineError> {
@@ -1596,7 +1596,6 @@ fn validate_checkpoint_public<'a>(
     if checkpoint.vault_id != policy.vault_id()
         || checkpoint.genesis_fingerprint != *policy.genesis_fingerprint()
         || checkpoint.vault_policy_sequence != policy.sequence()
-        || checkpoint.vault_policy_hash != *policy.terminal_revision_hash()
     {
         return Err(refused(WitnessReasonV1::CheckpointFork));
     }
@@ -1616,7 +1615,8 @@ fn validate_checkpoint_public<'a>(
         || checkpoint.approver_set_digest != approver_set_digest
         || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
         || witness_policy.vault_policy_sequence != policy.sequence()
-        || witness_policy.vault_policy_hash != *policy.terminal_revision_hash()
+        || witness_policy.vault_policy_hash != checkpoint.vault_policy_hash
+        || policy.current_predecessor_hash() != Some(&checkpoint.vault_policy_hash)
     {
         return Err(refused(WitnessReasonV1::CheckpointFork));
     }
@@ -1704,56 +1704,16 @@ fn validate_approval_static(
     manifest: &ActionManifestV1,
     validated: &ValidatedRequest,
 ) -> Result<(), WitnessEngineError> {
-    approval
-        .validate_shape()
-        .map_err(|_| refused(WitnessReasonV1::Invalid))?;
-    let descriptor = validated
-        .policy
-        .approver_descriptors
-        .iter()
-        .find(|descriptor| {
-            descriptor.status == DescriptorStatus::Active
-                && descriptor.approver_id == approval.approver_id
-        })
-        .ok_or_else(|| refused(WitnessReasonV1::PolicyDenied))?;
-    if !validated
-        .rule
-        .eligible_approver_ids
-        .contains(&approval.approver_id)
-        || approval.request_id != request.request_id
-        || approval.request_digest
-            != request
-                .digest()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?
-        || approval.action_manifest_digest
-            != manifest
-                .digest()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?
-        || approval.presentation_digest != manifest.presentation_digest
-        || approval.witness_policy_id != request.witness_policy_id
-        || approval.witness_policy_revision != request.witness_policy_revision
-        || approval.witness_policy_digest != request.witness_policy_digest
-        || approval.intended_witness_set_digest
-            != request
-                .intended_witness_set_digest()
-                .map_err(|_| refused(WitnessReasonV1::Invalid))?
-        || approval.approver_key_fingerprint != descriptor.signing_key_fingerprint
-        || approval.approver_key_epoch != descriptor.signing_key_epoch
-        || approval.approval_mode != protocol_approval_mode(descriptor.approval_mode)
-        || approval.issued_at_ms < request.issued_at_ms
-        || approval.expires_at_ms > request.expires_at_ms
-    {
-        return Err(refused(WitnessReasonV1::Invalid));
-    }
-    crypto::verify_bytes(
-        &descriptor.signing_public_key,
-        &approval
-            .signature_preimage()
-            .map_err(|_| refused(WitnessReasonV1::Invalid))?,
-        &approval.signature,
+    validate_approval_against_policy(
+        approval,
+        request,
+        manifest,
+        &validated.rule,
+        &validated.policy,
     )
-    .map_err(|_| refused(WitnessReasonV1::InvalidSignature))
 }
+
+include!("witness_engine/approval_validation.rs");
 
 fn approval_is_current(approval: &ApprovalDecisionV1, now_ms: u64) -> bool {
     approval.issued_at_ms <= now_ms.saturating_add(ACCEPTED_CLOCK_SKEW_MS)
@@ -1763,7 +1723,8 @@ fn approval_is_current(approval: &ApprovalDecisionV1, now_ms: u64) -> bool {
             .is_none_or(|not_before| not_before <= now_ms.saturating_add(ACCEPTED_CLOCK_SKEW_MS))
 }
 
-fn validate_cancellation(
+/// Validates a cancellation against the exact signed request and current actor policy.
+pub fn validate_request_cancellation(
     policy: &PolicyState,
     request: &jury_protocol::witness_v1::WitnessRequestV1,
     cancellation: &RequestCancellationV1,
@@ -1907,7 +1868,7 @@ fn random_response_id(source: &mut impl RandomSource) -> Result<ResponseId, Witn
     ResponseId::from_bytes(bytes).map_err(|_| refused(WitnessReasonV1::InternalFailure))
 }
 
-fn validate_public_request(
+pub(crate) fn validate_public_request(
     policy: &PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
     request: &jury_protocol::witness_v1::WitnessRequestV1,

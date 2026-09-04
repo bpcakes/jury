@@ -11,6 +11,7 @@ use jury_protocol::vault_v1::{
     Digest32, FixedBytes, ItemEnvelopeV1, ItemId, PrincipalId, PrincipalKind, Signature64,
     VaultFileV1,
 };
+use jury_protocol::witness_v1::{OwnerReviewLabelV1, owner_review_label_set_digest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -88,6 +89,43 @@ pub struct TransferPublicCatalogV1 {
     pub version: u16,
     pub registration_proofs: Vec<RegistrationProofV1>,
     pub witness_policies: Vec<WitnessPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_label_sets: Vec<ReviewLabelSetV1>,
+}
+
+/// One complete owner-signed review-label set addressed by its policy digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewLabelSetV1 {
+    pub digest: Digest32,
+    pub labels: Vec<OwnerReviewLabelV1>,
+}
+
+impl ReviewLabelSetV1 {
+    pub fn new(mut labels: Vec<OwnerReviewLabelV1>) -> Result<Self, TransferError> {
+        labels.sort_by_key(|label| label.label_id);
+        let digest = owner_review_label_set_digest(&labels)
+            .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?;
+        let set = Self { digest, labels };
+        set.validate()?;
+        Ok(set)
+    }
+
+    fn validate(&self) -> Result<(), TransferError> {
+        if self
+            .labels
+            .windows(2)
+            .any(|pair| pair[0].label_id >= pair[1].label_id)
+            || self
+                .labels
+                .iter()
+                .any(|label| label.validate_shape().is_err())
+            || owner_review_label_set_digest(&self.labels).ok().as_ref() != Some(&self.digest)
+        {
+            return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+        }
+        Ok(())
+    }
 }
 
 impl TransferPublicCatalogV1 {
@@ -97,6 +135,7 @@ impl TransferPublicCatalogV1 {
             version: 1,
             registration_proofs: Vec::new(),
             witness_policies: Vec::new(),
+            review_label_sets: Vec::new(),
         }
     }
 
@@ -108,6 +147,23 @@ impl TransferPublicCatalogV1 {
             version: 1,
             registration_proofs,
             witness_policies,
+            review_label_sets: Vec::new(),
+        };
+        catalog.validate()?;
+        Ok(catalog)
+    }
+
+    pub fn with_review_label_sets(
+        registration_proofs: Vec<RegistrationProofV1>,
+        witness_policies: Vec<WitnessPolicy>,
+        mut review_label_sets: Vec<ReviewLabelSetV1>,
+    ) -> Result<Self, TransferError> {
+        review_label_sets.sort_by_key(|set| set.digest.clone());
+        let catalog = Self {
+            version: 1,
+            registration_proofs,
+            witness_policies,
+            review_label_sets,
         };
         catalog.validate()?;
         Ok(catalog)
@@ -153,6 +209,17 @@ impl TransferPublicCatalogV1 {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
             prior_digest = Some(digest);
+        }
+        let mut prior_label_digest: Option<Digest32> = None;
+        for set in &self.review_label_sets {
+            set.validate()?;
+            if prior_label_digest
+                .as_ref()
+                .is_some_and(|prior| prior >= &set.digest)
+            {
+                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
+            }
+            prior_label_digest = Some(set.digest.clone());
         }
         Ok(())
     }

@@ -523,7 +523,6 @@ fn validate_checkpoint(
     if checkpoint.vault_id != policy.vault_id()
         || checkpoint.genesis_fingerprint != *policy.genesis_fingerprint()
         || checkpoint.vault_policy_sequence != policy.sequence()
-        || checkpoint.vault_policy_hash != *policy.terminal_revision_hash()
         || checkpoint.witness_policy_id != witness_policy.witness_policy_id
         || checkpoint.witness_policy_revision != witness_policy.revision
         || checkpoint.witness_policy_digest
@@ -533,6 +532,8 @@ fn validate_checkpoint(
         || checkpoint.witness_set_digest != witness_set_digest
         || checkpoint.approver_set_digest != approver_set_digest
         || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
+        || checkpoint.vault_policy_hash != witness_policy.vault_policy_hash
+        || policy.current_predecessor_hash() != Some(&checkpoint.vault_policy_hash)
     {
         return Err(invalid(CheckpointStatusErrorKind::InvalidCheckpoint));
     }

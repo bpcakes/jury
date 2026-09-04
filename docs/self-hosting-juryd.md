@@ -324,8 +324,13 @@ witness.
 
 ## Current scope boundary
 
-This adapter and the J23 receipt/operations surfaces can be built and operated
-now. The end-user witnessed request/approval/open workflow remains J22 work.
-Running `juryd`, collecting acknowledgements, or verifying a receipt therefore
-does not make the current `jury` client an operational witnessed-secret path and
+This adapter and the witnessed request/approval/open client surfaces can be
+built and operated now. The client supplies each endpoint explicitly as
+`WITNESS_ID,BASE_URL,CREDENTIAL_FILE[,CA_CERTIFICATE]`; HTTPS requires the
+pinned CA, redirects are disabled, and HTTP requires a literal loopback address
+plus `--allow-insecure-loopback`. Detached public requests do not retain a
+session private key and cannot be resumed for execution; a foreground governed
+operation creates a fresh request while keeping that receiver only in memory.
+Running `juryd`, collecting acknowledgements, opening an item, or verifying a
+receipt therefore does not make the current implementation production-safe and
 is not evidence that Jury protects secrets.
