@@ -194,6 +194,48 @@ fn restore_archive(request: RestoreRequest<'_>) -> Result<RestoredInstallation, 
     restore_archive_with_observer(request, &mut |_| Ok(()))
 }
 
+#[cfg(test)]
+pub(super) struct RestoreTestRequest<'a> {
+    pub(super) cli: &'a Cli,
+    pub(super) input: &'a Path,
+    pub(super) target_home: &'a mut VaultHomeLocation,
+    pub(super) source_home: &'a VaultHomeLocation,
+    pub(super) identity_target: &'a Path,
+    pub(super) state_root: &'a Path,
+    pub(super) environment: &'a Environment,
+    pub(super) protection: ProtectionPolicy,
+    pub(super) expected_vault_id: jury_protocol::vault_v1::VaultId,
+    pub(super) expected_genesis_fingerprint: Digest32,
+    pub(super) expected_owner_principal_id: PrincipalId,
+}
+
+#[cfg(test)]
+pub(super) fn restore_archive_expecting_source_for_test(
+    request: RestoreTestRequest<'_>,
+) -> Result<(), CliError> {
+    restore_archive(RestoreRequest {
+        cli: request.cli,
+        input: request.input,
+        target_home: request.target_home,
+        mode: RestoreMode::Drill {
+            source_home: request.source_home,
+            expected: RestoreSourceExpectation {
+                vault_id: request.expected_vault_id,
+                genesis_fingerprint: request.expected_genesis_fingerprint,
+                owner_principal_id: request.expected_owner_principal_id,
+            },
+        },
+        identity_target: RestoreIdentityTarget::Create(request.identity_target),
+        approver_identity_target: None,
+        witness_identity_target: None,
+        identity_profile: KdfProfile::PortableV1,
+        state_root: request.state_root,
+        environment: request.environment,
+        protection: request.protection,
+    })
+    .map(|_| ())
+}
+
 fn restore_archive_with_observer(
     mut request: RestoreRequest<'_>,
     observer: &mut dyn FnMut(RestorePublicationPoint) -> Result<(), CliError>,

@@ -5,7 +5,10 @@ mod restore;
 
 use output::{coverage_lines, recovery_output};
 #[cfg(test)]
-use restore::{RestorePublicationPoint, backup_restore_with_observer};
+use restore::{
+    RestorePublicationPoint, RestoreTestRequest, backup_restore_with_observer,
+    restore_archive_expecting_source_for_test,
+};
 pub(super) use restore::{backup_drill, backup_restore};
 
 pub(super) fn backup_create(

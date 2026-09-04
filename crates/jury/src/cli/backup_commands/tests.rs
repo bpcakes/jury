@@ -25,6 +25,66 @@ fn private_directory(path: &Path) -> TestResult {
     Ok(())
 }
 
+fn inject_once_at(
+    observed: RestorePublicationPoint,
+    fault: RestorePublicationPoint,
+    injected: &mut bool,
+    code: &'static str,
+) -> Result<(), CliError> {
+    if !*injected && observed == fault {
+        *injected = true;
+        Err(CliError::new(
+            CliErrorKind::Filesystem,
+            code,
+            "injected restore failure",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn exercise_optional_role_publication_retries(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+    identity_parent: &Path,
+) -> TestResult {
+    for fault in [
+        RestorePublicationPoint::ApproverIdentityPublished,
+        RestorePublicationPoint::WitnessIdentityPublished,
+    ] {
+        let mut injected = false;
+        let error = backup_restore_with_observer(
+            cli,
+            restore_arguments(cli),
+            environment,
+            current,
+            ProtectionPolicy::EmergencyAllowDegraded,
+            &mut |observed| {
+                inject_once_at(
+                    observed,
+                    fault,
+                    &mut injected,
+                    "injected-role-restore-failure",
+                )
+            },
+        )
+        .err()
+        .ok_or("the selected role publication fault was not injected")?;
+        assert_eq!(error.code(), "injected-role-restore-failure");
+        assert!(injected);
+        assert!(fs::read_dir(identity_parent)?.any(|entry| {
+            entry.is_ok_and(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".jury-vault-restore-")
+            })
+        }));
+    }
+    Ok(())
+}
+
 #[test]
 fn backup_local_state_snapshot_requires_the_vault_edit_lock() -> TestResult {
     let temporary = tempfile::tempdir()?;
@@ -418,43 +478,21 @@ fn restore_publishes_and_reads_back_every_included_identity_role() -> TestResult
         jury_backup_passphrase: Some(Zeroizing::new(b"ExampleBackupPassphrase".to_vec())),
         jury_new_passphrase: Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec())),
     };
-    for fault in [
-        RestorePublicationPoint::ApproverIdentityPublished,
-        RestorePublicationPoint::WitnessIdentityPublished,
-    ] {
-        let mut injected = false;
-        let error = backup_restore_with_observer(
-            &cli,
-            restore_arguments(&cli),
-            &environment,
-            &current,
-            ProtectionPolicy::EmergencyAllowDegraded,
-            &mut |observed| {
-                if !injected && observed == fault {
-                    injected = true;
-                    Err(CliError::new(
-                        CliErrorKind::Filesystem,
-                        "injected-role-restore-failure",
-                        "injected role restore failure",
-                    ))
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .err()
-        .ok_or("the selected role publication fault was not injected")?;
-        assert_eq!(error.code(), "injected-role-restore-failure");
-        assert!(injected);
-        assert!(fs::read_dir(&identity_parent)?.any(|entry| {
-            entry.is_ok_and(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".jury-vault-restore-")
-            })
-        }));
-    }
+    let missing_roles_cli = restore_cli(&backup, vault.clone(), owner.clone(), state.clone())?;
+    let missing_roles = backup_restore(
+        &missing_roles_cli,
+        restore_arguments(&missing_roles_cli),
+        &environment,
+        &current,
+        ProtectionPolicy::EmergencyAllowDegraded,
+    )
+    .err()
+    .ok_or("an all-role archive restored without all role targets")?;
+    assert_eq!(missing_roles.code(), "restore-role-target-mismatch");
+    assert!(!vault.exists());
+    assert!(!owner.exists());
+    assert!(!state.exists());
+    exercise_optional_role_publication_retries(&cli, &environment, &current, &identity_parent)?;
     let output = backup_restore(
         &cli,
         restore_arguments(&cli),
@@ -571,6 +609,36 @@ fn restore_requires_and_validates_expected_genesis_before_publication() -> TestR
         jury_new_passphrase: Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec())),
     };
 
+    let envelope = BackupEnvelopeV1::parse(&fs::read(&backup)?)?;
+    let occupied_state = state_parent.join("ExampleOccupiedState");
+    VaultStateDirectory::open_or_create(
+        &occupied_state,
+        envelope.header.vault_id.as_bytes(),
+        envelope.header.genesis_fingerprint.as_bytes(),
+        &[],
+        &[],
+    )?;
+    let occupied_vault = vault_parent.join("ExampleOccupiedStateVault");
+    let occupied_identity = identity_parent.join("ExampleOccupiedStateOwner.identity");
+    let occupied_cli = restore_cli(
+        &backup,
+        occupied_vault.clone(),
+        occupied_identity.clone(),
+        occupied_state,
+    )?;
+    let occupied_error = backup_restore(
+        &occupied_cli,
+        restore_arguments(&occupied_cli),
+        &environment,
+        &current,
+        ProtectionPolicy::EmergencyAllowDegraded,
+    )
+    .err()
+    .ok_or("restore unexpectedly accepted existing lineage state")?;
+    assert_eq!(occupied_error.code(), "restore-state-exists");
+    assert!(!occupied_vault.exists());
+    assert!(!occupied_identity.exists());
+
     cli.expected_genesis = None;
     let missing_error = backup_restore(
         &cli,
@@ -597,6 +665,87 @@ fn restore_requires_and_validates_expected_genesis_before_publication() -> TestR
     .err()
     .ok_or("wrong expected genesis unexpectedly restored the backup")?;
     assert_eq!(error.code(), "genesis-fingerprint-mismatch");
+    assert!(!vault.exists());
+    assert!(!identity.exists());
+    assert!(!state.exists());
+    assert!(!fs::read_dir(identity_parent)?.any(|entry| {
+        entry.is_ok_and(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".jury-vault-restore-")
+        })
+    }));
+    Ok(())
+}
+
+#[test]
+fn drill_source_mismatch_is_rejected_before_publication() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    let offline = root.join("offline");
+    let current = root.join("current");
+    let data = root.join("data");
+    let source_state = root.join("source-state");
+    let source_home_path = root.join("source-home");
+    let vault_parent = root.join("vault-parent");
+    let identity_parent = root.join("identity-parent");
+    let state_parent = root.join("state-parent");
+    for directory in [
+        &offline,
+        &current,
+        &data,
+        &source_state,
+        &source_home_path,
+        &vault_parent,
+        &identity_parent,
+        &state_parent,
+    ] {
+        private_directory(directory)?;
+    }
+    let backup = offline.join("ExampleVault.backup");
+    write_owner_backup(&backup)?;
+    let vault = vault_parent.join("ExampleDrillVault");
+    let identity = identity_parent.join("ExampleDrillOwner.identity");
+    let state = state_parent.join("ExampleDrillState");
+    let cli = restore_cli(&backup, vault.clone(), identity.clone(), state.clone())?;
+    let environment = Environment {
+        jury_home: None,
+        jury_identity_home: None,
+        jury_identity: None,
+        jury_identity_file: None,
+        jury_state_home: Some(source_state.into_os_string()),
+        xdg_data_home: Some(data.clone().into_os_string()),
+        xdg_state_home: Some(root.join("xdg-state").into_os_string()),
+        user_home: Some(data.into_os_string()),
+        jury_identity_passphrase: None,
+        jury_backup_passphrase: Some(Zeroizing::new(b"ExampleBackupPassphrase".to_vec())),
+        jury_new_passphrase: Some(Zeroizing::new(b"ExampleNewIdentityPassphrase".to_vec())),
+    };
+    let source_home = VaultHomeLocation::Detached {
+        path: source_home_path,
+        source: HomeSource::Explicit,
+    };
+    let mut target_home = VaultHomeLocation::Detached {
+        path: vault.clone(),
+        source: HomeSource::Explicit,
+    };
+    let error = restore_archive_expecting_source_for_test(RestoreTestRequest {
+        cli: &cli,
+        input: &backup,
+        target_home: &mut target_home,
+        source_home: &source_home,
+        identity_target: &identity,
+        state_root: &state,
+        environment: &environment,
+        protection: ProtectionPolicy::EmergencyAllowDegraded,
+        expected_vault_id: jury_protocol::vault_v1::VaultId::from_bytes([0xff; 32])?,
+        expected_genesis_fingerprint: Digest32::new([0xee; 32]),
+        expected_owner_principal_id: PrincipalId::from_bytes([0xdd; 32])?,
+    })
+    .err()
+    .ok_or("mismatched drill source unexpectedly published")?;
+    assert_eq!(error.code(), "drill-source-mismatch");
     assert!(!vault.exists());
     assert!(!identity.exists());
     assert!(!state.exists());
@@ -663,16 +812,7 @@ fn restore_reconciles_each_injected_cross_directory_publication_failure() -> Tes
             &current,
             ProtectionPolicy::EmergencyAllowDegraded,
             &mut |observed| {
-                if !injected && observed == fault {
-                    injected = true;
-                    Err(CliError::new(
-                        CliErrorKind::Filesystem,
-                        "injected-restore-failure",
-                        "injected restore failure",
-                    ))
-                } else {
-                    Ok(())
-                }
+                inject_once_at(observed, fault, &mut injected, "injected-restore-failure")
             },
         );
         let error = match injected_result {
