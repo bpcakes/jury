@@ -107,7 +107,7 @@ pub(super) fn approve_request(
 ) -> Result<CommandOutput, CliError> {
     let public = load_public_request_context(cli, environment, current)?;
     let artifact = read_request_artifact(&arguments.request)?;
-    let now_ms = timestamp_ms()?;
+    let review_time_ms = timestamp_ms()?;
     let review = render_complete_approval_review(ApprovalReviewInput {
         policy: &public.policy,
         checkpoint: &artifact.checkpoint,
@@ -115,7 +115,7 @@ pub(super) fn approve_request(
         manifest: &artifact.action_manifest,
         presentation: &artifact.presentation,
         review_labels: &artifact.review_labels,
-        now_ms,
+        now_ms: review_time_ms,
     })
     .map_err(|_| invalid_request_artifact())?;
     let expected = if arguments.deny { "deny" } else { "approve" };
@@ -148,6 +148,17 @@ pub(super) fn approve_request(
             "the approve command requires a separately protected approver identity",
         ));
     };
+    let decision_time_ms = timestamp_ms()?;
+    let review = render_complete_approval_review(ApprovalReviewInput {
+        policy: &public.policy,
+        checkpoint: &artifact.checkpoint,
+        request: &artifact.request,
+        manifest: &artifact.action_manifest,
+        presentation: &artifact.presentation,
+        review_labels: &artifact.review_labels,
+        now_ms: decision_time_ms,
+    })
+    .map_err(|_| invalid_request_artifact())?;
     let (decision_kind, reason) = approval_decision(arguments);
     let decision = ApprovalDecisionCreator::new()
         .create(
@@ -158,7 +169,7 @@ pub(super) fn approve_request(
             ApprovalDecisionChoice {
                 decision: decision_kind,
                 reason,
-                now_ms,
+                now_ms: decision_time_ms,
             },
         )
         .map_err(|_| invalid_approval_decision())?;

@@ -407,6 +407,67 @@ fn checkpoint_gap_fork_and_downgrade_have_distinct_safe_outcomes() -> TestResult
 }
 
 #[test]
+fn same_sequence_checkpoint_from_a_sibling_policy_branch_is_a_fork() -> TestResult {
+    let fixture = fixture()?;
+    let mut sibling_policy = fixture.policy.clone();
+    sibling_policy.terminal_revision_hash = Digest32::new([0x73; 32]);
+    *sibling_policy
+        .revision_hashes
+        .last_mut()
+        .ok_or("missing terminal revision hash")? =
+        sibling_policy.terminal_revision_hash.clone();
+
+    assert_eq!(
+        validate_checkpoint_public(&sibling_policy, &fixture.checkpoint)
+            .map(|_| ())
+            .map_err(WitnessEngineError::reason),
+        Err(WitnessReasonV1::CheckpointFork)
+    );
+    Ok(())
+}
+
+#[test]
+fn unrelated_policy_revision_preserves_an_existing_witnessed_slot() -> TestResult {
+    let fixture = fixture()?;
+    let mut current_policy = fixture.policy.clone();
+    current_policy.sequence = 2;
+    current_policy.terminal_revision_hash = Digest32::new([0x73; 32]);
+    current_policy
+        .revision_hashes
+        .push(current_policy.terminal_revision_hash.clone());
+
+    let mut checkpoint = fixture.checkpoint.clone();
+    checkpoint.vault_policy_sequence = current_policy.sequence();
+    checkpoint.vault_policy_hash = current_policy.terminal_revision_hash().clone();
+    checkpoint.predecessor_checkpoint_digest = fixture.checkpoint.digest()?;
+    checkpoint.issued_at_ms = NOW_MS;
+    checkpoint.signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&checkpoint.signature_preimage()?)?;
+
+    let mut manifest = fixture.manifest.clone();
+    manifest.vault_policy_sequence = current_policy.sequence();
+    manifest.vault_policy_hash = current_policy.terminal_revision_hash().clone();
+    let mut request = fixture.request.clone();
+    request.vault_policy_sequence = current_policy.sequence();
+    request.vault_policy_hash = current_policy.terminal_revision_hash().clone();
+    request.policy_checkpoint_digest = checkpoint.digest()?;
+    request.action_manifest_digest = manifest.digest()?;
+    request.workload_digest = manifest.workload_digest()?;
+    request.client_signature = fixture
+        .actors
+        .owner
+        .sign_validated_statement(&request.signature_preimage()?)?;
+
+    let validated = validate_public_request(&current_policy, &checkpoint, &request, &manifest)?;
+    assert_eq!(validated.slot.vault_policy_sequence, 1);
+    assert_eq!(validated.policy.vault_policy_sequence, 1);
+    assert_eq!(request.vault_policy_sequence, 2);
+    Ok(())
+}
+
+#[test]
 fn rotation_reason_matches_active_descriptors_by_identity() -> TestResult {
     let fixture = fixture()?;
     let mut identity_random = TestRandom::new(0xabcd_1234_5678_90ef);

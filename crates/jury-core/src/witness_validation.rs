@@ -47,6 +47,7 @@ pub(crate) fn validate_request_policy(
     if request.vault_id != policy.vault_id()
         || request.genesis_fingerprint != *policy.genesis_fingerprint()
         || request.vault_policy_sequence != policy.sequence()
+        || request.vault_policy_hash != *policy.terminal_revision_hash()
     {
         return Err(RequestPolicyError::StalePolicy);
     }
@@ -109,9 +110,9 @@ pub(crate) fn validate_request_policy(
         .witness_policy(&request.witness_policy_digest)
         .ok_or(RequestPolicyError::StalePolicy)?
         .clone();
-    if witness_policy.vault_policy_sequence != request.vault_policy_sequence
-        || witness_policy.vault_policy_hash != request.vault_policy_hash
-        || policy.current_predecessor_hash() != Some(&request.vault_policy_hash)
+    if witness_policy.vault_policy_sequence > request.vault_policy_sequence
+        || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
+            != Some(&witness_policy.vault_policy_hash)
     {
         return Err(RequestPolicyError::StalePolicy);
     }
@@ -154,7 +155,7 @@ pub(crate) fn validate_request_policy(
                     && slot.revision_seal_id == request.revision_seal_id
                     && slot.key_epoch == request.key_epoch
                     && slot.item_access_mode == request.item_access_mode
-                    && slot.vault_policy_sequence == request.vault_policy_sequence
+                    && slot.vault_policy_sequence == witness_policy.vault_policy_sequence
                     && slot.witness_policy_id == request.witness_policy_id
                     && slot.witness_policy_revision == request.witness_policy_revision
                     && slot.witness_policy_digest == request.witness_policy_digest
@@ -176,14 +177,30 @@ pub(crate) fn validate_request_policy(
 pub const fn operation_capability(operation: WitnessOperationV1) -> Capability {
     match operation {
         WitnessOperationV1::ReadStdout
+        | WitnessOperationV1::WritePrivateFile
         | WitnessOperationV1::TemplateInjection
         | WitnessOperationV1::ChildEnvironment
         | WitnessOperationV1::ChildStdin => Capability::Read,
-        WitnessOperationV1::WritePrivateFile
-        | WitnessOperationV1::ItemMutation
-        | WitnessOperationV1::Backup => Capability::Write,
+        WitnessOperationV1::ItemMutation | WitnessOperationV1::Backup => Capability::Write,
         WitnessOperationV1::Recovery | WitnessOperationV1::AdministrativeRekey => {
             Capability::Administer
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_file_output_is_a_read_capability() {
+        assert_eq!(
+            operation_capability(WitnessOperationV1::WritePrivateFile),
+            Capability::Read
+        );
+        assert_eq!(
+            operation_capability(WitnessOperationV1::ItemMutation),
+            Capability::Write
+        );
     }
 }

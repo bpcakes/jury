@@ -291,7 +291,12 @@ pub fn validate_policy_authenticated_presentation<'a>(
         return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
     }
     for label in review_labels {
-        verify_owner_review_label(policy, label, request.vault_policy_sequence, now_ms)?;
+        verify_owner_review_label(
+            policy,
+            label,
+            validated.policy.vault_policy_sequence,
+            now_ms,
+        )?;
     }
     for entry in &presentation.entries {
         if entry.source_revision.is_some()
@@ -301,9 +306,7 @@ pub fn validate_policy_authenticated_presentation<'a>(
             return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
         }
         let display = entry.display_bytes.as_bytes();
-        if std::str::from_utf8(display).is_err()
-            || display.iter().any(|byte| byte.is_ascii_control())
-        {
+        if !is_meaningful_display(display) {
             return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
         }
         match entry.presentation_kind {
@@ -544,6 +547,12 @@ fn exact_byte_display(bytes: &[u8]) -> String {
     display
 }
 
+fn is_meaningful_display(display: &[u8]) -> bool {
+    !display.is_empty()
+        && std::str::from_utf8(display).is_ok()
+        && !display.iter().any(|byte| byte.is_ascii_control())
+}
+
 include!("witness_approval/signing.rs");
 
 #[cfg(test)]
@@ -728,6 +737,29 @@ mod tests {
                 .map_err(|error| error.kind()),
             Err(ReviewLabelErrorKind::InvalidScope)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn owner_label_creation_rejects_control_characters() -> Result<(), Box<dyn std::error::Error>> {
+        let (owner, policy) = owner_and_policy()?;
+        let mut creator = OwnerReviewLabelCreator::from_source(RepeatedRandom(0x71));
+        let error = creator
+            .create(
+                OwnerReviewLabelInput {
+                    policy: &policy,
+                    owner: &owner,
+                    label_revision: 1,
+                    subject: ReviewLabelSubject::Item(ItemId::from_bytes([0x72; 32])?),
+                    public_label: ReviewLabelBytes::new(b"Example\nItem".to_vec())?,
+                    target_policy_sequence: policy.sequence() + 1,
+                    issued_at_ms: 1_700_000_001_000,
+                    expires_at_ms: None,
+                },
+                |_| false,
+            )
+            .expect_err("control characters must not enter signed review labels");
+        assert_eq!(error.kind(), ReviewLabelErrorKind::InvalidScope);
         Ok(())
     }
 

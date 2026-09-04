@@ -1596,6 +1596,7 @@ pub(crate) fn validate_checkpoint_public<'a>(
     if checkpoint.vault_id != policy.vault_id()
         || checkpoint.genesis_fingerprint != *policy.genesis_fingerprint()
         || checkpoint.vault_policy_sequence != policy.sequence()
+        || checkpoint.vault_policy_hash != *policy.terminal_revision_hash()
     {
         return Err(refused(WitnessReasonV1::CheckpointFork));
     }
@@ -1614,9 +1615,9 @@ pub(crate) fn validate_checkpoint_public<'a>(
         || checkpoint.witness_set_digest != witness_set_digest
         || checkpoint.approver_set_digest != approver_set_digest
         || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
-        || witness_policy.vault_policy_sequence != policy.sequence()
-        || witness_policy.vault_policy_hash != checkpoint.vault_policy_hash
-        || policy.current_predecessor_hash() != Some(&checkpoint.vault_policy_hash)
+        || witness_policy.vault_policy_sequence > policy.sequence()
+        || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
+            != Some(&witness_policy.vault_policy_hash)
     {
         return Err(refused(WitnessReasonV1::CheckpointFork));
     }

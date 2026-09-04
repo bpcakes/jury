@@ -329,7 +329,8 @@ pub fn verify_owner_review_label(
     label
         .validate_shape()
         .map_err(|_| ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope))?;
-    if label.vault_id != policy.vault_id()
+    if !is_meaningful_display(label.public_label.as_bytes())
+        || label.vault_id != policy.vault_id()
         || label.genesis_fingerprint != *policy.genesis_fingerprint()
         || label.vault_policy_sequence != expected_policy_sequence
     {

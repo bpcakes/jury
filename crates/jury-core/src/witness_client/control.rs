@@ -204,17 +204,20 @@ impl VaultPolicyCheckpointCreator {
         let (approver_set_digest, witness_set_digest) = witness_policy
             .active_descriptor_set_digests()
             .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::InvalidInput))?;
-        let vault_policy_hash = policy
-            .current_predecessor_hash()
-            .filter(|digest| *digest == &witness_policy.vault_policy_hash)
-            .cloned()
-            .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
+        if witness_policy.vault_policy_sequence > policy.sequence()
+            || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
+                != Some(&witness_policy.vault_policy_hash)
+        {
+            return Err(WitnessRequestError::new(
+                WitnessRequestErrorKind::StalePolicy,
+            ));
+        }
         let mut checkpoint = jury_protocol::witness_v1::VaultPolicyCheckpointV1 {
             schema: 1,
             vault_id: policy.vault_id(),
             genesis_fingerprint: policy.genesis_fingerprint().clone(),
             vault_policy_sequence: policy.sequence(),
-            vault_policy_hash,
+            vault_policy_hash: policy.terminal_revision_hash().clone(),
             witness_policy_id: witness_policy.witness_policy_id,
             witness_policy_revision: witness_policy.revision,
             witness_policy_digest: witness_policy_digest.clone(),

@@ -174,6 +174,48 @@ fn assert_unsafe_policy_preflight(
     assert_eq!(impossible_error["error"]["code"], "impossible-quorum");
     assert_eq!(fs::read(vault_path)?, before_rejections);
 
+    let missing_field_label = run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "policy",
+            "require",
+            "witnessed",
+            "--item",
+            "ExampleWitnessedItem",
+            "--approver",
+            &actors.approver_id,
+            "--witness",
+            &actors.witness_one_id,
+            "--witness",
+            &actors.witness_two_id,
+            "--approvals",
+            "1",
+            "--witness-quorum",
+            "2",
+            "--operation",
+            "read-stdout",
+            "--request-lifetime",
+            "300",
+            "--review-label",
+            "ExampleWitnessedItem",
+        ],
+        b"",
+    )?;
+    assert_eq!(missing_field_label.status.code(), Some(2));
+    assert!(missing_field_label.stdout.is_empty());
+    let missing_label_error: serde_json::Value =
+        serde_json::from_slice(&missing_field_label.stderr)?;
+    assert_eq!(
+        missing_label_error["error"]["code"],
+        "invalid-witness-policy-controls"
+    );
+    assert_eq!(fs::read(vault_path)?, before_rejections);
+
     let implicit_direct = run(
         repository,
         data,

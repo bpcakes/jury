@@ -205,13 +205,12 @@ impl PolicyState {
         &self.terminal_revision_hash
     }
 
-    /// Hash of the exact policy state from which the current revision was made.
-    ///
-    /// Witness policies carried by the current revision bind this predecessor
-    /// because binding the revision hash that embeds their own digest would be
-    /// circular.
-    pub(crate) fn current_predecessor_hash(&self) -> Option<&Digest32> {
-        let predecessor = usize::try_from(self.sequence).ok()?.checked_sub(1)?;
+    /// Hash of the policy revision immediately before `sequence` on this
+    /// state's authenticated history. Witness policies carried by a revision
+    /// bind this predecessor because binding the revision hash that embeds
+    /// their own digest would be circular.
+    pub(crate) fn predecessor_hash_for_sequence(&self, sequence: u64) -> Option<&Digest32> {
+        let predecessor = usize::try_from(sequence).ok()?.checked_sub(1)?;
         self.revision_hashes.get(predecessor)
     }
 

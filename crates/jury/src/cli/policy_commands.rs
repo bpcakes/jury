@@ -39,7 +39,18 @@ pub(super) fn policy_require_witnessed(
         || (!automatic
             && (approver_ids.is_empty()
                 || !arguments.automatic_read_fields.is_empty()
-                || arguments.review_label.is_none()))
+                || arguments.review_label.is_none()
+                || (operations.iter().any(|operation| {
+                    matches!(
+                        operation,
+                        WitnessOperation::ReadStdout
+                            | WitnessOperation::WritePrivateFile
+                            | WitnessOperation::TemplateInjection
+                            | WitnessOperation::ChildEnvironment
+                            | WitnessOperation::ChildStdin
+                            | WitnessOperation::ItemMutation
+                    )
+                }) && arguments.field_review_labels.is_empty())))
     {
         return Err(invalid_policy_controls());
     }

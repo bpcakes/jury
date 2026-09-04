@@ -408,7 +408,12 @@ fn assert_witnessed_provider_round_trip(
             .genesis_fingerprint()
             .clone(),
         vault_policy_sequence: fixture.created_item.policy.state.sequence(),
-        vault_policy_hash: fixture.witness_policy.vault_policy_hash.clone(),
+        vault_policy_hash: fixture
+            .created_item
+            .policy
+            .state
+            .terminal_revision_hash()
+            .clone(),
         witness_policy_id: fixture.witness_policy.witness_policy_id,
         witness_policy_revision: fixture.witness_policy.revision,
         witness_policy_digest: fixture.witness_digest.clone(),
@@ -464,7 +469,12 @@ fn assert_witnessed_provider_round_trip(
         revision: body_slot.revision,
         revision_seal_id: body_slot.revision_seal_id,
         vault_policy_sequence: fixture.created_item.policy.state.sequence(),
-        vault_policy_hash: fixture.witness_policy.vault_policy_hash.clone(),
+        vault_policy_hash: fixture
+            .created_item
+            .policy
+            .state
+            .terminal_revision_hash()
+            .clone(),
         witness_policy_id: fixture.witness_policy.witness_policy_id,
         witness_policy_revision: fixture.witness_policy.revision,
         witness_policy_digest: fixture.witness_digest.clone(),
