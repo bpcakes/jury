@@ -744,21 +744,22 @@ mod tests {
     fn owner_label_creation_rejects_control_characters() -> Result<(), Box<dyn std::error::Error>> {
         let (owner, policy) = owner_and_policy()?;
         let mut creator = OwnerReviewLabelCreator::from_source(RepeatedRandom(0x71));
-        let error = creator
-            .create(
-                OwnerReviewLabelInput {
-                    policy: &policy,
-                    owner: &owner,
-                    label_revision: 1,
-                    subject: ReviewLabelSubject::Item(ItemId::from_bytes([0x72; 32])?),
-                    public_label: ReviewLabelBytes::new(b"Example\nItem".to_vec())?,
-                    target_policy_sequence: policy.sequence() + 1,
-                    issued_at_ms: 1_700_000_001_000,
-                    expires_at_ms: None,
-                },
-                |_| false,
-            )
-            .expect_err("control characters must not enter signed review labels");
+        let error = match creator.create(
+            OwnerReviewLabelInput {
+                policy: &policy,
+                owner: &owner,
+                label_revision: 1,
+                subject: ReviewLabelSubject::Item(ItemId::from_bytes([0x72; 32])?),
+                public_label: ReviewLabelBytes::new(b"Example\nItem".to_vec())?,
+                target_policy_sequence: policy.sequence() + 1,
+                issued_at_ms: 1_700_000_001_000,
+                expires_at_ms: None,
+            },
+            |_| false,
+        ) {
+            Err(error) => error,
+            Ok(_) => return Err("control characters entered a signed review label".into()),
+        };
         assert_eq!(error.kind(), ReviewLabelErrorKind::InvalidScope);
         Ok(())
     }
