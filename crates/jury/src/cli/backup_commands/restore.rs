@@ -1,7 +1,10 @@
 use super::*;
 
+mod model;
 mod publication;
 
+pub(super) use model::RestorePublicationPoint;
+use model::{RestoreMarker, RestoreRequest, RestoredInstallation};
 use publication::{
     marker_bytes, marker_name, parse_marker, publish_recovered_state,
     restore_additional_role_identity, validate_restored_state_publication, vault_target_label,
@@ -175,63 +178,6 @@ pub(in crate::cli) fn backup_drill(
         }),
         lines,
     ))
-}
-
-#[derive(Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct RestoreMarker {
-    version: u16,
-    transaction_id: String,
-    backup_id: String,
-    vault_target: String,
-    identity_target: String,
-    state_root: String,
-    vault_id: String,
-    genesis_fingerprint: String,
-    payload_digest: String,
-    timestamp_ms: u64,
-    identity_reused: bool,
-    identity_published: bool,
-    approver_identity_target: Option<String>,
-    approver_identity_published: bool,
-    witness_identity_target: Option<String>,
-    witness_identity_published: bool,
-    vault_published: bool,
-    state_published: bool,
-}
-
-struct RestoreRequest<'a> {
-    cli: &'a Cli,
-    input: &'a Path,
-    target_home: &'a mut VaultHomeLocation,
-    source_home: Option<&'a VaultHomeLocation>,
-    identity_target: &'a Path,
-    approver_identity_target: Option<&'a Path>,
-    witness_identity_target: Option<&'a Path>,
-    reuse_identity: bool,
-    identity_profile: KdfProfile,
-    state_root: &'a Path,
-    require_absent_state_root: bool,
-    environment: &'a Environment,
-    protection: ProtectionPolicy,
-    validate_access: bool,
-}
-
-struct RestoredInstallation {
-    header: jury_protocol::backup_v1::BackupHeaderV1,
-    coverage: RecoveryCoverage,
-    output_digest: Digest32,
-    marker_removed: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum RestorePublicationPoint {
-    MarkerCreated,
-    OwnerIdentityPublished,
-    ApproverIdentityPublished,
-    WitnessIdentityPublished,
-    VaultPublished,
-    StateFilePublished,
 }
 
 fn restore_archive(request: RestoreRequest<'_>) -> Result<RestoredInstallation, CliError> {
