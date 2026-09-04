@@ -507,6 +507,7 @@ fn run_with_async_approval(
 ) -> TestResult<(Output, String)> {
     let mut child = jury_command(context.repository, context.data, context.state)
         .args(arguments)
+        .env("EXAMPLE_AMBIENT_INPUT", "ambient-environment")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -515,7 +516,7 @@ fn run_with_async_approval(
         .stdin
         .take()
         .ok_or("foreground stdin unavailable")?
-        .write_all(format!("{OWNER_PASSPHRASE}\n").as_bytes())?;
+        .write_all(format!("{OWNER_PASSPHRASE}\nambient-stdin\n").as_bytes())?;
     let artifact = wait_for_request(request_path)?;
     let review = publish_approval(approval_path, &artifact, context.policy, context.approver)?;
     Ok((child.wait_with_output()?, review))

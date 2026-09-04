@@ -43,6 +43,57 @@ struct WorkflowContext<'a> {
     endpoints: &'a [String],
 }
 
+fn assert_existing_receipt_prevents_authorization(context: &WorkflowContext<'_>) -> TestResult {
+    let denied_marker = context.artifacts.join("existing-receipt-child-marker");
+    let request = context.artifacts.join("existing-receipt.request.json");
+    let approval = context.artifacts.join("existing-receipt.approval.json");
+    let receipt = context.artifacts.join("existing.receipt.json");
+    fs::write(&receipt, b"existing-public-receipt")?;
+    fs::set_permissions(&receipt, fs::Permissions::from_mode(0o644))?;
+    let mut arguments = vec![
+        "--json".to_owned(),
+        "--passphrase-stdin".to_owned(),
+        "--allow-degraded-protection".to_owned(),
+        "run".to_owned(),
+        "--env".to_owned(),
+        "TOKEN=ExampleWitnessedItem.ExampleWitnessedField".to_owned(),
+        "--timeout".to_owned(),
+        "5".to_owned(),
+    ];
+    append_witness_arguments(
+        &mut arguments,
+        context.checkpoint,
+        &request,
+        &approval,
+        &receipt,
+        context.endpoints,
+    )?;
+    arguments.extend([
+        "--".to_owned(),
+        "/usr/bin/touch".to_owned(),
+        denied_marker
+            .to_str()
+            .ok_or("non-UTF-8 denied marker")?
+            .to_owned(),
+    ]);
+    let references = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let rejected = run(
+        context.approval.repository,
+        context.approval.data,
+        context.approval.state,
+        &references,
+        b"",
+    )?;
+    assert_eq!(rejected.status.code(), Some(4));
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr)?;
+    assert_eq!(error["error"]["code"], "already-exists");
+    assert!(!request.exists());
+    assert!(!approval.exists());
+    assert!(!denied_marker.exists());
+    assert_eq!(fs::read(receipt)?, b"existing-public-receipt");
+    Ok(())
+}
+
 fn assert_pending_approval_prevents_spawn(context: &WorkflowContext<'_>) -> TestResult {
     let denied_marker = context.artifacts.join("approval-pending-child-marker");
     let request = context.artifacts.join("pending.request.json");
@@ -256,12 +307,12 @@ fn exercise_witnessed_exec(context: &WorkflowContext<'_>) -> TestResult<PathBuf>
         "--".to_owned(),
         "/bin/sh".to_owned(),
         "-c".to_owned(),
-        "printf '%s' \"$TOKEN\"".to_owned(),
+        "IFS= read -r inherited || true; printf '%s|%s|%s' \"$TOKEN\" \"${EXAMPLE_AMBIENT_INPUT-unset}\" \"$inherited\"".to_owned(),
     ]);
     let (result, review) =
         run_with_async_approval(&context.approval, &arguments, &request, &approval)?;
     assert!(result.status.success());
-    assert_eq!(result.stdout, b"ExampleFieldValue");
+    assert_eq!(result.stdout, b"ExampleFieldValue|unset|");
     let stderr = String::from_utf8(result.stderr)?;
     assert!(stderr.contains("Authority: witnessed-approved"));
     assert!(stderr.contains("does not prove endpoint execution"));
@@ -454,6 +505,7 @@ fn witnessed_only_default_read_inject_and_execution_complete_after_async_approva
         checkpoint: &checkpoint_path,
         endpoints: &endpoints,
     };
+    assert_existing_receipt_prevents_authorization(&workflow)?;
     assert_pending_approval_prevents_spawn(&workflow)?;
     let read_receipt = exercise_witnessed_read(&workflow)?;
     let inject_receipt = exercise_witnessed_injection(&workflow)?;

@@ -21,6 +21,7 @@ fn execute_witnessed_prepared(
     let receipt_path = files
         .receipt
         .ok_or_else(witnessed_execution_arguments_required)?;
+    let receipt_destination = prepare_witness_receipt_destination(receipt_path)?;
     read_checkpoint(checkpoint_path)?;
     let endpoints = files
         .witnesses
@@ -216,7 +217,7 @@ fn execute_witnessed_prepared(
         );
     }
     state.clear_sensitive();
-    let receipt_digest = publish_witness_receipt(&context, &authorization, receipt_path)?;
+    let receipt_digest = publish_witness_receipt(&context, &authorization, receipt_destination)?;
     let operation_id = random_operation_id()?;
     run_resolved(
         &context,
@@ -228,7 +229,7 @@ fn execute_witnessed_prepared(
         operation_id,
         protection,
         ExecutionEvidence {
-            authority: "witnessed-approved",
+            authority: ExecutionAuthority::WitnessedApproved,
             receipt: Some(receipt_path.display().to_string()),
             receipt_digest: Some(hex(receipt_digest.as_bytes())),
             receipt_nonclaim: Some(VerifiedWitnessReceipt::NONCLAIM),

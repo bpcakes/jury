@@ -17,6 +17,10 @@ struct PublicRequestContext {
     policy: PolicyState,
 }
 
+pub(super) struct PreparedWitnessReceiptDestination {
+    destination: PublicFilePrecondition,
+}
+
 pub(super) struct CollectedWitnessAuthorization {
     pub(super) checkpoint: VaultPolicyCheckpointV1,
     pub(super) prepared: jury_core::witness_client::PreparedWitnessRequest,
@@ -193,6 +197,7 @@ pub(super) fn request_execute(
         .as_deref()
         .map(normalized_read_output)
         .transpose()?;
+    let receipt_destination = prepare_witness_receipt_destination(&arguments.receipt)?;
     let context = load_vault_principal(cli, environment, current, protection)?;
     let checkpoint = read_checkpoint(&arguments.checkpoint)?;
     let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
@@ -226,7 +231,7 @@ pub(super) fn request_execute(
         .ok_or_else(field_unavailable);
     state.clear_sensitive();
     let value = value?;
-    let receipt_digest = publish_witness_receipt(&context, &authorization, &arguments.receipt)?;
+    let receipt_digest = publish_witness_receipt(&context, &authorization, receipt_destination)?;
     if let Some(path) = &arguments.out {
         let publication =
             write_private_file(&context.home, path, &value, arguments.overwrite, protection)?;
@@ -488,7 +493,7 @@ fn merge_failure_status(current: &mut Option<WitnessedAccessStatus>, next: Witne
 pub(super) fn publish_witness_receipt(
     context: &VaultPrincipalContext,
     authorization: &CollectedWitnessAuthorization,
-    path: &Path,
+    destination: PreparedWitnessReceiptDestination,
 ) -> Result<Digest32, CliError> {
     let policy_material = ReceiptPolicyMaterialV1 {
         schema: 1,
@@ -520,9 +525,8 @@ pub(super) fn publish_witness_receipt(
     let bytes = receipt
         .to_json_bytes()
         .map_err(|_| invalid_witness_response())?;
-    let destination = preview_public_file(path).map_err(map_filesystem_error)?;
     PreparedPublicFile::prepare_bounded_if_unchanged(
-        destination,
+        destination.destination,
         &bytes,
         MAX_RECEIPT_JSON_BYTES,
         false,
@@ -531,6 +535,20 @@ pub(super) fn publish_witness_receipt(
     .publish()
     .map_err(map_filesystem_error)?;
     Ok(digest)
+}
+
+pub(super) fn prepare_witness_receipt_destination(
+    path: &Path,
+) -> Result<PreparedWitnessReceiptDestination, CliError> {
+    let destination = preview_public_file(path).map_err(map_filesystem_error)?;
+    if destination.destination_exists() {
+        return Err(CliError::new(
+            CliErrorKind::Conflict,
+            "already-exists",
+            "the selected destination already exists",
+        ));
+    }
+    Ok(PreparedWitnessReceiptDestination { destination })
 }
 
 include!("request_commands/support.rs");

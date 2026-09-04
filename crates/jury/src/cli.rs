@@ -57,8 +57,8 @@ use jury_core::{
 };
 use jury_filesystem::{
     FilesystemError, FilesystemErrorKind, HardenedStateRoot, IdentitySelector, LockedVaultState,
-    PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicationOutcome,
-    PublicationPolicy, RepositoryLocation, VaultStateDirectory, VaultStateFile,
+    PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PublicFilePrecondition,
+    PublicationOutcome, PublicationPolicy, RepositoryLocation, VaultStateDirectory, VaultStateFile,
     list_named_identities, preview_public_file, read_private_file, read_public_file,
     resolve_linux_state_root,
 };

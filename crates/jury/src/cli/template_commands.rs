@@ -175,6 +175,7 @@ fn witnessed_template_inject(
         .map(OperationBytes::new)
         .transpose()
         .map_err(|_| invalid_template())?;
+    let receipt_destination = prepare_witness_receipt_destination(receipt_path)?;
     let endpoints = arguments
         .witnesses
         .iter()
@@ -271,7 +272,7 @@ fn witnessed_template_inject(
     }
     state.clear_sensitive();
     let output = render_template(template, references, &values)?;
-    let receipt_digest = publish_witness_receipt(&context, &authorization, receipt_path)?;
+    let receipt_digest = publish_witness_receipt(&context, &authorization, receipt_destination)?;
     append_operational_audit(
         &context,
         AuditAction::ExecuteOrInject,

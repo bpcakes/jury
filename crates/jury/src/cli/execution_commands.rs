@@ -121,8 +121,27 @@ struct ResolvedExecution {
     item_ids: Vec<jury_protocol::vault_v1::ItemId>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExecutionAuthority {
+    Direct,
+    WitnessedApproved,
+}
+
+impl ExecutionAuthority {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Direct => "direct-unilateral",
+            Self::WitnessedApproved => "witnessed-approved",
+        }
+    }
+
+    const fn is_governed(self) -> bool {
+        matches!(self, Self::WitnessedApproved)
+    }
+}
+
 struct ExecutionEvidence {
-    authority: &'static str,
+    authority: ExecutionAuthority,
     receipt: Option<String>,
     receipt_digest: Option<String>,
     receipt_nonclaim: Option<&'static str>,
@@ -131,7 +150,7 @@ struct ExecutionEvidence {
 impl ExecutionEvidence {
     const fn direct() -> Self {
         Self {
-            authority: "direct-unilateral",
+            authority: ExecutionAuthority::Direct,
             receipt: None,
             receipt_digest: None,
             receipt_nonclaim: None,
@@ -502,13 +521,14 @@ fn run_resolved(
     apply_environment(
         &mut command,
         prepared.mode,
+        evidence.authority,
         &environment_values,
         &anonymous_files,
     );
     command
         .stdin(if stdin.is_some() {
             Stdio::piped()
-        } else if prepared.mode == ExecutionMode::Transparent {
+        } else if prepared.mode == ExecutionMode::Transparent && !evidence.authority.is_governed() {
             Stdio::inherit()
         } else {
             Stdio::null()
@@ -537,7 +557,7 @@ fn run_resolved(
     options.stdin = stdin;
 
     if prepared.mode == ExecutionMode::Transparent {
-        eprintln!("Authority: {}", evidence.authority);
+        eprintln!("Authority: {}", evidence.authority.label());
         if let Some(receipt) = &evidence.receipt {
             eprintln!("Receipt: {receipt}");
         }
@@ -588,7 +608,7 @@ fn run_resolved(
         streamed: prepared.mode == ExecutionMode::Transparent,
         protection_degraded: context.protection_degraded,
         local_audit_recorded,
-        authority: evidence.authority,
+        authority: evidence.authority.label(),
         receipt: evidence.receipt,
         receipt_digest: evidence.receipt_digest,
         receipt_nonclaim: evidence.receipt_nonclaim,
@@ -733,18 +753,22 @@ fn helper_command(
 fn apply_environment(
     command: &mut ProcessCommand,
     mode: ExecutionMode,
+    authority: ExecutionAuthority,
     values: &[(String, Zeroizing<String>)],
     files: &[AnonymousFieldFile],
 ) {
-    match mode {
-        ExecutionMode::Transparent => {
+    match (authority, mode) {
+        (ExecutionAuthority::WitnessedApproved, _) => {
+            command.env_clear();
+        }
+        (ExecutionAuthority::Direct, ExecutionMode::Transparent) => {
             for (name, _) in env::vars_os() {
                 if is_reserved_execution_environment(name.as_os_str().as_bytes()) {
                     command.env_remove(name);
                 }
             }
         }
-        ExecutionMode::Brokered => {
+        (ExecutionAuthority::Direct, ExecutionMode::Brokered) => {
             command.env_clear();
             for name in BROKER_ENV_ALLOWLIST {
                 if let Some(value) = env::var_os(name) {
