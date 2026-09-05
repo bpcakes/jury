@@ -72,6 +72,81 @@ fn execution_help_states_plaintext_and_platform_limits() -> Result<(), Box<dyn s
 }
 
 #[test]
+fn access_help_explains_inputs() -> Result<(), Box<dyn std::error::Error>> {
+    let access_list_help = help(&["jury", "access", "list", "--help"])?;
+    assert!(access_list_help.contains("Resolved item name to inspect"));
+    assert!(access_list_help.contains("List directly accessible items"));
+    assert!(access_list_help.contains("witnessed-only"));
+
+    let access_help = help(&["jury", "access", "--help"])?;
+    assert!(access_help.contains("Change one explicit grant's role"));
+    assert!(access_help.contains("Revoke one principal's explicit grant"));
+
+    let matrix_help = help(&["jury", "access", "matrix", "--help"])?;
+    assert!(matrix_help.contains("direct access to every item"));
+
+    let access_grant_help = help(&["jury", "access", "grant", "--help"])?;
+    assert!(access_grant_help.contains("explicit grant"));
+    assert!(access_grant_help.contains("Explicit role for ITEM"));
+    assert!(access_grant_help.contains("Required acknowledgement"));
+    assert!(access_grant_help.contains("Validate the access grant"));
+
+    let access_explain_help = help(&["jury", "access", "explain", "--help"])?;
+    assert!(access_explain_help.contains("defaults to read for access explain"));
+    Ok(())
+}
+
+#[test]
+fn witnessed_policy_help_explains_inputs() -> Result<(), Box<dyn std::error::Error>> {
+    let witnessed_help = help(&["jury", "policy", "require", "witnessed", "--help"])?;
+    assert!(witnessed_help.contains("Resolved item name that will require witnessed authority"));
+    assert!(witnessed_help.contains("at least two unique values"));
+    assert!(witnessed_help.contains("descriptor permits every declared operation"));
+    assert!(witnessed_help.contains("automatic read-stdout"));
+    assert!(witnessed_help.contains("--review-label"));
+    assert!(witnessed_help.contains("field-touching operations"));
+    assert!(witnessed_help.contains("2..=the number of --witness values"));
+    assert!(witnessed_help.contains("administrative-rekey"));
+    assert!(witnessed_help.contains("1..=900"));
+    assert!(witnessed_help.contains("never exceeds 30 seconds"));
+    for operation in [
+        "read-stdout",
+        "write-private-file",
+        "template-injection",
+        "child-environment",
+        "child-stdin",
+        "item-mutation",
+        "backup",
+        "recovery",
+        "administrative-rekey",
+    ] {
+        assert!(witnessed_help.contains(operation));
+    }
+
+    let status_help = help(&["jury", "policy", "status", "--help"])?;
+    assert!(status_help.contains("Resolved item name whose authority policy to show or explain"));
+
+    let allow_direct_help = help(&["jury", "policy", "allow", "direct", "--help"])?;
+    assert!(allow_direct_help.contains("Resolved item name that will allow direct access"));
+    assert!(allow_direct_help.contains("human or machine principal that already has read access"));
+
+    let witness_status_help = help(&["jury", "witness", "policy-status", "--help"])?;
+    assert!(witness_status_help.contains("Exact public checkpoint to classify"));
+    Ok(())
+}
+
+fn help(arguments: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+    let error = Cli::try_parse_from(arguments.iter().copied())
+        .err()
+        .ok_or("help unexpectedly parsed")?;
+    Ok(error
+        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+#[test]
 fn governed_read_accepts_opaque_target_ids() {
     let id = "11".repeat(32);
     assert!(matches!(

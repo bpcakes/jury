@@ -511,6 +511,7 @@ pub struct WitnessPolicyStatusArgs {
     /// Complete owner-signed public policy material for the checkpoint.
     #[arg(long, value_name = "POLICY_MATERIAL")]
     pub policy_material: PathBuf,
+    /// Exact public checkpoint to classify; it must match --policy-material.
     #[arg(long, value_name = "CHECKPOINT")]
     pub checkpoint: PathBuf,
     /// Per-witness acknowledgement or accepted-response file; may be repeated.
@@ -662,19 +663,28 @@ pub struct PrincipalTargetArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum AccessCommand {
+    /// List one item's grants or the selected identity's effective item access.
     List(AccessListArgs),
+    /// Show every decrypted item's grants and owners; requires owner authority and direct access to every item.
     Matrix,
+    /// Explain the selected identity's access to one resolved item.
     Explain(AccessExplainArgs),
+    /// Check one required capability without reading a field value.
     Check(AccessExplainArgs),
+    /// Grant an explicit reader or writer role; direct slots extend only items that already have direct recipients.
     Grant(AccessGrantArgs),
+    /// Change one explicit grant's role for an item.
     Change(AccessChangeArgs),
+    /// Revoke one principal's explicit grant for an item.
     Revoke(AccessRevokeArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct AccessListArgs {
+    /// Resolved item name to inspect; omit only when using --me.
     #[arg(value_name = "ITEM", conflicts_with = "me")]
     pub item: Option<String>,
+    /// List directly accessible items and effective permissions; witnessed-only items are not disclosed.
     #[arg(long, required_unless_present = "item")]
     pub me: bool,
 }
@@ -694,49 +704,64 @@ pub enum AccessRoleArg {
 
 #[derive(Debug, Args)]
 pub struct AccessExplainArgs {
+    /// Resolved item name whose access to explain or check.
     #[arg(value_name = "ITEM")]
     pub item: String,
+    /// Capability to explain; defaults to read for access explain and is required for access check.
     #[arg(long, value_enum)]
     pub require: Option<RequiredCapabilityArg>,
 }
 
 #[derive(Debug, Args)]
 pub struct AccessGrantArgs {
+    /// Resolved item to grant; required with --role and omitted for batch explicit grants.
     #[arg(value_name = "ITEM")]
     pub item: Option<String>,
+    /// Active principal ID that receives the explicit grant.
     #[arg(long, value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Explicit role for ITEM: reader or writer.
     #[arg(long, value_enum, requires = "item")]
     pub role: Option<AccessRoleArg>,
+    /// Resolved item to grant reader access in a batch; may be repeated.
     #[arg(long = "reader", value_name = "ITEM")]
     pub readers: Vec<String>,
+    /// Resolved item to grant writer access in a batch; may be repeated.
     #[arg(long = "writer", value_name = "ITEM")]
     pub writers: Vec<String>,
-    /// Acknowledge unilateral direct access for the new recipient.
+    /// Required acknowledgement before granting potentially unilateral direct access.
     #[arg(long)]
     pub acknowledge_direct_access: bool,
+    /// Validate the access grant without committing it.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct AccessChangeArgs {
+    /// Resolved item whose explicit grant to change.
     #[arg(value_name = "ITEM")]
     pub item: String,
+    /// Active principal ID whose explicit role changes.
     #[arg(long, value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Replacement explicit role: reader or writer.
     #[arg(long, value_enum)]
     pub role: AccessRoleArg,
+    /// Validate the explicit role change without committing it.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct AccessRevokeArgs {
+    /// Resolved item whose explicit grant to revoke.
     #[arg(value_name = "ITEM")]
     pub item: String,
+    /// Active principal ID whose explicit grant is revoked.
     #[arg(long, value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Validate the explicit grant revocation without committing it.
     #[arg(long)]
     pub dry_run: bool,
 }
