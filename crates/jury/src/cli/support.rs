@@ -766,6 +766,27 @@ pub(super) fn grouped(fingerprint: &str) -> String {
     grouped
 }
 
+pub(super) fn terminal_safe_text(value: &str) -> String {
+    let mut rendered = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{061c}'
+                    | '\u{200e}'
+                    | '\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2066}'..='\u{2069}'
+            )
+        {
+            rendered.extend(character.escape_default());
+        } else {
+            rendered.push(character);
+        }
+    }
+    rendered
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decode_presented_hex_32, map_filesystem_error_kind};

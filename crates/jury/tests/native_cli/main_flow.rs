@@ -76,6 +76,7 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_owner_access(paths)?;
     let candidate = register_candidate(temporary.path(), paths)?;
     grant_candidate_access(paths, &vault, &candidate)?;
+    assert_human_access_inspection(paths, &identity, &candidate)?;
     change_and_revoke_candidate_access(paths, &candidate)?;
     set_example_field(paths)?;
     exercise_execution_and_plaintext(temporary.path(), paths)?;

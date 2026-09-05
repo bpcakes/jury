@@ -13,6 +13,7 @@ pub(super) fn access_list(
     let context = load_vault_principal(cli, environment, current, protection)?;
     if arguments.me {
         let accessible = discover_accessible_items(&context)?;
+        let mut lines = vec![format!("Accessible items: {}", accessible.len())];
         let entries = accessible
             .iter()
             .map(|item| {
@@ -22,14 +23,37 @@ pub(super) fn access_list(
                     &context.identity.principal_id(),
                     Capability::Read,
                 );
+                let item_id = hex(envelope.item_id.as_bytes());
+                let role = explanation
+                    .effective_role
+                    .map(access_role)
+                    .unwrap_or("none");
+                let path = access_path(explanation.path);
+                let read = explanation.allowed;
+                let write = explanation
+                    .effective_role
+                    .is_some_and(|role| matches!(role, AccessRole::Writer | AccessRole::Owner));
+                let administer = explanation.effective_role == Some(AccessRole::Owner);
+                lines.push(format!("Item: {}", item.descriptor.name()));
+                lines.push(format!("  Role: {role}; path: {path}"));
+                lines.push(format!(
+                    "  Permissions: read: {}; write: {}; administer: {}",
+                    yes_no(read),
+                    yes_no(write),
+                    yes_no(administer)
+                ));
+                lines.push(format!(
+                    "  Carries item quorum claim: {}",
+                    yes_no(explanation.carries_quorum_claim)
+                ));
                 serde_json::json!({
                     "item": item.descriptor.name(),
-                    "item_id": hex(envelope.item_id.as_bytes()),
+                    "item_id": item_id,
                     "role": explanation.effective_role.map(access_role),
-                    "path": access_path(explanation.path),
-                    "read": true,
-                    "write": explanation.effective_role.is_some_and(|role| matches!(role, AccessRole::Writer | AccessRole::Owner)),
-                    "administer": explanation.effective_role == Some(AccessRole::Owner),
+                    "path": path,
+                    "read": read,
+                    "write": write,
+                    "administer": administer,
                     "carries_item_quorum_claim": explanation.carries_quorum_claim,
                 })
             })
@@ -42,7 +66,7 @@ pub(super) fn access_list(
                 "items": entries,
                 "inaccessible_items_disclosed": false,
             }),
-            lines: vec![format!("Accessible items: {}", entries.len())],
+            lines,
         });
     }
     let item_name = arguments
@@ -55,6 +79,17 @@ pub(super) fn access_list(
         .policy
         .item(&envelope.item_id)
         .ok_or_else(invalid_vault)?;
+    let item_id = hex(envelope.item_id.as_bytes());
+    let owners = context
+        .policy
+        .owner_ids()
+        .map(|owner| hex(owner.as_bytes()))
+        .collect::<Vec<_>>();
+    let rendered_owners = context
+        .policy
+        .owner_ids()
+        .map(|owner| human_principal(&context.policy, &owner))
+        .collect::<Result<Vec<_>, CliError>>()?;
     let grants = policy_item
         .grants
         .iter()
@@ -65,21 +100,61 @@ pub(super) fn access_list(
             })
         })
         .collect::<Vec<_>>();
+    let mut lines = vec![
+        format!("Item access: {item_name}"),
+        format!(
+            "Access mode: {}",
+            policy_item
+                .access_mode()
+                .map(item_access_mode)
+                .unwrap_or("unconfigured")
+        ),
+        format!("Owners: {}", owners.len()),
+    ];
+    lines.extend(rendered_owners.iter().map(|owner| format!("  {owner}")));
+    lines.push(format!("Explicit grants: {}", grants.len()));
+    if grants.is_empty() {
+        lines.push("  none".to_owned());
+    } else {
+        lines.extend(
+            policy_item
+                .grants
+                .iter()
+                .map(|(principal_id, role)| {
+                    Ok(format!(
+                        "  {}: {}",
+                        human_principal(&context.policy, principal_id)?,
+                        access_role(*role)
+                    ))
+                })
+                .collect::<Result<Vec<_>, CliError>>()?,
+        );
+    }
+    lines.push(format!(
+        "Direct recipient slots: {}",
+        policy_item.direct_slots.len()
+    ));
+    lines.push(format!(
+        "Item quorum claim: {}",
+        if policy_item.direct_slots.is_empty() {
+            "not suppressed"
+        } else {
+            "suppressed by direct recipient slots"
+        }
+    ));
     Ok(CommandOutput::Safe {
         operation: "access-list-item",
         fields: serde_json::json!({
             "item": item_name,
-            "item_id": hex(envelope.item_id.as_bytes()),
+            "item_id": item_id,
             "grants": grants,
+            "owners": owners,
             "owner_count": context.policy.owner_count(),
             "access_mode": policy_item.access_mode().map(item_access_mode),
             "direct_slot_count": policy_item.direct_slots.len(),
             "item_quorum_claim_suppressed": !policy_item.direct_slots.is_empty(),
         }),
-        lines: vec![
-            format!("Item access: {item_name}"),
-            format!("Explicit grants: {}", grants.len()),
-        ],
+        lines,
     })
 }
 
@@ -152,6 +227,21 @@ pub(super) fn access_matrix(
     if accessible.len() != context.policy.item_count() {
         return Err(invalid_vault());
     }
+    let owners = context
+        .policy
+        .owner_ids()
+        .map(|owner| hex(owner.as_bytes()))
+        .collect::<Vec<_>>();
+    let rendered_owners = context
+        .policy
+        .owner_ids()
+        .map(|owner| human_principal(&context.policy, &owner))
+        .collect::<Result<Vec<_>, CliError>>()?;
+    let mut lines = vec![
+        format!("Item access matrix: {} items", accessible.len()),
+        format!("Vault owners: {}", owners.len()),
+    ];
+    lines.extend(rendered_owners.iter().map(|owner| format!("  {owner}")));
     let entries = accessible
         .iter()
         .map(|accessible| {
@@ -170,10 +260,39 @@ pub(super) fn access_matrix(
                     })
                 })
                 .collect::<Vec<_>>();
+            let item_id = hex(envelope.item_id.as_bytes());
+            lines.push(format!("Item: {}", accessible.descriptor.name()));
+            lines.push(format!(
+                "  Access mode: {}",
+                item.access_mode()
+                    .map(item_access_mode)
+                    .unwrap_or("unconfigured")
+            ));
+            lines.push(format!(
+                "  Direct recipient slots: {}",
+                item.direct_slots.len()
+            ));
+            lines.push(format!("  Explicit grants: {}", grants.len()));
+            if grants.is_empty() {
+                lines.push("    none".to_owned());
+            } else {
+                lines.extend(
+                    item.grants
+                        .iter()
+                        .map(|(principal_id, role)| {
+                            Ok(format!(
+                                "    {}: {}",
+                                human_principal(&context.policy, principal_id)?,
+                                access_role(*role)
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, CliError>>()?,
+                );
+            }
             Ok(serde_json::json!({
                 "item": accessible.descriptor.name(),
-                "item_id": hex(envelope.item_id.as_bytes()),
-                "owners": context.policy.owner_ids().map(|id| hex(id.as_bytes())).collect::<Vec<_>>(),
+                "item_id": item_id,
+                "owners": owners,
                 "grants": grants,
                 "mode": item.access_mode().map(item_access_mode),
             }))
@@ -186,8 +305,28 @@ pub(super) fn access_matrix(
             "items": entries,
             "owner_only_view": true,
         }),
-        lines: vec![format!("Item access matrix: {} items", entries.len())],
+        lines,
     })
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn human_principal(policy: &PolicyState, principal_id: &PrincipalId) -> Result<String, CliError> {
+    let principal = policy.principal(principal_id).ok_or_else(invalid_vault)?;
+    let fingerprint: [u8; 32] = Sha256::digest(
+        principal
+            .descriptor
+            .fingerprint_preimage()
+            .map_err(|_| invalid_vault())?,
+    )
+    .into();
+    Ok(format!(
+        "{} ({})",
+        terminal_safe_text(&principal.display_label),
+        grouped(&hex(&fingerprint))
+    ))
 }
 
 pub(super) fn access_grant(

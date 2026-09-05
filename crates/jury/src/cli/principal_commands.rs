@@ -13,6 +13,7 @@ pub(super) fn principal_list(
         .map_err(|_| invalid_vault())?;
     CheckpointCandidate::from_validated(&policy, &vault.policy, &vault.items)
         .map_err(|_| invalid_vault())?;
+    let mut lines = vec![format!("Active principals: {}", policy.principal_count())];
     let principals = policy
         .principals()
         .map(|(principal_id, principal)| {
@@ -23,13 +24,26 @@ pub(super) fn principal_list(
                     .map_err(|_| invalid_vault())?,
             )
             .into();
+            let rendered_principal_id = hex(principal_id.as_bytes());
+            let rendered_fingerprint = hex(&fingerprint);
+            let kind = principal_kind(principal.descriptor.principal_kind);
+            let owner = policy.is_owner(principal_id);
+            let effective_item_count = principal_effective_item_count(&policy, principal_id);
+            let rendered_label = terminal_safe_text(&principal.display_label);
+            lines.push(format!("Principal: {rendered_principal_id}"));
+            lines.push(format!("  Fingerprint: {}", grouped(&rendered_fingerprint)));
+            lines.push(format!("  Kind: {kind}; label: {rendered_label}"));
+            lines.push(format!("  Owner: {}", if owner { "yes" } else { "no" }));
+            lines.push(format!(
+                "  Effective readable items: {effective_item_count}"
+            ));
             Ok(serde_json::json!({
-                "principal_id": hex(principal_id.as_bytes()),
-                "fingerprint": hex(&fingerprint),
-                "kind": principal_kind(principal.descriptor.principal_kind),
+                "principal_id": rendered_principal_id,
+                "fingerprint": rendered_fingerprint,
+                "kind": kind,
                 "label": principal.display_label,
-                "owner": policy.is_owner(principal_id),
-                "effective_item_count": principal_effective_item_count(&policy, principal_id),
+                "owner": owner,
+                "effective_item_count": effective_item_count,
             }))
         })
         .collect::<Result<Vec<_>, CliError>>()?;
@@ -41,10 +55,12 @@ pub(super) fn principal_list(
             "principals": principals,
             "item_names_disclosed": false,
         }),
-        lines: vec![
-            format!("Active principals: {}", policy.principal_count()),
-            "Public metadata only; inaccessible item names are not displayed.".to_owned(),
-        ],
+        lines: {
+            lines.push(
+                "Public metadata only; inaccessible item names are not displayed.".to_owned(),
+            );
+            lines
+        },
     })
 }
 

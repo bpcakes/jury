@@ -205,6 +205,257 @@ fn grant_candidate_access(
     Ok(())
 }
 
+fn assert_human_access_inspection(
+    paths: NativePaths<'_>,
+    owner: &serde_json::Value,
+    candidate: &CandidateFixture,
+) -> TestResult {
+    let NativePaths {
+        repository,
+        data,
+        state,
+    } = paths;
+    let owner_id = owner["principal_id"]
+        .as_str()
+        .ok_or("missing owner principal")?;
+    let candidate_id = candidate.identity["principal_id"]
+        .as_str()
+        .ok_or("missing candidate principal")?;
+
+    assert_human_principal_labels_are_escaped(repository, data, state, candidate_id)?;
+    let owner_display = human_principal_display(repository, data, state, owner_id)?;
+    let candidate_display = human_principal_display(repository, data, state, candidate_id)?;
+    assert_human_principal_list(repository, data, state, owner_id, candidate_id)?;
+    assert_human_my_access_list(repository, data, state)?;
+    assert_human_item_access_list(repository, data, state, &owner_display, &candidate_display)?;
+    assert_human_access_matrix(repository, data, state, &owner_display, &candidate_display)
+}
+
+fn assert_human_principal_labels_are_escaped(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    candidate_id: &str,
+) -> TestResult {
+    const UNSAFE_LABEL: &str = "Zoë\n\u{202e}candidate\x1b[2K";
+    let (prior_label, _) = principal_metadata(repository, data, state, candidate_id)?;
+    relabel_principal(repository, data, state, candidate_id, UNSAFE_LABEL)?;
+
+    let principals = run(repository, data, state, &["principal", "list"], b"")?;
+    assert!(principals.status.success());
+    let principals = String::from_utf8(principals.stdout)?;
+    assert!(principals.contains(r"label: Zoë\n\u{202e}candidate\u{1b}[2K"));
+    assert!(!principals.contains(UNSAFE_LABEL));
+
+    relabel_principal(repository, data, state, candidate_id, &prior_label)
+}
+
+fn relabel_principal(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    principal_id: &str,
+    label: &str,
+) -> TestResult {
+    let relabeled = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "principal",
+            "label",
+            principal_id,
+            "--label",
+            label,
+        ],
+        b"ExamplePass1234\n",
+    )?)?;
+    assert_eq!(relabeled["operation"], "principal-label");
+    Ok(())
+}
+
+fn human_principal_display(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    principal_id: &str,
+) -> TestResult<String> {
+    let (label, fingerprint) = principal_metadata(repository, data, state, principal_id)?;
+    Ok(format!("{label} ({})", grouped(&fingerprint)))
+}
+
+fn principal_metadata(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    principal_id: &str,
+) -> TestResult<(String, String)> {
+    let principals = success_json(run(
+        repository,
+        data,
+        state,
+        &["--json", "principal", "list"],
+        b"",
+    )?)?;
+    let principal = principals["principals"]
+        .as_array()
+        .and_then(|principals| {
+            principals.iter().find(|principal| {
+                principal["principal_id"].as_str() == Some(principal_id)
+            })
+        })
+        .ok_or("missing listed principal")?;
+    Ok((
+        principal["label"]
+            .as_str()
+            .ok_or("missing listed principal label")?
+            .to_owned(),
+        principal["fingerprint"]
+            .as_str()
+            .ok_or("missing listed principal fingerprint")?
+            .to_owned(),
+    ))
+}
+
+fn grouped(fingerprint: &str) -> String {
+    fingerprint
+        .chars()
+        .enumerate()
+        .fold(String::new(), |mut grouped, (index, character)| {
+            if index != 0 && index % 8 == 0 {
+                grouped.push('-');
+            }
+            grouped.push(character);
+            grouped
+        })
+}
+
+fn assert_human_principal_list(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    owner_id: &str,
+    candidate_id: &str,
+) -> TestResult {
+    let principals = run(repository, data, state, &["principal", "list"], b"")?;
+    assert!(principals.status.success());
+    let principals = String::from_utf8(principals.stdout)?;
+    assert!(principals.contains(&format!("Principal: {owner_id}")));
+    assert!(principals.contains(&format!("Principal: {candidate_id}")));
+    assert!(principals.contains("Owner: yes"));
+    assert!(principals.contains("Owner: no"));
+    assert!(principals.contains("Effective readable items: 1"));
+    assert!(!principals.contains("ExampleItem"));
+    Ok(())
+}
+
+fn assert_human_my_access_list(repository: &Path, data: &Path, state: &Path) -> TestResult {
+    let mine = run(
+        repository,
+        data,
+        state,
+        &[
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "access",
+            "list",
+            "--me",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(mine.status.success());
+    let mine = String::from_utf8(mine.stdout)?;
+    assert!(mine.contains("Item: ExampleItem"));
+    assert!(mine.contains("Role: owner; path: direct"));
+    assert!(mine.contains("Permissions: read: yes; write: yes; administer: yes"));
+    assert!(mine.contains("Carries item quorum claim: no"));
+
+    let candidate = run(
+        repository,
+        data,
+        state,
+        &[
+            "--identity",
+            "candidate",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "access",
+            "list",
+            "--me",
+        ],
+        b"CandidatePass1234\n",
+    )?;
+    assert!(candidate.status.success());
+    let candidate = String::from_utf8(candidate.stdout)?;
+    assert!(candidate.contains("Item: ExampleItem"));
+    assert!(candidate.contains("Role: reader; path: direct"));
+    assert!(candidate.contains("Permissions: read: yes; write: no; administer: no"));
+    Ok(())
+}
+
+fn assert_human_item_access_list(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    owner_display: &str,
+    candidate_display: &str,
+) -> TestResult {
+    let item = run(
+        repository,
+        data,
+        state,
+        &[
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "access",
+            "list",
+            "ExampleItem",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(item.status.success());
+    let item = String::from_utf8(item.stdout)?;
+    assert!(item.contains(&format!("Owners: 1\n  {owner_display}")));
+    assert!(item.contains("Access mode: direct-only"));
+    assert!(item.contains(&format!(
+        "Explicit grants: 1\n  {candidate_display}: reader"
+    )));
+    Ok(())
+}
+
+fn assert_human_access_matrix(
+    repository: &Path,
+    data: &Path,
+    state: &Path,
+    owner_display: &str,
+    candidate_display: &str,
+) -> TestResult {
+    let matrix = run(
+        repository,
+        data,
+        state,
+        &[
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "access",
+            "matrix",
+        ],
+        b"ExamplePass1234\n",
+    )?;
+    assert!(matrix.status.success());
+    let matrix = String::from_utf8(matrix.stdout)?;
+    assert!(matrix.contains(&format!("Vault owners: 1\n  {owner_display}")));
+    assert!(matrix.contains("Item: ExampleItem"));
+    assert!(matrix.contains("Access mode: direct-only"));
+    assert!(matrix.contains(&format!(
+        "Explicit grants: 1\n    {candidate_display}: reader"
+    )));
+    Ok(())
+}
+
 fn change_and_revoke_candidate_access(
     paths: NativePaths<'_>,
     candidate: &CandidateFixture,
