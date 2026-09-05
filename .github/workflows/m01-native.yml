@@ -1,0 +1,65 @@
+# Temporary M01 native acceptance lane. Consumer: M01 implementer.
+# Defect: strict Darwin mapping/core controls lacked native evidence.
+# Delete after all named lanes pass and bounded results are retained with M01.
+name: M01 native acceptance
+on:
+  push:
+    branches: [m01-darwin-validation]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            rust: 1.90.0
+          - runner: macos-15-intel
+            rust: 1.90.0
+          - runner: macos-26
+            rust: 1.98.1
+          - runner: ubuntu-24.04
+            rust: 1.90.0
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      RUST_TEST_NOCAPTURE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: featherenvy/sanitization
+          ref: f4c6d7567c5358a1a6f5aea669406178d618043a
+          path: provider
+      - name: Native versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          uname -srm
+          if [[ "$RUNNER_OS" == macOS ]]; then sw_vers; else cat /etc/os-release; fi
+          rustc -vV
+          git rev-parse HEAD
+          git -C provider rev-parse HEAD
+      - name: Provider selected-feature suite
+        working-directory: provider
+        run: cargo test --all-targets --no-default-features --features std,profile-guarded-native,require-fork-exclusion
+      - name: Jury protected-memory suite
+        run: cargo test --locked -p jury-protected --all-targets
+      - name: Jury protected-memory Clippy
+        run: cargo clippy --locked -p jury-protected --all-targets -- -D warnings
+      - name: Linux secret input
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p jury --lib secret_input
+      - name: Linux required repository checks
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/jig check fmt
+          scripts/jig check clippy
+          scripts/jig check contract
+          scripts/jig check test

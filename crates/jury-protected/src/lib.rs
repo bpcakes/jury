@@ -30,3 +30,6 @@ pub use streaming_redaction::{
     MAX_OUTPUT_CHUNK_LEN, MAX_REDACTION_PATTERN_BYTES, MAX_REDACTION_PATTERN_LEN,
     MAX_REDACTION_PATTERNS, StreamingRedactor, StreamingRedactorError,
 };
+
+#[cfg(test)]
+mod test_support;

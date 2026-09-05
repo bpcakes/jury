@@ -55,28 +55,65 @@ pub struct ProtectedCapture<T> {
     pub status: ProtectionStatus,
 }
 
-trait CoreSuppressor {
-    fn suppress(&mut self) -> Result<(), CaptureError>;
+trait CoreLimits {
+    fn set_zero(&mut self) -> Result<(), CaptureError>;
+    fn read(&mut self) -> Result<(u64, u64), CaptureError>;
 }
 
-struct PlatformCoreSuppressor;
+struct PlatformCoreLimits;
+
+fn suppression_error() -> CaptureError {
+    CaptureError {
+        kind: CaptureErrorKind::CoreSuppression,
+    }
+}
 
 #[cfg(unix)]
-impl CoreSuppressor for PlatformCoreSuppressor {
-    fn suppress(&mut self) -> Result<(), CaptureError> {
-        rlimit::setrlimit(rlimit::Resource::CORE, 0, 0).map_err(|_| CaptureError {
-            kind: CaptureErrorKind::CoreSuppression,
-        })
+impl CoreLimits for PlatformCoreLimits {
+    fn set_zero(&mut self) -> Result<(), CaptureError> {
+        #[cfg(test)]
+        tests::before_set()?;
+        rlimit::setrlimit(rlimit::Resource::CORE, 0, 0).map_err(|_| suppression_error())
+    }
+
+    fn read(&mut self) -> Result<(u64, u64), CaptureError> {
+        #[cfg(test)]
+        if let Some(result) = tests::read_override() {
+            return result;
+        }
+        rlimit::getrlimit(rlimit::Resource::CORE).map_err(|_| suppression_error())
     }
 }
 
 #[cfg(not(unix))]
-impl CoreSuppressor for PlatformCoreSuppressor {
-    fn suppress(&mut self) -> Result<(), CaptureError> {
+impl CoreLimits for PlatformCoreLimits {
+    fn set_zero(&mut self) -> Result<(), CaptureError> {
         Err(CaptureError {
             kind: CaptureErrorKind::UnsupportedPlatform,
         })
     }
+    fn read(&mut self) -> Result<(u64, u64), CaptureError> {
+        Err(CaptureError {
+            kind: CaptureErrorKind::UnsupportedPlatform,
+        })
+    }
+}
+
+fn suppress_with(limits: &mut impl CoreLimits) -> Result<(), CaptureError> {
+    limits.set_zero()?;
+    if limits.read()? != (0, 0) {
+        return Err(suppression_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn suppress_core_dumps() -> Result<(), CaptureError> {
+    suppress_with(&mut PlatformCoreLimits)
+}
+
+pub(crate) fn core_dump_suppressed() -> bool {
+    matches!(PlatformCoreLimits.read(), Ok((0, 0)))
 }
 
 /// Disables ordinary process core dumps before invoking a private callback.
@@ -85,16 +122,16 @@ pub fn capture_after_process_protection<T>(
     status: ProtectionStatus,
     capture: impl FnOnce() -> T,
 ) -> Result<ProtectedCapture<T>, CaptureError> {
-    capture_with(&mut PlatformCoreSuppressor, policy, status, capture)
+    capture_with(&mut PlatformCoreLimits, policy, status, capture)
 }
 
 fn capture_with<T>(
-    suppressor: &mut impl CoreSuppressor,
+    suppressor: &mut impl CoreLimits,
     policy: ProtectionPolicy,
     mut status: ProtectionStatus,
     capture: impl FnOnce() -> T,
 ) -> Result<ProtectedCapture<T>, CaptureError> {
-    suppressor.suppress()?;
+    suppress_with(suppressor)?;
     status.record_core_suppression();
     if policy == ProtectionPolicy::Strict && status.is_degraded() {
         return Err(CaptureError {
@@ -108,90 +145,5 @@ fn capture_with<T>(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::Cell;
-
-    use crate::{MemoryError, ProtectedMemory};
-
-    use super::*;
-
-    fn status(policy: ProtectionPolicy) -> Result<ProtectionStatus, MemoryError> {
-        ProtectedMemory::initialize(32, policy, |destination| {
-            destination.fill(0xa5);
-            Ok::<usize, ()>(destination.len())
-        })
-        .map(|memory| memory.status().clone())
-    }
-
-    struct FakeSuppressor<'a> {
-        called: &'a Cell<bool>,
-        fail: bool,
-    }
-
-    impl CoreSuppressor for FakeSuppressor<'_> {
-        fn suppress(&mut self) -> Result<(), CaptureError> {
-            self.called.set(true);
-            if self.fail {
-                Err(CaptureError {
-                    kind: CaptureErrorKind::CoreSuppression,
-                })
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    #[test]
-    fn suppression_happens_before_callback() -> Result<(), Box<dyn std::error::Error>> {
-        let suppressed = Cell::new(false);
-        let capture = capture_with(
-            &mut FakeSuppressor {
-                called: &suppressed,
-                fail: false,
-            },
-            ProtectionPolicy::Strict,
-            status(ProtectionPolicy::Strict)?,
-            || suppressed.get(),
-        )?;
-        assert!(capture.value);
-        assert!(capture.status.core_dump_suppressed());
-        Ok(())
-    }
-
-    #[test]
-    fn suppression_failure_blocks_callback() -> Result<(), Box<dyn std::error::Error>> {
-        let suppressed = Cell::new(false);
-        let callback_called = Cell::new(false);
-        let result = capture_with(
-            &mut FakeSuppressor {
-                called: &suppressed,
-                fail: true,
-            },
-            ProtectionPolicy::Strict,
-            status(ProtectionPolicy::Strict)?,
-            || callback_called.set(true),
-        );
-        assert_eq!(
-            result.map(|_| ()),
-            Err(CaptureError {
-                kind: CaptureErrorKind::CoreSuppression
-            })
-        );
-        assert!(suppressed.get());
-        assert!(!callback_called.get());
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn real_unix_suppression_sets_hard_and_soft_limits_to_zero()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let capture = capture_after_process_protection(
-            ProtectionPolicy::Strict,
-            status(ProtectionPolicy::Strict)?,
-            || rlimit::getrlimit(rlimit::Resource::CORE),
-        )?;
-        assert_eq!(capture.value?, (0, 0));
-        Ok(())
-    }
-}
+#[path = "process_protection_tests.rs"]
+pub(crate) mod tests;

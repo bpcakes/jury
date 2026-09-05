@@ -87,6 +87,13 @@ mod tests {
 
     #[test]
     fn partial_entropy_failure_returns_no_memory_or_bytes() {
+        if !crate::test_support::in_subprocess(concat!(
+            module_path!(),
+            "::partial_entropy_failure_returns_no_memory_or_bytes"
+        )) {
+            return;
+        }
+
         let result = protected_random(32, ProtectionPolicy::Strict, &mut PartialFailure);
         assert!(matches!(
             result.as_ref(),
@@ -98,6 +105,13 @@ mod tests {
     #[test]
     fn caller_supplied_source_fills_the_protected_mapping() -> Result<(), Box<dyn std::error::Error>>
     {
+        if !crate::test_support::in_subprocess(concat!(
+            module_path!(),
+            "::caller_supplied_source_fills_the_protected_mapping"
+        )) {
+            return Ok(());
+        }
+
         struct Fixed;
         impl RandomSource for Fixed {
             fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {

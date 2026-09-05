@@ -3,8 +3,7 @@ use std::io::{self, IsTerminal as _, Write as _};
 use std::{env, ffi::OsString};
 
 use jury_protected::{
-    ProtectedMemory, ProtectionPolicy, ProtectionStatus, RuntimeControlStatus,
-    capture_after_process_protection,
+    ProtectedMemory, ProtectionPolicy, ProtectionStatus, capture_after_process_protection,
 };
 use zeroize::Zeroize as _;
 use zeroize::Zeroizing;
@@ -74,7 +73,7 @@ impl CapturedPassphrase {
 
     #[must_use]
     pub fn protection_degraded(&self) -> bool {
-        self.process_status.is_degraded() || memory_controls_degraded(self.memory.status())
+        self.process_status.is_degraded() || self.memory.status().is_degraded()
     }
 
     pub fn matches(&self, other: &Self) -> Result<bool, SecretInputError> {
@@ -195,19 +194,6 @@ fn establish_process_protection(
             .map_err(|_| SecretInputError::ProtectionUnavailable)?
             .status,
     )
-}
-
-fn memory_controls_degraded(status: &ProtectionStatus) -> bool {
-    [
-        status.mapping(),
-        status.memory_lock(),
-        status.dump_exclusion(),
-        status.fork_exclusion(),
-        status.guard_pages(),
-        status.canary(),
-    ]
-    .into_iter()
-    .any(|state| state != RuntimeControlStatus::Established)
 }
 
 fn read_one(

@@ -1,8 +1,8 @@
 use std::fmt;
 
 use sanitization::{
-    BoundedGuardedSecretVec, ForkProtectionRequest, ProtectedSecretFillError, ProtectionRequest,
-    ProtectionState, Requirement,
+    BoundedGuardedSecretVec, ForkPolicy, ForkProtectionRequest, ProtectedSecretFillError,
+    ProtectionRequest, ProtectionState, Requirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,13 +115,30 @@ impl ProtectionStatus {
 
     #[must_use]
     pub const fn is_degraded(&self) -> bool {
-        !matches!(self.mapping, RuntimeControlStatus::Established)
-            || !matches!(self.memory_lock, RuntimeControlStatus::Established)
-            || !matches!(self.dump_exclusion, RuntimeControlStatus::Established)
-            || !matches!(self.fork_exclusion, RuntimeControlStatus::Established)
-            || !matches!(self.guard_pages, RuntimeControlStatus::Established)
-            || !matches!(self.canary, RuntimeControlStatus::Established)
-            || !self.core_dump_suppressed
+        !self.memory_controls_established() || !self.core_dump_suppressed
+    }
+
+    // Linux retains mandatory per-mapping dump exclusion. macOS has no such
+    // mechanism: only Unsupported paired with verified process suppression
+    // satisfies its bounded ordinary-core contract.
+    const fn memory_controls_established(&self) -> bool {
+        let dump_protected = if cfg!(target_os = "macos") {
+            matches!(self.dump_exclusion, RuntimeControlStatus::Unsupported)
+                && self.core_dump_suppressed
+        } else {
+            matches!(self.dump_exclusion, RuntimeControlStatus::Established)
+        };
+        matches!(self.mapping, RuntimeControlStatus::Established)
+            && matches!(self.memory_lock, RuntimeControlStatus::Established)
+            && dump_protected
+            && matches!(self.fork_exclusion, RuntimeControlStatus::Established)
+            && matches!(self.guard_pages, RuntimeControlStatus::Established)
+            && matches!(self.canary, RuntimeControlStatus::Established)
+            && self.requested_bytes > 0
+            && self.page_granule > 0
+            && self.locked_bytes >= self.requested_bytes
+            && self.locked_bytes.is_multiple_of(self.page_granule)
+            && self.mapped_bytes >= self.locked_bytes
     }
 
     pub(crate) fn record_core_suppression(&mut self) {
@@ -244,7 +261,14 @@ impl ProtectedMemory {
         if capacity == 0 || capacity > maximum {
             return Err(MemoryError::new(MemoryErrorKind::Capacity));
         }
+        #[cfg(target_os = "macos")]
+        if policy == ProtectionPolicy::Strict {
+            crate::process_protection::suppress_core_dumps()
+                .map_err(|_| MemoryError::new(MemoryErrorKind::Protection))?;
+        }
         let request = request(policy);
+        #[cfg(test)]
+        tests::record_provider_entry();
         let inner = BoundedGuardedSecretVec::<MAX_LARGE_PROTECTED_BYTES>::try_from_capacity_with_protection(
             capacity,
             request,
@@ -252,7 +276,7 @@ impl ProtectedMemory {
         )
         .map_err(map_fill_error)?;
         let report = inner.protection_report();
-        if policy == ProtectionPolicy::Strict && !report.satisfies(request) {
+        if report.fork.policy != ForkPolicy::Exclude {
             return Err(MemoryError::new(MemoryErrorKind::Protection));
         }
         let status = ProtectionStatus {
@@ -267,8 +291,11 @@ impl ProtectedMemory {
             mapped_bytes: report.mapped_bytes,
             locked_bytes: report.locked_bytes,
             page_granule: report.page_granule,
-            core_dump_suppressed: false,
+            core_dump_suppressed: crate::process_protection::core_dump_suppressed(),
         };
+        if policy == ProtectionPolicy::Strict && !status.memory_controls_established() {
+            return Err(MemoryError::new(MemoryErrorKind::Protection));
+        }
         Ok(Self {
             inner,
             logical_capacity: capacity,
@@ -328,7 +355,11 @@ const fn request(policy: ProtectionPolicy) -> ProtectionRequest {
     };
     ProtectionRequest {
         memory_lock: os_requirement,
-        dump_exclusion: os_requirement,
+        dump_exclusion: if cfg!(target_os = "macos") {
+            Requirement::Preferred
+        } else {
+            os_requirement
+        },
         fork: ForkProtectionRequest::exclude(os_requirement),
         guard_pages: Requirement::Required,
         canary: Requirement::Required,
@@ -359,91 +390,5 @@ fn map_fill_error<E>(error: ProtectedSecretFillError<E>) -> MemoryError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strict_memory_is_guarded_locked_dump_excluded_and_fork_excluded() -> Result<(), MemoryError>
-    {
-        let memory = ProtectedMemory::initialize(31, ProtectionPolicy::Strict, |bytes| {
-            bytes.fill(0xa5);
-            Ok::<usize, ()>(bytes.len())
-        })?;
-        let status = memory.status();
-        assert_eq!(memory.capacity(), 31);
-        assert_eq!(memory.len(), 31);
-        assert!(status.mapped_bytes() >= 31);
-        assert!(status.page_granule() > 0);
-        assert_eq!(status.memory_lock(), RuntimeControlStatus::Established);
-        assert_eq!(status.dump_exclusion(), RuntimeControlStatus::Established);
-        assert_eq!(status.fork_exclusion(), RuntimeControlStatus::Established);
-        assert_eq!(status.guard_pages(), RuntimeControlStatus::Established);
-        assert_eq!(status.canary(), RuntimeControlStatus::Established);
-        Ok(())
-    }
-
-    #[test]
-    fn initializer_writes_directly_and_invalid_lengths_return_no_owner() {
-        let error = ProtectedMemory::initialize(8, ProtectionPolicy::Strict, |bytes| {
-            bytes.fill(0x5a);
-            Ok::<usize, ()>(bytes.len() + 1)
-        });
-        assert_eq!(
-            error.map(|_| ()),
-            Err(MemoryError::new(MemoryErrorKind::InvalidLength))
-        );
-    }
-
-    #[test]
-    fn supported_dispatch_preserves_compact_and_large_bounds() -> Result<(), MemoryError> {
-        let length = MAX_PROTECTED_BYTES + 1;
-        let compact = ProtectedMemory::initialize(
-            length,
-            ProtectionPolicy::EmergencyAllowDegraded,
-            |bytes| Ok::<usize, ()>(bytes.len()),
-        );
-        assert!(matches!(compact, Err(error) if error.kind() == MemoryErrorKind::Capacity));
-
-        let large = ProtectedMemory::initialize_supported(
-            length,
-            ProtectionPolicy::EmergencyAllowDegraded,
-            |bytes| {
-                bytes.fill(0xa5);
-                Ok::<usize, ()>(bytes.len())
-            },
-        )?;
-        assert_eq!(large.len(), length);
-        assert_eq!(large.capacity(), length);
-        assert!(matches!(
-            ProtectedMemory::initialize_supported(
-                0,
-                ProtectionPolicy::EmergencyAllowDegraded,
-                |_| Ok::<usize, ()>(0),
-            ),
-            Err(error) if error.kind() == MemoryErrorKind::Capacity
-        ));
-        assert!(matches!(
-            ProtectedMemory::initialize_supported(
-                MAX_LARGE_PROTECTED_BYTES + 1,
-                ProtectionPolicy::EmergencyAllowDegraded,
-                |bytes| Ok::<usize, ()>(bytes.len()),
-            ),
-            Err(error) if error.kind() == MemoryErrorKind::Capacity
-        ));
-        Ok(())
-    }
-
-    #[test]
-    fn debug_and_json_are_value_free() -> Result<(), Box<dyn std::error::Error>> {
-        let memory = ProtectedMemory::initialize(16, ProtectionPolicy::Strict, |bytes| {
-            bytes.copy_from_slice(b"ExampleSecret123");
-            Ok::<usize, ()>(bytes.len())
-        })?;
-        let debug = format!("{memory:?}");
-        let json = serde_json::to_string(memory.status())?;
-        assert!(!debug.contains("ExampleSecret123"));
-        assert!(!json.contains("ExampleSecret123"));
-        assert!(debug.contains("[REDACTED]"));
-        Ok(())
-    }
-}
+#[path = "memory_tests.rs"]
+mod tests;
