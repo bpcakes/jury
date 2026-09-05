@@ -55,7 +55,7 @@ dependency; its design was checked against
 with pinned `rustix` and `wait-timeout` providers rather than retaining the
 `jig-owned-process` package identity, its unsafe libc boundary, or any Jig
 runtime dependency. The pinned external providers report MIT/Apache-family
-license options; Jury's own release license remains a separate J26 decision.
+license options; Jury itself uses [Elastic License 2.0](../LICENSE.md).
 Provisional macOS-only `libproc` remains deferred with that backend.
 
 Each child starts as leader of a new process group. Jury keeps the leader's
