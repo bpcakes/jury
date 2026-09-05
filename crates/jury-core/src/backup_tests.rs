@@ -38,6 +38,33 @@ fn protected_passphrase(value: &[u8]) -> TestResult<ProtectedMemory> {
     )?)
 }
 
+fn parser_header(payload_digest: Digest32) -> TestResult<BackupHeaderV1> {
+    Ok(BackupHeaderV1 {
+        backup_format: 1,
+        backup_id: RecoveryId::from_bytes([1; 32])?,
+        created_at_ms: 7,
+        vault_id: VaultId::from_bytes([2; 32])?,
+        genesis_fingerprint: Digest32::new([3; 32]),
+        source_public_revision_hash: Digest32::new([4; 32]),
+        owner_principal_id: PrincipalId::from_bytes([5; 32])?,
+        owner_descriptor_fingerprint: Digest32::new([6; 32]),
+        kdf_profile: KdfProfile::PortableV1,
+        argon2_version: 0x13,
+        memory_kib: KdfProfile::PortableV1.memory_kib(),
+        passes: 3,
+        lanes: 4,
+        salt: Salt16::new([7; 16]),
+        storage_algorithm: 1,
+        nonce: Nonce12::new([8; 12]),
+        target_bucket_id: 1,
+        payload_ciphertext_length: u32::try_from(
+            jury_protocol::backup_v1::bucket_bytes(1)?
+                - jury_protocol::backup_v1::BACKUP_PREFIX_BYTES,
+        )?,
+        payload_digest,
+    })
+}
+
 #[test]
 fn every_large_backup_bucket_fits_bounded_zeroizing_bulk_memory() -> TestResult {
     for bucket_id in [4, 5] {
@@ -256,30 +283,7 @@ fn wrong_passphrase_and_tamper_fail_without_private_error_content() -> TestResul
 
 #[test]
 fn authenticated_plaintext_rejects_nonzero_bucket_padding_before_payload_parsing() -> TestResult {
-    let header = BackupHeaderV1 {
-        backup_format: 1,
-        backup_id: RecoveryId::from_bytes([1; 32])?,
-        created_at_ms: 7,
-        vault_id: VaultId::from_bytes([2; 32])?,
-        genesis_fingerprint: Digest32::new([3; 32]),
-        source_public_revision_hash: Digest32::new([4; 32]),
-        owner_principal_id: PrincipalId::from_bytes([5; 32])?,
-        owner_descriptor_fingerprint: Digest32::new([6; 32]),
-        kdf_profile: KdfProfile::PortableV1,
-        argon2_version: 0x13,
-        memory_kib: KdfProfile::PortableV1.memory_kib(),
-        passes: 3,
-        lanes: 4,
-        salt: Salt16::new([7; 16]),
-        storage_algorithm: 1,
-        nonce: Nonce12::new([8; 12]),
-        target_bucket_id: 1,
-        payload_ciphertext_length: u32::try_from(
-            jury_protocol::backup_v1::bucket_bytes(1)?
-                - jury_protocol::backup_v1::BACKUP_PREFIX_BYTES,
-        )?,
-        payload_digest: Digest32::new([9; 32]),
-    };
+    let header = parser_header(Digest32::new([9; 32]))?;
     let plaintext = [0, 0, 0, 1, 0xaa, 1];
     assert!(matches!(
         parse_padded_payload(
@@ -289,6 +293,52 @@ fn authenticated_plaintext_rejects_nonzero_bucket_padding_before_payload_parsing
         ),
         Err(error) if error.kind() == BackupErrorKind::NonCanonicalPadding
     ));
+    Ok(())
+}
+
+#[test]
+fn authenticated_recovery_payload_parser_rejects_truncation_and_invalid_lengths() -> TestResult {
+    let malformed = [
+        Vec::new(),
+        RECOVERY_PAYLOAD_MAGIC[..8].to_vec(),
+        [RECOVERY_PAYLOAD_MAGIC.as_slice(), &[0, 2]].concat(),
+        [
+            RECOVERY_PAYLOAD_MAGIC.as_slice(),
+            &RECOVERY_PAYLOAD_VERSION.to_be_bytes(),
+            &[0, 0, 0, 0],
+        ]
+        .concat(),
+        [
+            RECOVERY_PAYLOAD_MAGIC.as_slice(),
+            &RECOVERY_PAYLOAD_VERSION.to_be_bytes(),
+            &u32::MAX.to_be_bytes(),
+        ]
+        .concat(),
+    ];
+    for logical in malformed {
+        let mut plaintext = Vec::with_capacity(4 + logical.len());
+        plaintext.extend_from_slice(&u32::try_from(logical.len())?.to_be_bytes());
+        plaintext.extend_from_slice(&logical);
+        let header = parser_header(Digest32::new(crypto::sha256(&logical)))?;
+        assert!(
+            parse_padded_payload(
+                &plaintext,
+                &header,
+                ProtectionPolicy::EmergencyAllowDegraded,
+            )
+            .is_err()
+        );
+    }
+
+    let header = parser_header(Digest32::new(crypto::sha256(b"x")))?;
+    assert!(
+        parse_padded_payload(
+            &[0, 0, 0, 2, b'x'],
+            &header,
+            ProtectionPolicy::EmergencyAllowDegraded,
+        )
+        .is_err()
+    );
     Ok(())
 }
 

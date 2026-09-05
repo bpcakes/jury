@@ -666,4 +666,127 @@ fn oversized_batch_returns_capacity_before_any_artifact_change() -> TestResult {
     assert_eq!(current.to_json_bytes()?, before);
     Ok(())
 }
+
+#[derive(Clone, Copy, Debug)]
+enum MutationModelCommand {
+    Apply(&'static str),
+    Preview(&'static str),
+    StalePrior,
+    Empty,
+}
+
+#[test]
+fn mutation_planning_matches_an_independent_apply_preview_model() -> TestResult {
+    let (owner, base) = fixture()?;
+    let commands = [
+        MutationModelCommand::Apply("PrimaryOwner"),
+        MutationModelCommand::Apply("BackupOwner"),
+        MutationModelCommand::Apply("owner"),
+        MutationModelCommand::Preview("PreviewOwner"),
+        MutationModelCommand::StalePrior,
+        MutationModelCommand::Empty,
+    ];
+    let mut case_index = 0_u64;
+
+    for first in commands {
+        for second in commands {
+            for third in commands {
+                let sequence = [first, second, third];
+                let mut current = base.clone();
+                let mut model_label = "owner".to_owned();
+                let mut model_sequence = 0_u64;
+                for (step, command) in sequence.into_iter().enumerate() {
+                    let current_before = current.to_json_bytes()?;
+                    let timestamp = 20 + case_index * 4 + step as u64;
+                    let (operations, next_label, apply) = match command {
+                        MutationModelCommand::Apply(next) => (
+                            vec![PolicyOperationV1::PrincipalLabelChange {
+                                principal_id: owner.principal_id(),
+                                prior_label: model_label.clone(),
+                                next_label: next.to_owned(),
+                            }],
+                            Some(next),
+                            true,
+                        ),
+                        MutationModelCommand::Preview(next) => (
+                            vec![PolicyOperationV1::PrincipalLabelChange {
+                                principal_id: owner.principal_id(),
+                                prior_label: model_label.clone(),
+                                next_label: next.to_owned(),
+                            }],
+                            Some(next),
+                            false,
+                        ),
+                        MutationModelCommand::StalePrior => (
+                            vec![PolicyOperationV1::PrincipalLabelChange {
+                                principal_id: owner.principal_id(),
+                                prior_label: "StaleOwner".to_owned(),
+                                next_label: "RejectedOwner".to_owned(),
+                            }],
+                            None,
+                            false,
+                        ),
+                        MutationModelCommand::Empty => (Vec::new(), None, false),
+                    };
+                    let expected_success = next_label.is_some_and(|next| next != model_label);
+                    let result = VaultMutationPlan::prepare_policy(
+                        &current,
+                        &[],
+                        &owner,
+                        timestamp,
+                        operations,
+                        DirectDowngradeAcknowledgement::Absent,
+                        MutationKind::Policy,
+                    );
+                    assert_eq!(
+                        result.is_ok(),
+                        expected_success,
+                        "case {case_index}, step {step}, command {command:?}"
+                    );
+                    assert_eq!(current.to_json_bytes()?, current_before);
+                    if let Ok(plan) = result {
+                        let next_label =
+                            next_label.ok_or("successful model command lacks a label")?;
+                        assert_eq!(plan.precondition().policy_sequence, model_sequence);
+                        assert_eq!(plan.target_policy().sequence(), model_sequence + 1);
+                        assert_eq!(
+                            plan.target_policy()
+                                .principal(&owner.principal_id())
+                                .ok_or("owner missing from target policy")?
+                                .display_label,
+                            next_label
+                        );
+                        assert_eq!(
+                            replay_policy_with_witness_policies(
+                                &plan.target_artifact().policy,
+                                &[]
+                            )?,
+                            *plan.target_policy()
+                        );
+                        assert_eq!(
+                            VaultFileV1::parse(plan.target_bytes())?,
+                            *plan.target_artifact()
+                        );
+                        if apply {
+                            current = plan.target_artifact().clone();
+                            model_label = next_label.to_owned();
+                            model_sequence += 1;
+                        }
+                    }
+                }
+                let final_policy = replay_policy_with_witness_policies(&current.policy, &[])?;
+                assert_eq!(final_policy.sequence(), model_sequence);
+                assert_eq!(
+                    final_policy
+                        .principal(&owner.principal_id())
+                        .ok_or("owner missing from final policy")?
+                        .display_label,
+                    model_label
+                );
+                case_index += 1;
+            }
+        }
+    }
+    Ok(())
+}
 use std::collections::BTreeMap;

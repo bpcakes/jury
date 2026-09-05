@@ -193,6 +193,37 @@ mod tests {
     }
 
     #[test]
+    fn persisted_state_loader_rejects_malformed_and_mismatched_rows() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("witness.sqlite3");
+        let witness_id = PrincipalId::from_bytes([11; 32])?;
+
+        for state_json in [
+            b"{".to_vec(),
+            br#"{"unknown":true}"#.to_vec(),
+            encode_json_bounded(
+                &PersistedWitnessState::empty(witness_id),
+                MAX_PERSISTED_WITNESS_STATE_BYTES,
+            )
+            .map_err(|_| "valid persisted state did not encode")?,
+        ] {
+            if path.exists() {
+                fs::remove_file(&path)?;
+            }
+            SqliteWitnessStore::initialize(&path, witness_id)?;
+            let connection = Connection::open(&path)?;
+            connection.execute(
+                "UPDATE witness_state SET generation = 1, state_json = ?1 WHERE singleton = 1",
+                params![state_json],
+            )?;
+            drop(connection);
+            assert!(SqliteWitnessStore::open(&path, witness_id).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn database_lock_wait_cannot_outlive_the_operation_deadline() -> TestResult {
         let directory = tempfile::tempdir()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;

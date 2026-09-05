@@ -266,6 +266,18 @@ impl MutationCommitTarget<'_> {
         plan: &VaultMutationPlan,
         catalog_update: Option<MutationCatalogUpdate<'_>>,
     ) -> Result<MutationCommitOutcome, MutationCommitError> {
+        self.commit_with_before_shared_publish(plan, catalog_update, || Ok(()))
+    }
+
+    fn commit_with_before_shared_publish<F>(
+        &self,
+        plan: &VaultMutationPlan,
+        catalog_update: Option<MutationCatalogUpdate<'_>>,
+        before_shared_publish: F,
+    ) -> Result<MutationCommitOutcome, MutationCommitError>
+    where
+        F: FnOnce() -> Result<(), MutationCommitError>,
+    {
         if self.local.scope().vault_id() != plan.target_artifact().header.vault_id
             || self.local.scope().genesis_fingerprint()
                 != &plan.target_artifact().header.genesis_fingerprint
@@ -414,6 +426,7 @@ impl MutationCommitTarget<'_> {
             ));
         }
 
+        before_shared_publish()?;
         if !self.shared.ancestry_is_current(expected_ancestry)? {
             return Err(MutationCommitError::new(
                 MutationCommitErrorKind::StaleArtifact,
@@ -1108,6 +1121,80 @@ mod tests {
                 .repository
                 .read_encrypted_shared_artifact(MAX_VAULT_BYTES)?,
             fixture.vault.to_json_bytes()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn git_ref_movement_after_audit_intent_refuses_publication_and_retries() -> TestResult {
+        let fixture = fixture()?;
+        let refs = fixture
+            ._root
+            .path()
+            .join("repository")
+            .join(".git")
+            .join("refs")
+            .join("heads");
+        fs::create_dir_all(&refs)?;
+        let plan = plan(&fixture, "primary-owner")?;
+        let principal = fixture.local.scope().principal_id();
+        let (audit_before, checkpoint_before) = {
+            let locked = fixture.state.try_lock()?;
+            (
+                locked.read(principal.as_bytes(), PrincipalStateFile::Audit)?,
+                locked.read(principal.as_bytes(), PrincipalStateFile::Checkpoint)?,
+            )
+        };
+        let target = RepositoryMutationTarget::new(
+            &fixture.repository,
+            &fixture.state,
+            &fixture.local,
+            ProtectionPolicy::EmergencyAllowDegraded,
+        );
+
+        let result = target
+            .inner
+            .commit_with_before_shared_publish(&plan, None, || {
+                fs::write(
+                    refs.join("main"),
+                    b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                )
+                .map_err(|_| MutationCommitError::new(MutationCommitErrorKind::InvalidLocalState))
+            });
+        assert!(matches!(
+            result,
+            Err(error) if error.kind() == MutationCommitErrorKind::StaleArtifact
+        ));
+        assert_eq!(
+            fixture
+                .repository
+                .read_encrypted_shared_artifact(MAX_VAULT_BYTES)?,
+            fixture.vault.to_json_bytes()?
+        );
+        {
+            let locked = fixture.state.try_lock()?;
+            assert_ne!(
+                locked.read(principal.as_bytes(), PrincipalStateFile::Audit)?,
+                audit_before
+            );
+            assert_eq!(
+                locked.read(principal.as_bytes(), PrincipalStateFile::Checkpoint)?,
+                checkpoint_before
+            );
+        }
+
+        fs::remove_file(refs.join("main"))?;
+        assert!(matches!(
+            target.commit(&plan)?,
+            MutationCommitOutcome::Committed { .. }
+        ));
+        assert_eq!(
+            VaultFileV1::parse(
+                &fixture
+                    .repository
+                    .read_encrypted_shared_artifact(MAX_VAULT_BYTES)?
+            )?,
+            *plan.target_artifact()
         );
         Ok(())
     }

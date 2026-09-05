@@ -39,7 +39,7 @@ impl fmt::Display for HomeSelectionError {
 impl std::error::Error for HomeSelectionError {}
 
 pub enum VaultHomeLocation {
-    Repository { repository: RepositoryLocation },
+    Repository { repository: Box<RepositoryLocation> },
     Detached { path: PathBuf, source: HomeSource },
 }
 
@@ -120,7 +120,9 @@ pub fn resolve_vault_home(
         });
     }
     match RepositoryLocation::discover(start) {
-        Ok(repository) => Ok(VaultHomeLocation::Repository { repository }),
+        Ok(repository) => Ok(VaultHomeLocation::Repository {
+            repository: Box::new(repository),
+        }),
         Err(error) if error.kind() == jury_filesystem::FilesystemErrorKind::NotFound => {
             Ok(VaultHomeLocation::Detached {
                 path: linux_global_vault_home(xdg_data_home, user_home)?,

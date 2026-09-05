@@ -6,6 +6,7 @@ use std::{
     io::{ErrorKind, Read as _, Write as _},
     net::{TcpListener, TcpStream},
     os::unix::fs::PermissionsExt as _,
+    os::unix::process::ExitStatusExt as _,
     path::Path,
     process::{Child, Command, Stdio},
     sync::Mutex,
@@ -205,6 +206,20 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
     assert!(!live_text.contains("item"));
 
     assert_operator_status(&client, &witness_base)?;
+
+    witness.stop_abruptly()?;
+    witness = ProcessGuard::spawn(executable, &["serve", "--config"], &witness_config)?;
+    wait_ready(&client, &format!("{witness_base}/readyz"), &mut witness)?;
+    assert_operator_status(&client, &witness_base)?;
+
+    anchor.stop_abruptly()?;
+    anchor = ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &anchor_config)?;
+    wait_ready(
+        &client,
+        &format!("https://127.0.0.1:{anchor_port}/readyz"),
+        &mut anchor,
+    )?;
+    wait_ready(&client, &format!("{witness_base}/readyz"), &mut witness)?;
 
     let marker = "ExampleSecretMustNotAppear";
     let unauthenticated = client
@@ -588,6 +603,18 @@ impl ProcessGuard {
             thread::sleep(Duration::from_millis(25));
         }
         Err("juryd graceful shutdown timeout".into())
+    }
+
+    fn stop_abruptly(&mut self) -> TestResult {
+        if self.child.try_wait()?.is_some() {
+            return Err("juryd exited before abrupt shutdown".into());
+        }
+        self.child.kill()?;
+        let status = self.child.wait()?;
+        if status.signal() != Some(9) {
+            return Err(format!("juryd abrupt shutdown returned {status}").into());
+        }
+        Ok(())
     }
 }
 

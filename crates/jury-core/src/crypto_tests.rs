@@ -74,6 +74,90 @@ fn frozen_hpke_vector_opens_only_through_protected_output() -> Result<(), Box<dy
         .map(|_| ()),
         Err(CryptoError::AuthenticationFailed)
     );
+
+    let mut malformed_encapsulation = encapsulation.clone();
+    let mut malformed_bytes = *malformed_encapsulation.as_bytes();
+    malformed_bytes[0] ^= 1;
+    malformed_encapsulation = Encapsulation1120::new(malformed_bytes);
+    assert_eq!(
+        open_hpke(
+            &private_seed,
+            &malformed_encapsulation,
+            ciphertext,
+            &info,
+            &aad,
+            expected.len(),
+        )
+        .map(|_| ()),
+        Err(CryptoError::AuthenticationFailed)
+    );
+    assert_eq!(
+        open_hpke(
+            &private_seed,
+            &encapsulation,
+            ciphertext,
+            b"wrong-info",
+            &aad,
+            expected.len(),
+        )
+        .map(|_| ()),
+        Err(CryptoError::AuthenticationFailed)
+    );
+    assert_eq!(
+        open_hpke(
+            &private_seed,
+            &encapsulation,
+            ciphertext,
+            &info,
+            b"wrong-aad",
+            expected.len(),
+        )
+        .map(|_| ()),
+        Err(CryptoError::AuthenticationFailed)
+    );
+    assert_eq!(
+        open_hpke(
+            &protected(&[0x44; 31])?,
+            &encapsulation,
+            ciphertext,
+            &info,
+            &aad,
+            expected.len(),
+        )
+        .map(|_| ()),
+        Err(CryptoError::AuthenticationFailed)
+    );
+    Ok(())
+}
+
+#[test]
+fn stored_aead_nonce_reuse_matches_the_declared_misuse_resistance() -> Result<(), Box<dyn Error>> {
+    let key = protected(&[0x31; 32])?;
+    let nonce = Nonce12::new([0x32; 12]);
+    let first = protected(b"ExamplePlaintext-A")?;
+    let second = protected(b"ExamplePlaintext-B")?;
+    let aad = b"public-reuse-test-aad";
+
+    let first_ciphertext = seal(&key, &nonce, aad, &first)?;
+    let repeated_ciphertext = seal(&key, &nonce, aad, &first)?;
+    let second_ciphertext = seal(&key, &nonce, aad, &second)?;
+    assert_eq!(first_ciphertext, repeated_ciphertext);
+    assert_ne!(first_ciphertext, second_ciphertext);
+    assert!(
+        open(&key, &nonce, aad, &first_ciphertext, first.len())?
+            .expose(|bytes| bytes == b"ExamplePlaintext-A")?
+    );
+    assert!(
+        open(&key, &nonce, aad, &second_ciphertext, second.len())?
+            .expose(|bytes| bytes == b"ExamplePlaintext-B")?
+    );
+
+    let mut tampered = second_ciphertext;
+    tampered[0] ^= 1;
+    assert_eq!(
+        open(&key, &nonce, aad, &tampered, second.len()).map(|_| ()),
+        Err(CryptoError::AuthenticationFailed)
+    );
     Ok(())
 }
 

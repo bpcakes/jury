@@ -472,4 +472,23 @@ mod tests {
         assert!(WitnessServiceConfig::load(&config_path).is_err());
         Ok(())
     }
+
+    #[test]
+    fn config_loader_rejects_malformed_unknown_oversized_and_nonfile_inputs() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("config.json");
+
+        assert!(load_json::<AnchorServiceConfig>(Path::new("relative.json")).is_err());
+        assert!(load_json::<AnchorServiceConfig>(directory.path()).is_err());
+        for bytes in [
+            b"{".to_vec(),
+            br#"{"schema":1,"unknown":true}"#.to_vec(),
+            vec![b' '; MAX_CONFIG_BYTES + 1],
+        ] {
+            fs::write(&path, bytes)?;
+            assert!(load_json::<AnchorServiceConfig>(&path).is_err());
+        }
+        Ok(())
+    }
 }

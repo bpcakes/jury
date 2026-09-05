@@ -1,8 +1,4 @@
-use std::{
-    sync::mpsc::{self, Sender, SyncSender, TryRecvError, TrySendError},
-    thread::{self, JoinHandle},
-    time::Duration,
-};
+use std::sync::mpsc::{SyncSender, TrySendError};
 
 use jury_protocol::{vault_v1::Digest32, witness_v1::WitnessStateAnchorV1};
 
@@ -19,8 +15,7 @@ pub(super) struct AnchorRepositoryHandle {
 
 pub(super) struct AnchorRepositoryWorker {
     handle: AnchorRepositoryHandle,
-    shutdown: Sender<()>,
-    thread: Option<JoinHandle<()>>,
+    worker: crate::state_worker::StateWorker,
 }
 
 struct QueuedAnchorCommand {
@@ -53,56 +48,37 @@ impl AnchorRepositoryWorker {
         mut repository: SqliteAnchorRepository,
         queue_capacity: usize,
     ) -> Result<Self, AdapterError> {
-        let (sender, receiver) = mpsc::sync_channel::<QueuedAnchorCommand>(queue_capacity.max(1));
-        let (shutdown, shutdown_receiver) = mpsc::channel();
-        let thread = thread::Builder::new()
-            .name("juryd-anchor-state".to_owned())
-            .spawn(move || {
-                loop {
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
+        let (worker, sender) = crate::state_worker::StateWorker::spawn(
+            "juryd-anchor-state",
+            queue_capacity,
+            |queued: &QueuedAnchorCommand| queued.command.response_is_closed(),
+            move |queued| {
+                let deadline = queued.deadline.instant();
+                match queued.command {
+                    AnchorCommand::CheckReady(response) => {
+                        let result = repository.read_until(deadline).map(|_| ());
+                        let _ = response.send(result);
                     }
-                    let queued = match receiver.recv_timeout(Duration::from_millis(50)) {
-                        Ok(command) => command,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
+                    AnchorCommand::Read(response) => {
+                        let _ = response.send(repository.read_until(deadline));
                     }
-                    if queued.command.response_is_closed() {
-                        continue;
-                    }
-                    let deadline = queued.deadline.instant();
-                    match queued.command {
-                        AnchorCommand::CheckReady(response) => {
-                            let result = repository.read_until(deadline).map(|_| ());
-                            let _ = response.send(result);
-                        }
-                        AnchorCommand::Read(response) => {
-                            let _ = response.send(repository.read_until(deadline));
-                        }
-                        AnchorCommand::CompareAndSwap {
-                            expected_digest,
-                            candidate,
-                            response,
-                        } => {
-                            let _ = response.send(repository.compare_and_swap_until(
-                                expected_digest.as_ref(),
-                                &candidate,
-                                deadline,
-                            ));
-                        }
+                    AnchorCommand::CompareAndSwap {
+                        expected_digest,
+                        candidate,
+                        response,
+                    } => {
+                        let _ = response.send(repository.compare_and_swap_until(
+                            expected_digest.as_ref(),
+                            &candidate,
+                            deadline,
+                        ));
                     }
                 }
-            })
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))?;
+            },
+        )?;
         Ok(Self {
             handle: AnchorRepositoryHandle { sender },
-            shutdown,
-            thread: Some(thread),
+            worker,
         })
     }
 
@@ -110,13 +86,8 @@ impl AnchorRepositoryWorker {
         self.handle.clone()
     }
 
-    pub(super) fn shutdown(mut self) -> Result<(), AdapterError> {
-        let _ = self.shutdown.send(());
-        self.thread
-            .take()
-            .ok_or_else(|| AdapterError::new(AdapterErrorKind::Io))?
-            .join()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))
+    pub(super) fn shutdown(self) -> Result<(), AdapterError> {
+        self.worker.shutdown()
     }
 }
 

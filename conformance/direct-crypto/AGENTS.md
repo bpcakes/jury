@@ -8,6 +8,8 @@ linking cryptographic providers into a Jury product crate.
 ## Key entrypoints
 
 - `src/lib.rs` contains provider and cross-implementation conformance tests.
+- `alternate_runner.py` drives independently implemented primitive checks.
+- `alternate/boringssl_runner.cc` is the pinned BoringSSL consumer.
 - `Cargo.toml` and `Cargo.lock` pin the isolated test dependency graph.
 
 ## Edit here for X
@@ -26,3 +28,4 @@ explicitly reopened. Product cryptographic wrappers belong in `jury-core`.
 ## Common commands
 
 - `cargo test --manifest-path conformance/direct-crypto/Cargo.toml --locked`
+- `scripts/check-j25-alternate-crypto`

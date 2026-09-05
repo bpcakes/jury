@@ -308,24 +308,7 @@ fn read_action(
 }
 
 fn normalized_read_output(path: &Path) -> Result<Vec<u8>, CliError> {
-    if !path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::CurDir | std::path::Component::ParentDir
-            )
-        })
-    {
-        return Err(invalid_request_artifact());
-    }
-    let parent = std::fs::canonicalize(path.parent().ok_or_else(invalid_request_artifact)?)
-        .map_err(|_| invalid_request_artifact())?;
-    let normalized = parent.join(path.file_name().ok_or_else(invalid_request_artifact)?);
-    normalized
-        .to_str()
-        .map(str::as_bytes)
-        .map(<[u8]>::to_vec)
-        .ok_or_else(invalid_request_artifact)
+    super::output_path::normalize(path).map_err(|_| invalid_request_artifact())
 }
 
 pub(super) struct WitnessActionFiles<'a> {

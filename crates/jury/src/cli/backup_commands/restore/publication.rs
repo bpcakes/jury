@@ -388,3 +388,50 @@ pub(super) fn vault_target_label(home: &VaultHomeLocation) -> Result<String, Cli
         VaultHomeLocation::Detached { path, .. } => direct_utf8_path(&path.join("vault.json")),
     }
 }
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    fn marker() -> RestoreMarker {
+        RestoreMarker {
+            version: 1,
+            transaction_id: "11".repeat(32),
+            backup_id: "22".repeat(32),
+            vault_target: "/tmp/ExampleVault/vault.json".to_owned(),
+            identity_target: "/tmp/ExampleVault/identity.json".to_owned(),
+            state_root: "/tmp/ExampleVault/state".to_owned(),
+            vault_id: "33".repeat(32),
+            genesis_fingerprint: "44".repeat(32),
+            payload_digest: "55".repeat(32),
+            timestamp_ms: 1,
+            identity_reused: false,
+            identity_published: false,
+            approver_identity_target: None,
+            approver_identity_published: false,
+            witness_identity_target: None,
+            witness_identity_published: false,
+            vault_published: false,
+            state_published: false,
+        }
+    }
+
+    #[test]
+    fn restore_marker_parser_rejects_malformed_noncanonical_and_invalid_shape()
+    -> Result<(), CliError> {
+        let valid = marker();
+        let bytes = marker_bytes(&valid)?;
+        assert!(parse_marker(&bytes)? == valid);
+
+        let mut zero_timestamp = valid.clone();
+        zero_timestamp.timestamp_ms = 0;
+        for invalid in [
+            b"{".to_vec(),
+            [b" ".as_slice(), bytes.as_slice()].concat(),
+            marker_bytes(&zero_timestamp)?,
+        ] {
+            assert!(parse_marker(&invalid).is_err());
+        }
+        Ok(())
+    }
+}
