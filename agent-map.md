@@ -8,6 +8,8 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
+- [direct crypto conformance](./conformance/direct-crypto/AGENTS.md)
+- [witness protocol conformance](./conformance/witness-v1/AGENTS.md)
 - [crates](./crates/AGENTS.md)
 - [jury-protected](./crates/jury-protected/AGENTS.md)
 - [jury-process](./crates/jury-process/AGENTS.md)

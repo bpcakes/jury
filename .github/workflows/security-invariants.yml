@@ -92,6 +92,9 @@ jobs:
       - name: Record native Linux resource limits
         run: ulimit -a
       - name: Run J25 release-mode scale and resource measurements
-        run: python3 scripts/check-j25-measurements
+        run: |
+          sudo prlimit --pid "$$" --memlock=67108864:67108864
+          ulimit -l
+          python3 scripts/check-j25-measurements
       - name: Print the machine-specific measurement report
         run: cat target/j25-measurements/report.json

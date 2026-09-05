@@ -16,7 +16,7 @@ use jury_protocol::{
         WitnessPolicyId, WitnessShareCapsuleV1, recipient_public_key_fingerprint,
     },
 };
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use super::*;
 use crate::local_state::PrincipalLocalState;

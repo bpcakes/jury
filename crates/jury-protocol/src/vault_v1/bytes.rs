@@ -203,7 +203,7 @@ fn decode_hex(encoded: &str) -> Result<[u8; 32], ByteStringError> {
         });
     }
     let mut bytes = [0_u8; 32];
-    for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in encoded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = nibble(pair[0]).ok_or(ByteStringError::NonCanonical)?;
         let low = nibble(pair[1]).ok_or(ByteStringError::NonCanonical)?;
         bytes[index] = (high << 4) | low;

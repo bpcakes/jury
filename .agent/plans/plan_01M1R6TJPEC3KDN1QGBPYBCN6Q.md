@@ -106,7 +106,8 @@ J25 outcome. Implement the entire active scope below before J26 release binding.
   AEAD first/last tag byte (`n=2,000` each), and HMAC first/last tag byte
   (`n=20,000` each). The final release-mode run recorded absolute Welch
   statistics of 1.13, 2.51, and 1.14 under a predeclared gross-divergence
-  threshold of 10. These are noisy
+  threshold of 10. The exact staged-candidate rerun after CI portability fixes
+  recorded 0.48, 0.67, and 1.35. These are noisy
   regression smoke tests, never constant-time proof.
 - [x] (2026-09-05) Implement and execute all required measurements and the
   scoped leak scan. The 46-case release-mode runner records operation time,
@@ -114,12 +115,12 @@ J25 outcome. Implement the entire active scope below before J26 release binding.
   and a product/tool working-tree digest in
   `target/j25-measurements/report.json` for J26. The digest excludes only the
   append-only `.agent/plans/`, `.agent/state/`, and `.beads/` process/tracker
-  paths and is `0edf7b2553eebdca13f4f12611e10c8a6debec6ccd030426e7ceb63d7b1d92c0`.
+  paths and is `97303acb384475125f8a94ca155438100795f2f50efe610ad5a6bbfea19b2c28`.
   On the documented Threadripper/Linux/rustc 1.97.1 host, 1,000-item
-  validation took 155.9 ms, 65,536-proof ancestry validation took 3.22 s,
-  hardened identity/backup KDFs took 1.42/1.44 s, and hostile `u32::MAX` KDF
-  headers refused in 40.2/1.9 us without KDF-sized RSS. The maximum non-KDF
-  process RSS was 116,340 KiB for a near-cap transfer inspection. All 40 exact
+  validation took 170.6 ms, 65,536-proof ancestry validation took 3.10 s,
+  hardened identity/backup KDFs took 1.53/1.53 s, and hostile `u32::MAX` KDF
+  headers refused in 61.5/1.4 us without KDF-sized RSS. The maximum non-KDF
+  process RSS was 116,816 KiB for a near-cap transfer inspection. All 40 exact
   supported-scale and smoke operations succeeded; six intentional hard/misuse
   cases refused. No absolute SLO or constant-time claim is inferred.
 - [x] (2026-09-05) Complete the final working-tree security diff scan. One
@@ -136,10 +137,21 @@ J25 outcome. Implement the entire active scope below before J26 release binding.
   The separate 46-case release measurement runner, repository leak scan,
   bounded fuzz smoke, alternate-provider comparison, and direct/witness gate
   checks also pass locally.
+- [x] (2026-09-05) Diagnose the first native CI execution without weakening a
+  product invariant. Rust 1.98 newly linted four exact-length hexadecimal loops
+  and four imports; the equivalent `as_chunks::<2>()` loops and import cleanup
+  pass Rust 1.98 Clippy and the Rust 1.90 workspace check. The agent-map gate now
+  lists both conformance guides. GitHub's 64 KiB `RLIMIT_MEMLOCK` reproduced the
+  measurement failure at the strict 1 MiB case, so only the measurement job's
+  shell receives a bounded 64 MiB limit. Under that exact limit all 46 cases,
+  including strict 1 MiB and 16 MiB locked allocations, pass locally. A fresh
+  exact staged-candidate Jig run passes all five required targets; the complete
+  workspace test target took 834 seconds, and aggregate evidence plus all six
+  configured gates are fresh and passing.
 - [ ] Integrate Linux CI; run full verification and work gates; audit every
   requirement, disposition findings, and close J25 only on complete evidence.
-  CI wiring is present, but remote execution against the exact uncommitted
-  candidate remains unobserved.
+  The first pushed candidate exposed the three portability defects above; the
+  corrected candidate still requires a fresh exact-commit remote execution.
 
 ## Surprises & Discoveries
 
@@ -181,6 +193,12 @@ commit or push was requested.
 
 On 2026-09-05 the operator authorized committing and pushing the exact tested
 candidate so its native Linux GitHub Actions workflows can execute.
+
+The first remote run must not be counted as J25 completion: Repo Policy passed,
+but the measurement job inherited GitHub's 64 KiB locked-memory limit, Rust
+1.98 Clippy rejected newly redundant forms that Rust 1.97 accepted, and the
+agent-map gate found two omitted conformance guides. Fix each root cause and
+require a fresh exact-commit run rather than accepting partial workflow success.
 
 ## Outcomes & Retrospective
 

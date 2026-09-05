@@ -96,11 +96,7 @@ pub(crate) fn authorization_header() -> &'static reqwest::header::HeaderName {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        error::Error,
-        fs,
-        os::unix::fs::{PermissionsExt as _, symlink},
-    };
+    use std::{error::Error, fs, os::unix::fs::symlink};
 
     use super::*;
 

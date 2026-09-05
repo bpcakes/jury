@@ -1,5 +1,3 @@
-use clap::Parser as _;
-
 use super::*;
 
 #[test]
