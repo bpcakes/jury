@@ -215,6 +215,13 @@ pub struct ProtectedMemory {
 
 impl ProtectedMemory {
     /// Allocates protected pages and initializes them directly in place.
+    ///
+    /// On macOS, after capacity validation, strict mode sets both process
+    /// `RLIMIT_CORE` limits to zero and verifies them before provider entry.
+    /// This suppresses ordinary core dumps for the whole process irreversibly;
+    /// once applied, it remains in effect even if allocation or initialization
+    /// subsequently fails. Linux construction retains its per-mapping contract;
+    /// process suppression is performed separately by the capture boundary.
     pub fn initialize<E>(
         capacity: usize,
         policy: ProtectionPolicy,
@@ -228,6 +235,8 @@ impl ProtectedMemory {
     /// Compact callers continue to use [`Self::initialize`]. This constructor
     /// exists for authenticated formats whose selected public size bucket can
     /// exceed the compact 1 MiB ceiling.
+    /// It has the same irreversible macOS strict core-suppression side effect
+    /// as [`Self::initialize`], including after subsequent allocation failure.
     pub fn initialize_large<E>(
         capacity: usize,
         policy: ProtectionPolicy,
@@ -240,6 +249,8 @@ impl ProtectedMemory {
     ///
     /// The compact ceiling remains available through [`Self::initialize`] for
     /// callers whose own contract must reject larger values.
+    /// It has the same irreversible macOS strict core-suppression side effect
+    /// as [`Self::initialize`], including after subsequent allocation failure.
     pub fn initialize_supported<E>(
         capacity: usize,
         policy: ProtectionPolicy,

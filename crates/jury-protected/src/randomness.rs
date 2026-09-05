@@ -39,6 +39,9 @@ impl RandomSource for OsRandom {
 ///
 /// Any entropy failure causes the provider to wipe and unmap the partially
 /// initialized owner before a value-free error is returned.
+/// Like [`ProtectedMemory::initialize`], strict mode on macOS irreversibly
+/// suppresses ordinary process core dumps before provider entry. That effect
+/// persists even if allocation or entropy generation subsequently fails.
 pub fn protected_random(
     len: usize,
     policy: ProtectionPolicy,

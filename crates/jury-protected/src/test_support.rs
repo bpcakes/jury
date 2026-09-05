@@ -1,3 +1,6 @@
+//! Native libtest subprocess isolation. Cross-target compile checks do not
+//! establish execution through external Cargo target runners or emulators.
+
 use std::{
     ffi::OsStr,
     path::PathBuf,
@@ -46,6 +49,7 @@ fn child_completion(name: &str) -> Option<PathBuf> {
         std::env::var(CASE_ENV).ok().as_deref(),
         std::env::var_os(COMPLETION_ENV).as_deref(),
     )
+    .unwrap_or_else(|_| panic!("isolated child invocation is invalid"))
 }
 
 fn pending_record(name: &str) -> String {
@@ -56,14 +60,21 @@ fn matching_completion(
     name: &str,
     case: Option<&str>,
     completion: Option<&OsStr>,
-) -> Option<PathBuf> {
+) -> Result<Option<PathBuf>, IsolationError> {
     if case != Some(name) {
-        return None;
+        return Ok(None);
     }
-    let path = PathBuf::from(completion?);
+    let Some(completion) = completion else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(completion);
     // The private temporary path is unique per invocation. Validate its pending
-    // record before any body runs; a lone or stale inherited marker is not a child.
-    (std::fs::read(&path).ok()?.as_slice() == pending_record(name).as_bytes()).then_some(path)
+    // record before any body runs. An invalid complete invocation must fail,
+    // rather than recursively dispatching another child on a read failure.
+    if std::fs::read(&path).ok().as_deref() != Some(pending_record(name).as_bytes()) {
+        return Err(IsolationError::InvalidInvocation);
+    }
+    Ok(Some(path))
 }
 
 /// Success requires both a successful child and completion of the named body.
@@ -88,6 +99,7 @@ pub(crate) fn run_isolated<T: Termination>(case: &str, body: impl FnOnce() -> T)
 
 #[derive(Debug, PartialEq)]
 enum IsolationError {
+    InvalidInvocation,
     Io,
     ChildFailed,
     MissingCompletion,
@@ -140,28 +152,28 @@ fn child_dispatch_requires_a_matching_pending_invocation() -> std::io::Result<()
     let name = "ExampleCase";
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("completion");
-    assert_eq!(matching_completion(name, Some(name), None), None);
+    assert_eq!(matching_completion(name, Some(name), None), Ok(None));
     assert_eq!(
         matching_completion(name, Some(name), Some(path.as_os_str())),
-        None
+        Err(IsolationError::InvalidInvocation)
     );
     std::fs::write(&path, pending_record(name))?;
     assert_eq!(
         matching_completion(name, None, Some(path.as_os_str())),
-        None
+        Ok(None)
     );
     assert_eq!(
         matching_completion(name, Some("ExampleOther"), Some(path.as_os_str())),
-        None
+        Ok(None)
     );
     assert_eq!(
         matching_completion(name, Some(name), Some(path.as_os_str())),
-        Some(path.clone())
+        Ok(Some(path.clone()))
     );
     std::fs::write(&path, name)?;
     assert_eq!(
         matching_completion(name, Some(name), Some(path.as_os_str())),
-        None
+        Err(IsolationError::InvalidInvocation)
     );
     Ok(())
 }
