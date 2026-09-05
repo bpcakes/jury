@@ -53,20 +53,14 @@ fn collect_after_input(mut child: std::process::Child, input: &[u8]) -> TestResu
         .ok_or("child standard input is unavailable")?
         .write_all(input);
     let output = child.wait_with_output()?;
-    // Early rejection may close stdin before the parent finishes writing.
-    // Reap the child and preserve its response for the caller's assertions.
-    // Only Jury's typed rejection (exit 2) may close input early. Success,
-    // panics, signals, other exit codes and other write errors fail the helper.
-    if let Err(error) = write_result
-        && (output.status.code() != Some(2) || error.kind() != std::io::ErrorKind::BrokenPipe)
-    {
-        return Err(error.into());
-    }
+    // Always reap before propagating a write failure. An exit code cannot
+    // establish whether the intended input was delivered.
+    write_result?;
     Ok(output)
 }
 
 #[test]
-fn closed_input_pipe_is_tolerated_only_for_typed_rejection() -> TestResult {
+fn closed_input_pipe_is_rejected_regardless_of_exit_code() -> TestResult {
     for code in [0, 1, 2, 101] {
         // This is a real closed-pipe test of the helper, not proof of CLI policy.
         // Waiting first guarantees that no reader remains, regardless of capacity.
@@ -83,17 +77,13 @@ fn closed_input_pipe_is_tolerated_only_for_typed_rejection() -> TestResult {
         assert_eq!(child.wait()?.code(), Some(code));
         child.stdin = Some(input);
         let result = collect_after_input(child, b"ExampleInput");
-        if code == 2 {
-            assert_eq!(result?.status.code(), Some(2));
-        } else {
-            let error = result.err().ok_or("closed input pipe was accepted")?;
-            assert_eq!(
-                error
-                    .downcast_ref::<std::io::Error>()
-                    .map(std::io::Error::kind),
-                Some(std::io::ErrorKind::BrokenPipe)
-            );
-        }
+        let error = result.err().ok_or("closed input pipe was accepted")?;
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::BrokenPipe)
+        );
     }
     Ok(())
 }

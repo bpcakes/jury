@@ -19,6 +19,15 @@ wipe after live canaries are reset. The patch and its native tests are in the
 provider; Jury does not contain native FFI. These are solo source review and
 behavior tests, not independent review.
 
+The Git pin also changes dependency maintenance: an uncached build needs the
+fork source, and registry advisories do not automatically cover that Git source.
+[RustSec matches the package source kind and URL](https://github.com/RustSec/rustsec/blob/main/rustsec/src/database/query.rs)
+as well as its name and version. A clean `cargo audit` result therefore does not
+establish that upstream advisories were checked against this fork. Provider
+updates require checking upstream advisories and the fork delta explicitly;
+M10 distribution work must resolve source availability and packaging. The Jury
+crates already disable registry publication with `publish = false`.
+
 Jury disables default features and enables only `std`, `profile-guarded-native`,
 and `require-fork-exclusion`. The workspace Rust floor is 1.90. Third-party
 license and attribution details are in [NOTICE.md](../../NOTICE.md).

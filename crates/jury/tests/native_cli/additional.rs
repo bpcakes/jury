@@ -755,7 +755,9 @@ fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
         &temporary.path().join("data"),
         &temporary.path().join("state"),
         &["--json", "--allow-degraded-protection", "identity", "init"],
-        b"ExamplePass1234\nExamplePass1234\n",
+        // The pipe is non-terminal even when empty. Opt-in must be checked
+        // before attempting a read, so no passphrase delivery is expected.
+        b"",
     )?;
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
