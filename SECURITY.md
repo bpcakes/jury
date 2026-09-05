@@ -1,11 +1,14 @@
 # Security policy
 
-Jury is pre-alpha scaffolding. It has no implemented cryptographic protocol and
-must not be used to store, authorize, inject, or transfer real secrets.
+Jury is pre-alpha software. It contains experimental cryptographic and
+witnessed-access implementations, but does not yet protect secrets and must
+not be used to store, authorize, inject, or transfer real secrets.
 
-Until a public repository and private reporting channel exist, do not submit
-sensitive vulnerability details to a public issue tracker. Any public `0.x`
-release remains experimental and must publish supported versions, its threat
+No private vulnerability-reporting channel is documented yet. Do not submit
+credentials, private data, or sensitive vulnerability details to public issues.
+Public issues may be used for non-sensitive bugs with synthetic reproductions.
+Any public `0.x` release remains experimental and must publish supported
+versions, its threat
 model, deterministic test vectors, and the explicit statement that it has not
 received independent whole-product professional security review and is not
 suitable for real secrets. The active solo release path does not require or

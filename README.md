@@ -1,8 +1,15 @@
 # Jury
 
+**A portable secrets vault, exploring fresh approval for each governed open.**
+
+[Architecture](docs/architecture.md) · [Self-hosting](docs/self-hosting-juryd.md) ·
+[Recovery](docs/recovery.md) · [Roadmap](docs/jury-v1-master-plan.md) ·
+[Security](SECURITY.md)
+
 > [!WARNING]
 > Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
-> must not be used with real credentials.
+> must not be used with real credentials. It has not received independent
+> whole-product professional security review.
 
 Jury is an experimental implementation of a portable encrypted vault where
 opening a governed item can require fresh approval from a jury. The project
@@ -11,6 +18,49 @@ start at version 1. The defining release path requires signed approval and
 witness contributions for the exact item revision and action before an
 endpoint can open it. Direct slots remain an explicit unilateral mode and
 carry no quorum claim.
+
+## Why Jury?
+
+The design separates carrying a vault from authority to open it. An encrypted
+artifact can travel with a Git repository, while private identities and local
+state stay outside Git. For governed access, approval is tied to an exact item
+revision and action: reading a field, rendering a template, or passing a value
+to a child process.
+
+| Concept | Role in the design |
+| --- | --- |
+| Portable vault | Encrypted items and access policy in a versioned artifact |
+| Principal | A human or machine identity with item-scoped grants |
+| Approval | A signed decision about the exact requested action |
+| Witness | A service that contributes to an authorized governed open |
+| Receipt | Signed decision evidence with explicit limits on what it proves |
+
+Witnessed access is the defining goal of the first experimental release.
+Direct access is an explicit unilateral mode: a direct recipient can open its
+authorized item alone. An item with a direct slot has no quorum claim as a whole.
+Neither mode prevents an authorized endpoint or child from retaining plaintext.
+
+## Start here
+
+The active release target is **Linux**, with the Rust `jury` CLI and a
+self-hosted `juryd` witness daemon. macOS, Windows, and the terminal UI are
+deferred. The implementation below is pre-alpha development work, not a claim
+that a reviewed witnessed-access product has shipped.
+
+To build from source and explore the command interface, use Linux with Git,
+a native C/C++ build toolchain, and Rust 1.90 or newer:
+
+```sh
+git clone https://github.com/bpcakes/jury.git
+cd jury
+cargo run --locked -p jury -- --help
+```
+
+Use only synthetic values such as `ExampleSecret` when experimenting. The
+commands below illustrate individual operations; witnessed access also needs
+registered principals, policy, checkpoints, and configured witness endpoints.
+See the [self-hosting guide](docs/self-hosting-juryd.md) for witness setup and
+the [recovery guide](docs/recovery.md) for an `ExampleVault` recovery drill.
 
 ## What the Linux CLI implements
 
@@ -268,6 +318,8 @@ runtime dependency.
 
 ## Licensing
 
+[LICENSE.md](LICENSE.md) currently reserves all rights; no redistribution
+license has been selected.
 [docs/open-source.md](docs/open-source.md) describes the intended licensing
 model. The project is intended to become open source, but exact license texts
 remain undecided, so this repository is not ready for public redistribution.
