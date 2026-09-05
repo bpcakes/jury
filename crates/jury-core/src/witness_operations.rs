@@ -511,57 +511,15 @@ fn validate_checkpoint(
     policy: &PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
 ) -> Result<Digest32, CheckpointStatusError> {
-    checkpoint
-        .validate_shape()
-        .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
-    let witness_policy = policy
-        .witness_policy(&checkpoint.witness_policy_digest)
-        .ok_or_else(|| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
-    let (approver_set_digest, witness_set_digest) = witness_policy
-        .active_descriptor_set_digests()
-        .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
-    if checkpoint.vault_id != policy.vault_id()
-        || checkpoint.genesis_fingerprint != *policy.genesis_fingerprint()
-        || checkpoint.vault_policy_sequence != policy.sequence()
-        || checkpoint.witness_policy_id != witness_policy.witness_policy_id
-        || checkpoint.witness_policy_revision != witness_policy.revision
-        || checkpoint.witness_policy_digest
-            != witness_policy
-                .digest()
-                .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?
-        || checkpoint.witness_set_digest != witness_set_digest
-        || checkpoint.approver_set_digest != approver_set_digest
-        || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
-        || checkpoint.vault_policy_hash != *policy.terminal_revision_hash()
-        || witness_policy.vault_policy_sequence > policy.sequence()
-        || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
-            != Some(&witness_policy.vault_policy_hash)
-    {
-        return Err(invalid(CheckpointStatusErrorKind::InvalidCheckpoint));
-    }
-    let owner = policy
-        .principal(&checkpoint.issuer_owner_id)
-        .filter(|_| policy.is_owner(&checkpoint.issuer_owner_id))
-        .ok_or_else(|| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
-    if checkpoint.issuer_key_epoch != 1
-        || checkpoint.issuer_key_fingerprint
-            != signing_key_fingerprint(
-                1,
-                &checkpoint.issuer_owner_id,
-                1,
-                &owner.descriptor.verification_public_key,
-            )
-    {
-        return Err(invalid(CheckpointStatusErrorKind::InvalidSignature));
-    }
-    crypto::verify_bytes(
-        &owner.descriptor.verification_public_key,
-        &checkpoint
-            .signature_preimage()
-            .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?,
-        &checkpoint.signature,
-    )
-    .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidSignature))?;
+    use crate::checkpoint_validation::{CheckpointPolicyError, validate_checkpoint_policy};
+    validate_checkpoint_policy(policy, checkpoint).map_err(|error| {
+        invalid(match error {
+            CheckpointPolicyError::InvalidSignature => CheckpointStatusErrorKind::InvalidSignature,
+            CheckpointPolicyError::Invalid
+            | CheckpointPolicyError::ScopeMismatch
+            | CheckpointPolicyError::MissingOwner => CheckpointStatusErrorKind::InvalidCheckpoint,
+        })
+    })?;
     checkpoint
         .digest()
         .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))

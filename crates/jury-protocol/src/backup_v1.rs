@@ -439,6 +439,82 @@ mod tests {
     }
 
     #[test]
+    fn every_public_backup_kdf_and_allocation_limit_is_exact()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for profile in [KdfProfile::PortableV1, KdfProfile::HardenedV1] {
+            for bucket in 1..=5 {
+                let mut valid = header(bucket)?;
+                valid.kdf_profile = profile;
+                valid.memory_kib = profile.memory_kib();
+                valid.validate()?;
+
+                for version in [0, 0x12, 0x14, u8::MAX] {
+                    let mut hostile = valid.clone();
+                    hostile.argon2_version = version;
+                    assert_eq!(
+                        hostile.validate(),
+                        Err(BackupFormatError::UnsupportedProfile)
+                    );
+                }
+                for memory_kib in [
+                    0,
+                    profile.memory_kib() - 1,
+                    profile.memory_kib() + 1,
+                    u32::MAX,
+                ] {
+                    let mut hostile = valid.clone();
+                    hostile.memory_kib = memory_kib;
+                    assert_eq!(
+                        hostile.validate(),
+                        Err(BackupFormatError::UnsupportedProfile)
+                    );
+                }
+                for passes in [0, 1, 2, 4, u32::MAX] {
+                    let mut hostile = valid.clone();
+                    hostile.passes = passes;
+                    assert_eq!(
+                        hostile.validate(),
+                        Err(BackupFormatError::UnsupportedProfile)
+                    );
+                }
+                for lanes in [0, 1, 3, 5, u32::MAX] {
+                    let mut hostile = valid.clone();
+                    hostile.lanes = lanes;
+                    assert_eq!(
+                        hostile.validate(),
+                        Err(BackupFormatError::UnsupportedProfile)
+                    );
+                }
+
+                let expected = valid.payload_ciphertext_length;
+                for length in [0, expected - 1, expected + 1, u32::MAX] {
+                    let mut hostile = valid.clone();
+                    hostile.payload_ciphertext_length = length;
+                    assert_eq!(
+                        hostile.validate(),
+                        Err(BackupFormatError::UnsupportedProfile)
+                    );
+                }
+            }
+        }
+
+        for bucket in [0, 6, u8::MAX] {
+            assert_eq!(bucket_bytes(bucket), Err(BackupFormatError::InvalidBucket));
+        }
+        let largest_payload = BACKUP_BUCKET_BYTES[4] - BACKUP_PREFIX_BYTES - AEAD_TAG_BYTES;
+        assert_eq!(smallest_bucket_id(largest_payload), Ok(5));
+        assert_eq!(
+            smallest_bucket_id(largest_payload + 1),
+            Err(BackupFormatError::ArtifactTooLarge)
+        );
+        assert_eq!(
+            smallest_bucket_id(usize::MAX),
+            Err(BackupFormatError::ArtifactTooLarge)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn bucket_selection_accounts_for_all_framing() {
         let capacity = BACKUP_BUCKET_BYTES[0] - BACKUP_PREFIX_BYTES - AEAD_TAG_BYTES;
         assert_eq!(smallest_bucket_id(capacity), Ok(1));

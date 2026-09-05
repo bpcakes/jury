@@ -14,5 +14,6 @@ pub mod server;
 
 mod credentials;
 mod error;
+mod state_worker;
 
 pub use error::{AdapterError, AdapterErrorKind};

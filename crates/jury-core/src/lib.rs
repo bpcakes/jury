@@ -8,11 +8,14 @@ pub mod access_provider;
 pub mod adapter;
 pub mod backup;
 mod canonical;
+mod checkpoint_validation;
 mod crypto;
 pub mod domain;
 pub mod entropy;
 pub mod identity;
 pub mod item;
+#[cfg(test)]
+mod j25_measurements;
 pub mod local_state;
 pub mod mutation;
 pub mod policy;

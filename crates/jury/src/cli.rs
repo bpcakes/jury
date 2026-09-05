@@ -115,6 +115,7 @@ mod identity_commands;
 mod item_commands;
 mod mutation_commands;
 mod output;
+mod output_path;
 mod policy_commands;
 mod principal_commands;
 mod receipt_commands;

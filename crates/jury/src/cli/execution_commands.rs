@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{Seek as _, SeekFrom, Write as _};
+use std::io::{Seek as _, SeekFrom};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};

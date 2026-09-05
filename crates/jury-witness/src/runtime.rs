@@ -1,7 +1,6 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Sender, SyncSender, TryRecvError, TrySendError},
-    thread::{self, JoinHandle},
+    sync::mpsc::{SyncSender, TrySendError},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -304,8 +303,7 @@ pub struct WitnessRuntimeHandle {
 
 pub struct WitnessRuntimeWorker {
     handle: WitnessRuntimeHandle,
-    shutdown: Sender<()>,
-    thread: Option<JoinHandle<()>>,
+    worker: crate::state_worker::StateWorker,
 }
 
 enum RuntimeCommand {
@@ -365,92 +363,72 @@ impl RuntimeCommand {
 
 impl WitnessRuntimeWorker {
     pub fn spawn(mut runtime: WitnessRuntime, queue_capacity: usize) -> Result<Self, AdapterError> {
-        let (sender, receiver) = mpsc::sync_channel::<QueuedCommand>(queue_capacity.max(1));
-        let (shutdown, shutdown_receiver) = mpsc::channel();
-        let thread = thread::Builder::new()
-            .name("juryd-security-state".to_owned())
-            .spawn(move || {
-                loop {
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
+        let (worker, sender) = crate::state_worker::StateWorker::spawn(
+            "juryd-security-state",
+            queue_capacity,
+            |queued: &QueuedCommand| queued.command.response_is_closed(),
+            move |queued| {
+                let deadline = queued.deadline;
+                match queued.command {
+                    RuntimeCommand::CheckReady(response) => {
+                        let _ = response.send(runtime.check_ready(deadline));
                     }
-                    let queued = match receiver.recv_timeout(Duration::from_millis(50)) {
-                        Ok(command) => command,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    match shutdown_receiver.try_recv() {
-                        Ok(()) | Err(TryRecvError::Disconnected) => break,
-                        Err(TryRecvError::Empty) => {}
+                    RuntimeCommand::OperationalStatus(response) => {
+                        let _ = response.send(runtime.operational_status(deadline));
                     }
-                    if queued.command.response_is_closed() {
-                        continue;
-                    }
-                    let deadline = queued.deadline;
-                    match queued.command {
-                        RuntimeCommand::CheckReady(response) => {
-                            let _ = response.send(runtime.check_ready(deadline));
-                        }
-                        RuntimeCommand::OperationalStatus(response) => {
-                            let _ = response.send(runtime.operational_status(deadline));
-                        }
-                        RuntimeCommand::Register {
-                            material,
+                    RuntimeCommand::Register {
+                        material,
+                        accepted_registration,
+                        checkpoint,
+                        response,
+                    } => {
+                        let _ = response.send(runtime.register_vault(
+                            deadline,
+                            &material,
                             accepted_registration,
                             checkpoint,
-                            response,
-                        } => {
-                            let _ = response.send(runtime.register_vault(
-                                deadline,
-                                &material,
-                                accepted_registration,
-                                checkpoint,
-                            ));
-                        }
-                        RuntimeCommand::AdvanceCheckpoint {
-                            material,
-                            checkpoint,
-                            response,
-                        } => {
-                            let _ = response
-                                .send(runtime.advance_checkpoint(deadline, &material, checkpoint));
-                        }
-                        RuntimeCommand::Reserve {
-                            request,
-                            manifest,
-                            response,
-                        } => {
-                            let _ = response.send(runtime.reserve(deadline, request, &manifest));
-                        }
-                        RuntimeCommand::Decide {
-                            request,
-                            manifest,
-                            approvals,
-                            response,
-                        } => {
-                            let _ = response
-                                .send(runtime.decide(deadline, &request, &manifest, &approvals));
-                        }
-                        RuntimeCommand::Cancel {
-                            request,
-                            cancellation,
-                            response,
-                        } => {
-                            let _ =
-                                response.send(runtime.cancel(deadline, &request, &cancellation));
-                        }
-                        RuntimeCommand::Compact(response) => {
-                            let _ = response.send(runtime.compact_replay(deadline));
-                        }
+                        ));
+                    }
+                    RuntimeCommand::AdvanceCheckpoint {
+                        material,
+                        checkpoint,
+                        response,
+                    } => {
+                        let _ = response
+                            .send(runtime.advance_checkpoint(deadline, &material, checkpoint));
+                    }
+                    RuntimeCommand::Reserve {
+                        request,
+                        manifest,
+                        response,
+                    } => {
+                        let _ = response.send(runtime.reserve(deadline, request, &manifest));
+                    }
+                    RuntimeCommand::Decide {
+                        request,
+                        manifest,
+                        approvals,
+                        response,
+                    } => {
+                        let _ = response
+                            .send(runtime.decide(deadline, &request, &manifest, &approvals));
+                    }
+                    RuntimeCommand::Cancel {
+                        request,
+                        cancellation,
+                        response,
+                    } => {
+                        let _ = response.send(runtime.cancel(deadline, &request, &cancellation));
+                    }
+                    RuntimeCommand::Compact(response) => {
+                        let _ = response.send(runtime.compact_replay(deadline));
                     }
                 }
-            })
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))?;
+            },
+        )?;
         Ok(Self {
             handle: WitnessRuntimeHandle { sender },
-            shutdown,
-            thread: Some(thread),
+            worker,
         })
     }
 
@@ -459,13 +437,8 @@ impl WitnessRuntimeWorker {
         self.handle.clone()
     }
 
-    pub fn shutdown(mut self) -> Result<(), AdapterError> {
-        let _ = self.shutdown.send(());
-        self.thread
-            .take()
-            .ok_or_else(|| AdapterError::new(AdapterErrorKind::Io))?
-            .join()
-            .map_err(|_| AdapterError::new(AdapterErrorKind::Io))
+    pub fn shutdown(self) -> Result<(), AdapterError> {
+        self.worker.shutdown()
     }
 }
 
@@ -671,6 +644,8 @@ fn map_adapter_error(error: AdapterError) -> RuntimeError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use super::*;
 
     #[test]

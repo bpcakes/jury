@@ -23,7 +23,10 @@ use crate::{
     crypto::{self, CryptoError},
     domain::Capability,
     identity::VaultPrincipalIdentity,
-    policy::{DescriptorStatus, PolicyState, WitnessOperation, protocol_platform_assurance},
+    policy::{
+        DescriptorStatus, PolicyState, WitnessOperation, core_operation,
+        protocol_platform_assurance,
+    },
     witness_approval::{ApprovalReviewInput, validate_policy_authenticated_presentation},
     witness_engine::{
         validate_checkpoint_public, validate_public_request, validate_request_cancellation,
@@ -313,7 +316,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
         let now_ms = context.now_ms;
         let operation = action.operation_context.operation();
         let rule = policy
-            .witness_access_rule(&action.item_id, policy_operation(operation))
+            .witness_access_rule(&action.item_id, core_operation(operation))
             .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
         let item = policy
             .item(&action.item_id)
@@ -728,20 +731,6 @@ fn presentation_commitment(
     entry
         .commitment()
         .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation))
-}
-
-const fn policy_operation(operation: WitnessOperationV1) -> WitnessOperation {
-    match operation {
-        WitnessOperationV1::ReadStdout => WitnessOperation::ReadStdout,
-        WitnessOperationV1::WritePrivateFile => WitnessOperation::WritePrivateFile,
-        WitnessOperationV1::TemplateInjection => WitnessOperation::TemplateInjection,
-        WitnessOperationV1::ChildEnvironment => WitnessOperation::ChildEnvironment,
-        WitnessOperationV1::ChildStdin => WitnessOperation::ChildStdin,
-        WitnessOperationV1::ItemMutation => WitnessOperation::ItemMutation,
-        WitnessOperationV1::Backup => WitnessOperation::Backup,
-        WitnessOperationV1::Recovery => WitnessOperation::Recovery,
-        WitnessOperationV1::AdministrativeRekey => WitnessOperation::AdministrativeRekey,
-    }
 }
 
 fn map_witness_reason(reason: WitnessReasonV1) -> WitnessRequestError {

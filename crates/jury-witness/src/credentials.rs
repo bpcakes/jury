@@ -93,3 +93,68 @@ pub(crate) fn validate_private_regular_file(path: &Path) -> Result<(), AdapterEr
 pub(crate) fn authorization_header() -> &'static reqwest::header::HeaderName {
     &AUTHORIZATION
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{error::Error, fs, os::unix::fs::symlink};
+
+    use super::*;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    fn private_file(path: &Path, bytes: &[u8]) -> TestResult {
+        fs::write(path, bytes)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    }
+
+    #[test]
+    fn credential_parser_accepts_only_bounded_header_safe_tokens() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("credential");
+
+        for length in [MIN_CREDENTIAL_BYTES, MAX_CREDENTIAL_BYTES] {
+            private_file(&path, &vec![b'a'; length])?;
+            assert_eq!(load(&path)?.len(), length);
+        }
+        private_file(
+            &path,
+            &[vec![b'a'; MIN_CREDENTIAL_BYTES], b"\r\n".to_vec()].concat(),
+        )?;
+        assert_eq!(load(&path)?.len(), MIN_CREDENTIAL_BYTES);
+
+        for invalid in [
+            vec![b'a'; MIN_CREDENTIAL_BYTES - 1],
+            vec![b'a'; MAX_CREDENTIAL_BYTES + 1],
+            [vec![b'a'; MIN_CREDENTIAL_BYTES - 1], vec![0]].concat(),
+            [vec![b'a'; MIN_CREDENTIAL_BYTES - 1], b" ".to_vec()].concat(),
+        ] {
+            private_file(&path, &invalid)?;
+            assert!(load(&path).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn credential_loader_rejects_links_and_nonprivate_files() -> TestResult {
+        let directory = tempfile::tempdir()?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+        let path = directory.path().join("credential");
+        private_file(&path, &[b'a'; MIN_CREDENTIAL_BYTES])?;
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640))?;
+        assert!(load(&path).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+
+        let hardlink = directory.path().join("hardlink");
+        fs::hard_link(&path, &hardlink)?;
+        assert!(load(&path).is_err());
+        fs::remove_file(&hardlink)?;
+
+        let link = directory.path().join("symlink");
+        symlink(&path, &link)?;
+        assert!(load(&link).is_err());
+        Ok(())
+    }
+}

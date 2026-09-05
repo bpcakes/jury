@@ -215,3 +215,57 @@ fn identity_json_is_closed_bounded_and_byte_stable() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn every_public_identity_kdf_limit_is_exact() -> TestResult {
+    let corpus = corpus()?;
+    let baseline = parse_header(&hex_value(
+        &corpus["encodings"]["identity_header_portable"],
+    )?)?;
+
+    for profile in [KdfProfile::PortableV1, KdfProfile::HardenedV1] {
+        let mut valid = baseline.clone();
+        valid.kdf_profile = profile;
+        valid.memory_kib = profile.memory_kib();
+        valid.validate_for_active_release()?;
+
+        for version in [0, 0x12, 0x14, u8::MAX] {
+            let mut hostile = valid.clone();
+            hostile.argon2_version = version;
+            assert_eq!(
+                hostile.validate_for_active_release(),
+                Err(IdentityFormatError::UnsupportedProfile)
+            );
+        }
+        for memory_kib in [
+            0,
+            profile.memory_kib() - 1,
+            profile.memory_kib() + 1,
+            u32::MAX,
+        ] {
+            let mut hostile = valid.clone();
+            hostile.memory_kib = memory_kib;
+            assert_eq!(
+                hostile.validate_for_active_release(),
+                Err(IdentityFormatError::UnsupportedProfile)
+            );
+        }
+        for passes in [0, 1, 2, 4, u32::MAX] {
+            let mut hostile = valid.clone();
+            hostile.passes = passes;
+            assert_eq!(
+                hostile.validate_for_active_release(),
+                Err(IdentityFormatError::UnsupportedProfile)
+            );
+        }
+        for lanes in [0, 1, 3, 5, u32::MAX] {
+            let mut hostile = valid.clone();
+            hostile.lanes = lanes;
+            assert_eq!(
+                hostile.validate_for_active_release(),
+                Err(IdentityFormatError::UnsupportedProfile)
+            );
+        }
+    }
+    Ok(())
+}

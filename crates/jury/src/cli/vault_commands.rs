@@ -1,5 +1,13 @@
 use super::*;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VaultInitPublicationPoint {
+    Audit,
+    Checkpoint,
+    Receipts,
+    SharedVault,
+}
+
 pub(super) fn vault_init(
     cli: &Cli,
     _: &VaultInitArgs,
@@ -132,26 +140,41 @@ pub(super) fn vault_init(
         )
         .map_err(map_filesystem_error)?;
 
-    let shared_outcome = prepared_shared.publish().map_err(map_filesystem_error)?;
-    let mut local_complete = true;
-    for prepared in [prepared_audit, prepared_checkpoint, prepared_receipts] {
-        match prepared.publish() {
-            Ok(PublicationOutcome::PublishedAndSynced) => {}
-            Ok(_) | Err(_) => local_complete = false,
-        }
-    }
+    let shared_outcome = publish_initial_vault(
+        prepared_shared,
+        [
+            (VaultInitPublicationPoint::Audit, prepared_audit),
+            (VaultInitPublicationPoint::Checkpoint, prepared_checkpoint),
+            (VaultInitPublicationPoint::Receipts, prepared_receipts),
+        ],
+        &mut |_| Ok(()),
+    )?;
     Ok(CommandOutput::VaultCreated {
         home_source: home_source(home.source()),
         vault_id: hex(vault.header.vault_id.as_bytes()),
         genesis_fingerprint: hex(vault.header.genesis_fingerprint.as_bytes()),
         owner_principal_id: hex(owner.principal_id().as_bytes()),
-        local_state: if local_complete {
-            "initialized"
-        } else {
-            "recovery-required"
-        },
+        local_state: "initialized",
         durability: durability(shared_outcome),
     })
+}
+
+fn publish_initial_vault(
+    prepared_shared: PreparedPrivateFile,
+    prepared_local: [(VaultInitPublicationPoint, PreparedPrivateFile); 3],
+    observer: &mut dyn FnMut(VaultInitPublicationPoint) -> Result<(), CliError>,
+) -> Result<PublicationOutcome, CliError> {
+    for (point, prepared) in prepared_local {
+        if prepared.publish().map_err(map_filesystem_error)?
+            != PublicationOutcome::PublishedAndSynced
+        {
+            return Err(local_state_error());
+        }
+        observer(point)?;
+    }
+    let shared_outcome = prepared_shared.publish().map_err(map_filesystem_error)?;
+    observer(VaultInitPublicationPoint::SharedVault)?;
+    Ok(shared_outcome)
 }
 
 pub(super) fn vault_status(
@@ -275,4 +298,95 @@ pub(super) fn vault_audit_verify(
         latest_mac: hex(audit.latest_mac.as_bytes()),
         audit_events_after_checkpoint: verified.audit_events_after_checkpoint(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+    fn protected(bytes: &[u8]) -> Result<ProtectedMemory, jury_protected::MemoryError> {
+        ProtectedMemory::initialize(bytes.len(), ProtectionPolicy::Strict, |destination| {
+            destination.copy_from_slice(bytes);
+            Ok::<usize, ()>(destination.len())
+        })
+    }
+
+    #[test]
+    fn vault_initialization_publishes_shared_state_only_after_all_local_state() -> TestResult {
+        let points = [
+            VaultInitPublicationPoint::Audit,
+            VaultInitPublicationPoint::Checkpoint,
+            VaultInitPublicationPoint::Receipts,
+            VaultInitPublicationPoint::SharedVault,
+        ];
+        for fault in points {
+            let directory = tempfile::tempdir()?;
+            std::fs::set_permissions(
+                directory.path(),
+                std::os::unix::fs::PermissionsExt::from_mode(0o700),
+            )?;
+            let root = HardenedStateRoot::open_or_create(directory.path(), &[])?;
+            let prepare = |name: &str, bytes: &[u8]| -> TestResult<PreparedPrivateFile> {
+                Ok(PreparedPrivateFile::prepare_state(
+                    &root,
+                    Path::new(name),
+                    &protected(bytes)?,
+                    PublicationPolicy::CreateNew,
+                )?)
+            };
+            let prepared_shared = prepare("shared", b"shared-vault")?;
+            let prepared_local = [
+                (
+                    VaultInitPublicationPoint::Audit,
+                    prepare("audit", b"audit")?,
+                ),
+                (
+                    VaultInitPublicationPoint::Checkpoint,
+                    prepare("checkpoint", b"checkpoint")?,
+                ),
+                (
+                    VaultInitPublicationPoint::Receipts,
+                    prepare("receipts", b"receipts")?,
+                ),
+            ];
+            let mut injected = false;
+            assert!(
+                publish_initial_vault(prepared_shared, prepared_local, &mut |point| {
+                    if point == fault {
+                        injected = true;
+                        Err(CliError::new(
+                            CliErrorKind::Conflict,
+                            "injected-vault-init-failure",
+                            "injected vault initialization failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .is_err()
+            );
+            assert!(injected);
+
+            let published = |name| directory.path().join(name).exists();
+            assert!(published("audit"));
+            assert_eq!(
+                published("checkpoint"),
+                fault != VaultInitPublicationPoint::Audit
+            );
+            assert_eq!(
+                published("receipts"),
+                matches!(
+                    fault,
+                    VaultInitPublicationPoint::Receipts | VaultInitPublicationPoint::SharedVault
+                )
+            );
+            assert_eq!(
+                published("shared"),
+                fault == VaultInitPublicationPoint::SharedVault
+            );
+        }
+        Ok(())
+    }
 }

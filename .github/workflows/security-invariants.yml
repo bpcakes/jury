@@ -27,3 +27,74 @@ jobs:
         run: cargo test --manifest-path conformance/direct-crypto/Cargo.toml --locked
       - name: Verify exact-revision checkout bootstrap boundary
         run: bash scripts/test-new-checkout.sh
+
+  j25-parser-fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install pinned nightly Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: nightly-2026-08-25
+          cache: false
+      - name: Install pinned cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Run bounded J25 parser fuzz smoke
+        run: bash scripts/check-j25-fuzz-smoke
+
+  j25-alternate-crypto-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Jury
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Checkout pinned BoringSSL
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: google/boringssl
+          ref: a074f282d026a0ebbed7c9efef5a0cf63f72338d
+          path: boringssl
+          persist-credentials: false
+      - name: Build pinned BoringSSL crypto provider
+        run: |
+          cmake -S boringssl -B boringssl/build -GNinja -DCMAKE_BUILD_TYPE=Release
+          cmake --build boringssl/build --target crypto --parallel 2
+      - name: Run J25 alternate-provider conformance
+        env:
+          BORINGSSL_ROOT: ${{ github.workspace }}/boringssl
+        run: python3 scripts/check-j25-alternate-crypto
+
+  j25-repository-leak-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Build the native Jury CLI
+        run: cargo build -p jury --locked
+      - name: Run the bounded repository lifecycle leak scan
+        run: python3 scripts/check-j25-repository-leaks
+
+  j25-native-linux-measurements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Record native Linux resource limits
+        run: ulimit -a
+      - name: Run J25 release-mode scale and resource measurements
+        run: |
+          sudo prlimit --pid "$$" --memlock=67108864:67108864
+          ulimit -l
+          python3 scripts/check-j25-measurements
+      - name: Print the machine-specific measurement report
+        run: cat target/j25-measurements/report.json

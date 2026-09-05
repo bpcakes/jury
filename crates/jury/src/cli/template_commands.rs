@@ -383,24 +383,7 @@ fn template_executable_identity() -> Result<jury_protocol::witness_v1::Operation
 }
 
 fn normalized_private_output(path: &Path) -> Result<Vec<u8>, CliError> {
-    if !path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                std::path::Component::CurDir | std::path::Component::ParentDir
-            )
-        })
-    {
-        return Err(invalid_template());
-    }
-    let parent = std::fs::canonicalize(path.parent().ok_or_else(invalid_template)?)
-        .map_err(|_| invalid_template())?;
-    let normalized = parent.join(path.file_name().ok_or_else(invalid_template)?);
-    normalized
-        .to_str()
-        .map(str::as_bytes)
-        .map(<[u8]>::to_vec)
-        .ok_or_else(invalid_template)
+    super::output_path::normalize(path).map_err(|_| invalid_template())
 }
 
 fn render_template(
@@ -498,4 +481,32 @@ pub(super) fn append_bounded_output(output: &mut Vec<u8>, bytes: &[u8]) -> Resul
     }
     output.extend_from_slice(bytes);
     Ok(())
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[test]
+    fn template_parser_rejects_malformed_delimiters_and_excess_references() {
+        let Ok(valid) = parse_template("{{ExampleSecret.token}}") else {
+            panic!("valid template was rejected");
+        };
+        assert_eq!(valid.len(), 1);
+        for template in [
+            "",
+            "plain text",
+            "{{",
+            "}}",
+            "{{ExampleSecret}}",
+            "}} {{ExampleSecret.token}}",
+        ] {
+            assert!(parse_template(template).is_err());
+        }
+        let excessive = "{{ExampleSecret.token}}".repeat(MAX_TEMPLATE_REFERENCES + 1);
+        let Err(error) = parse_template(&excessive) else {
+            panic!("excessive template was accepted");
+        };
+        assert_eq!(error.code(), "template-reference-limit");
+    }
 }

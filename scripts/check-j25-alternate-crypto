@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Build and run J25 alternate-provider conformance.
+
+Consumer: J26 release candidate validation. Gated feature: the frozen J01A
+primitive provider boundary. Defect class: cross-provider output or normalized
+rejection disagreement. Deletion condition: remove when the selected primitive
+suite is retired or an equal pinned alternate-provider gate replaces it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BORINGSSL_COMMIT = "a074f282d026a0ebbed7c9efef5a0cf63f72338d"
+BORINGSSL_SOURCE_HASHES = {
+    "include/openssl/hpke.h": "f5f945e66c6950aa5d8ccf055c41d464e2f97d97fd6bfca3ee6898798dce03b5",
+    "include/openssl/xwing.h": "680cde2d69133345374d5a398c5ce12cc483712b0174aaacdd42673146da978b",
+    "crypto/hpke/hpke.cc": "7091b36d845bfdbb754dad5b0cf3840403b25488bb23a649f9fcb3948d084696",
+    "crypto/xwing/xwing.cc": "b8c2374da36f5a65fbd5207025d766266241bf9854806a604aa0ce5e1fd1b4cf",
+    "crypto/cipher/e_aesgcmsiv.cc": "83be363d48e1ef3eefd5c2b531d949deeaf07267dbde4bb3841e319fc35e33fb",
+}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def main() -> int:
+    boringssl = Path(
+        os.environ.get("BORINGSSL_ROOT", "/tmp/jury-j01b-boringssl")
+    ).resolve()
+    require((boringssl / "build/libcrypto.a").is_file(), "BoringSSL libcrypto is not built")
+    revision = subprocess.run(
+        ["git", "-C", str(boringssl), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    require(revision == BORINGSSL_COMMIT, "BoringSSL checkout revision differs")
+    for relative, expected in BORINGSSL_SOURCE_HASHES.items():
+        actual = hashlib.sha256((boringssl / relative).read_bytes()).hexdigest()
+        require(actual == expected, f"BoringSSL source differs: {relative}")
+
+    with tempfile.TemporaryDirectory(prefix="jury-j25-alternate-crypto-") as directory:
+        runner = Path(directory) / "boringssl-runner"
+        subprocess.run(
+            [
+                "c++",
+                "-std=c++17",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                f"-I{boringssl / 'include'}",
+                str(ROOT / "conformance/direct-crypto/alternate/boringssl_runner.cc"),
+                str(boringssl / "build/libcrypto.a"),
+                "-lpthread",
+                "-ldl",
+                "-o",
+                str(runner),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "python3",
+                str(ROOT / "conformance/direct-crypto/alternate_runner.py"),
+                str(runner),
+                str(ROOT / "docs/security/vectors/jury-v1-suite.json"),
+            ],
+            check=True,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"J25 alternate crypto check failed: {error}")
+        raise SystemExit(1)

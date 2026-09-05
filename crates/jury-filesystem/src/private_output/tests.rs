@@ -1,6 +1,144 @@
 use super::*;
 use jury_protected::ProtectionPolicy;
 use std::os::unix::fs::PermissionsExt as _;
+#[cfg(target_os = "linux")]
+use std::{
+    os::unix::process::ExitStatusExt as _,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+#[cfg(target_os = "linux")]
+const J25_CRASH_ROOT: &str = "JURY_J25_CRASH_ROOT";
+#[cfg(target_os = "linux")]
+const J25_CRASH_MARKER: &str = "JURY_J25_CRASH_MARKER";
+#[cfg(target_os = "linux")]
+const J25_CRASH_STAGE: &str = "JURY_J25_CRASH_STAGE";
+
+#[cfg(target_os = "linux")]
+fn hold_for_sigkill() -> ! {
+    loop {
+        thread::park();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "subprocess fixture for abrupt_publication_is_always_complete_and_retryable"]
+fn j25_sigkill_publication_probe() -> Result<(), Box<dyn std::error::Error>> {
+    let root = PathBuf::from(std::env::var_os(J25_CRASH_ROOT).ok_or("crash root is absent")?);
+    let marker = PathBuf::from(std::env::var_os(J25_CRASH_MARKER).ok_or("crash marker is absent")?);
+    let stage = std::env::var(J25_CRASH_STAGE)?;
+    let state = HardenedStateRoot::open_or_create(&root, &[])?;
+    let contents =
+        ProtectedMemory::initialize(128 * 1_024, ProtectionPolicy::Strict, |destination| {
+            destination.fill(0x5a);
+            Ok::<usize, ()>(destination.len())
+        })?;
+    let prepared = PreparedPrivateFile::prepare_state(
+        &state,
+        Path::new("value.bin"),
+        &contents,
+        PublicationPolicy::ReplaceExisting,
+    )?;
+    match stage.as_str() {
+        "before-publication" => {
+            std::fs::write(marker, b"prepared")?;
+            hold_for_sigkill();
+        }
+        "after-rename-before-parent-sync" => {
+            prepared.publish_with_sync(|_| {
+                std::fs::write(marker, b"renamed")?;
+                hold_for_sigkill();
+            })?;
+        }
+        "after-publication" => {
+            prepared.publish()?;
+            std::fs::write(marker, b"published")?;
+            hold_for_sigkill();
+        }
+        _ => return Err("unknown crash stage".into()),
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_crash_marker(
+    child: &mut Child,
+    marker: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if marker.is_file() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(format!("publication crash probe exited early with {status}").into());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    Err("publication crash probe did not reach its selected boundary".into())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn abrupt_publication_is_always_complete_and_retryable() -> Result<(), Box<dyn std::error::Error>> {
+    const PROBE_TEST: &str = "private_output::tests::j25_sigkill_publication_probe";
+    let old_contents = vec![0x49; 128 * 1_024];
+    let new_contents = vec![0x5a; 128 * 1_024];
+    for (stage, expected) in [
+        ("before-publication", old_contents.as_slice()),
+        ("after-rename-before-parent-sync", new_contents.as_slice()),
+        ("after-publication", new_contents.as_slice()),
+    ] {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().join("state");
+        std::fs::create_dir(&root)?;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+        let destination = root.join("value.bin");
+        std::fs::write(&destination, &old_contents)?;
+        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600))?;
+        let marker = temporary.path().join("boundary-reached");
+        let mut child = Command::new(std::env::current_exe()?)
+            .args(["--ignored", "--exact", PROBE_TEST, "--test-threads=1"])
+            .env(J25_CRASH_ROOT, &root)
+            .env(J25_CRASH_MARKER, &marker)
+            .env(J25_CRASH_STAGE, stage)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        wait_for_crash_marker(&mut child, &marker)?;
+        child.kill()?;
+        let status = child.wait()?;
+        assert_eq!(status.signal(), Some(9));
+        assert_eq!(std::fs::read(&destination)?, expected);
+        let metadata = std::fs::metadata(&destination)?;
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::os::unix::fs::MetadataExt::nlink(&metadata), 1);
+
+        let state = HardenedStateRoot::open_or_create(&root, &[])?;
+        let successor =
+            ProtectedMemory::initialize(128 * 1_024, ProtectionPolicy::Strict, |output| {
+                output.fill(0x6b);
+                Ok::<usize, ()>(output.len())
+            })?;
+        assert_eq!(
+            PreparedPrivateFile::prepare_state(
+                &state,
+                Path::new("value.bin"),
+                &successor,
+                PublicationPolicy::ReplaceExisting,
+            )?
+            .publish()?,
+            PublicationOutcome::PublishedAndSynced
+        );
+        assert_eq!(std::fs::read(destination)?, vec![0x6b; 128 * 1_024]);
+    }
+    Ok(())
+}
 
 #[test]
 fn reports_publication_when_parent_sync_fails() -> Result<(), Box<dyn std::error::Error>> {

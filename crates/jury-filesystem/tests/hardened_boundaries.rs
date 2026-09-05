@@ -4,6 +4,7 @@ use std::error::Error;
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
+use std::process::Command;
 
 use jury_filesystem::{
     ExclusiveStateLock, FilesystemErrorKind, HardenedStateRoot, IdentitySelectionError,
@@ -28,6 +29,22 @@ fn repository(path: &Path) -> Result<RepositoryLocation, Box<dyn Error>> {
     fs::create_dir_all(path.join(".git"))?;
     fs::write(path.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
     Ok(RepositoryLocation::discover(path)?)
+}
+
+fn git(path: &Path, arguments: &[&str]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(arguments)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "git command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(output.stdout)
 }
 
 #[test]
@@ -78,6 +95,443 @@ fn repository_ancestry_digest_tracks_head_ref_and_index_without_git() -> Result<
 
     fs::write(worktree.join(".git/index"), b"ExampleIndex")?;
     assert_ne!(repository.git_ancestry_digest()?, moved_ref);
+    Ok(())
+}
+
+#[test]
+fn repository_ancestry_digest_resolves_symbolic_ref_chains() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let repository = repository(&worktree)?;
+    let refs = worktree.join(".git/refs/heads");
+    fs::create_dir_all(&refs)?;
+    fs::write(
+        worktree.join(".git/HEAD"),
+        b"ref: refs/heads/example-alias\n",
+    )?;
+    fs::write(
+        refs.join("example-alias"),
+        b"ref: refs/heads/example-real\n",
+    )?;
+    fs::write(
+        refs.join("example-real"),
+        b"1111111111111111111111111111111111111111\n",
+    )?;
+    let before = repository.git_ancestry_digest()?;
+
+    fs::write(
+        refs.join("example-real"),
+        b"2222222222222222222222222222222222222222\n",
+    )?;
+    assert_ne!(repository.git_ancestry_digest()?, before);
+
+    fs::write(
+        refs.join("example-real"),
+        b"ref: refs/heads/example-alias\n",
+    )?;
+    assert_eq!(
+        repository
+            .git_ancestry_digest()
+            .err()
+            .ok_or("symbolic-ref cycle should fail")?
+            .kind(),
+        FilesystemErrorKind::InvalidMarker
+    );
+    Ok(())
+}
+
+#[test]
+fn repository_ancestry_digest_rejects_reftable_storage() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let repository = repository(&worktree)?;
+    fs::create_dir(worktree.join(".git/reftable"))?;
+    assert_eq!(
+        repository
+            .git_ancestry_digest()
+            .err()
+            .ok_or("unsupported ref storage should fail")?
+            .kind(),
+        FilesystemErrorKind::Unsupported
+    );
+    Ok(())
+}
+
+#[test]
+fn linked_worktree_ancestry_tracks_the_common_branch_ref() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let primary = temp.path().join("primary");
+    let linked = temp.path().join("linked");
+    fs::create_dir(&primary)?;
+    git(&primary, &["init", "--initial-branch=main"])?;
+    fs::write(primary.join("ExamplePublicFile"), b"first")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "first",
+        ],
+    )?;
+    let first = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    fs::write(primary.join("ExamplePublicFile"), b"second")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "second",
+        ],
+    )?;
+    let second = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "example-linked",
+            linked.to_str().ok_or("non-UTF-8 linked path")?,
+            first.trim(),
+        ],
+    )?;
+
+    let repository = RepositoryLocation::discover(&linked)?;
+    let before = repository.git_ancestry_digest()?;
+    git(
+        &primary,
+        &["update-ref", "refs/heads/example-linked", second.trim()],
+    )?;
+    assert_ne!(repository.git_ancestry_digest()?, before);
+    Ok(())
+}
+
+#[test]
+fn separate_and_linked_git_paths_preserve_trailing_spaces() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let primary = temp.path().join("primary");
+    let linked = temp.path().join("linked");
+    let common = temp.path().join("common ");
+    let decoy = temp.path().join("common");
+    fs::create_dir(&primary)?;
+    git(
+        &primary,
+        &[
+            "init",
+            "--initial-branch=main",
+            "--separate-git-dir",
+            common.to_str().ok_or("non-UTF-8 common Git path")?,
+        ],
+    )?;
+    fs::write(primary.join("ExamplePublicFile"), b"first")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "first",
+        ],
+    )?;
+    let first = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    fs::write(primary.join("ExamplePublicFile"), b"second")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "second",
+        ],
+    )?;
+    let second = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    git(&primary, &["update-ref", "refs/heads/main", first.trim()])?;
+
+    fs::create_dir_all(decoy.join("refs/heads"))?;
+    fs::write(decoy.join("HEAD"), b"ref: refs/heads/main\n")?;
+    fs::write(decoy.join("refs/heads/main"), first.as_bytes())?;
+
+    let primary_repository = RepositoryLocation::discover(&primary)?;
+    let primary_before = primary_repository.git_ancestry_digest()?;
+    git(&primary, &["update-ref", "refs/heads/main", second.trim()])?;
+    assert_eq!(
+        String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?.trim(),
+        second.trim()
+    );
+    assert_ne!(primary_repository.git_ancestry_digest()?, primary_before);
+
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "example-linked",
+            linked.to_str().ok_or("non-UTF-8 linked path")?,
+            first.trim(),
+        ],
+    )?;
+    let marker = fs::read_to_string(linked.join(".git"))?;
+    let linked_git_dir = Path::new(
+        marker
+            .strip_suffix('\n')
+            .unwrap_or(&marker)
+            .strip_prefix("gitdir: ")
+            .ok_or("invalid linked-worktree marker")?,
+    );
+    fs::write(
+        linked_git_dir.join("commondir"),
+        format!("{}\n", common.display()),
+    )?;
+    fs::write(decoy.join("refs/heads/example-linked"), first.as_bytes())?;
+
+    let linked_repository = RepositoryLocation::discover(&linked)?;
+    let linked_before = linked_repository.git_ancestry_digest()?;
+    git(
+        &primary,
+        &["update-ref", "refs/heads/example-linked", second.trim()],
+    )?;
+    assert_eq!(
+        String::from_utf8(git(&linked, &["rev-parse", "HEAD"])?)?.trim(),
+        second.trim()
+    );
+    assert_ne!(linked_repository.git_ancestry_digest()?, linked_before);
+    Ok(())
+}
+
+#[test]
+fn linked_worktree_ancestry_uses_current_common_git_state() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let primary = temp.path().join("primary");
+    let linked = temp.path().join("linked");
+    fs::create_dir(&primary)?;
+    git(&primary, &["init", "--initial-branch=main"])?;
+    fs::write(primary.join("ExamplePublicFile"), b"first")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "first",
+        ],
+    )?;
+    let first = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    fs::write(primary.join("ExamplePublicFile"), b"second")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "second",
+        ],
+    )?;
+    let second = String::from_utf8(git(&primary, &["rev-parse", "HEAD"])?)?;
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "example-linked",
+            linked.to_str().ok_or("non-UTF-8 linked path")?,
+            first.trim(),
+        ],
+    )?;
+
+    let marker = fs::read_to_string(linked.join(".git"))?;
+    let git_dir = Path::new(
+        marker
+            .strip_suffix('\n')
+            .unwrap_or(&marker)
+            .strip_prefix("gitdir: ")
+            .ok_or("invalid linked-worktree marker")?,
+    );
+    fs::create_dir_all(git_dir.join("refs/heads"))?;
+    fs::write(git_dir.join("refs/heads/example-linked"), first.as_bytes())?;
+
+    let repository = RepositoryLocation::discover(&linked)?;
+    let before = repository.git_ancestry_digest()?;
+    git(
+        &primary,
+        &["update-ref", "refs/heads/example-linked", second.trim()],
+    )?;
+    assert_eq!(
+        String::from_utf8(git(&linked, &["rev-parse", "HEAD"])?)?.trim(),
+        second.trim()
+    );
+    let after_common_move = repository.git_ancestry_digest()?;
+    assert_ne!(after_common_move, before);
+
+    fs::write(
+        git_dir.join("refs/heads/example-linked"),
+        b"3333333333333333333333333333333333333333\n",
+    )?;
+    assert_eq!(repository.git_ancestry_digest()?, after_common_move);
+
+    let replacement_common_dir = temp.path().join("replacement-common");
+    fs::create_dir(&replacement_common_dir)?;
+    fs::write(
+        git_dir.join("commondir"),
+        format!("{}\n", replacement_common_dir.display()),
+    )?;
+    assert_eq!(
+        repository
+            .git_ancestry_digest()
+            .err()
+            .ok_or("retargeted common directory should fail")?
+            .kind(),
+        FilesystemErrorKind::IdentityChanged
+    );
+    Ok(())
+}
+
+#[test]
+fn git_control_traversal_and_intermediate_links_fail_closed() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let outside = temp.path().join("outside");
+    fs::create_dir_all(&outside)?;
+    fs::write(
+        outside.join("main"),
+        b"1111111111111111111111111111111111111111\n",
+    )?;
+    let repository = repository(&worktree)?;
+    symlink(&outside, worktree.join(".git/refs"))?;
+    assert_eq!(
+        repository
+            .git_ancestry_digest()
+            .err()
+            .ok_or("linked ref directory should fail")?
+            .kind(),
+        FilesystemErrorKind::InvalidMarker
+    );
+
+    fs::remove_file(worktree.join(".git/refs"))?;
+    fs::write(
+        worktree.join(".git/HEAD"),
+        b"ref: refs/../../outside/main\n",
+    )?;
+    assert_eq!(
+        RepositoryLocation::discover(&worktree)
+            .err()
+            .ok_or("traversing HEAD should fail")?
+            .kind(),
+        FilesystemErrorKind::InvalidMarker
+    );
+    Ok(())
+}
+
+#[test]
+fn whole_repository_substitution_invalidates_the_retained_capability() -> Result<(), Box<dyn Error>>
+{
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    let retained = temp.path().join("retained");
+    let mut retained_repository = repository(&worktree)?;
+    retained_repository.create_jury_directory()?;
+    fs::write(worktree.join(".jury/vault.json"), b"original")?;
+
+    fs::rename(&worktree, &retained)?;
+    let mut replacement = repository(&worktree)?;
+    replacement.create_jury_directory()?;
+    fs::write(worktree.join(".jury/vault.json"), b"replacement")?;
+
+    assert_eq!(
+        retained_repository
+            .read_encrypted_shared_artifact(1024)
+            .err()
+            .ok_or("substituted repository should fail")?
+            .kind(),
+        FilesystemErrorKind::IdentityChanged
+    );
+    assert_eq!(fs::read(retained.join(".jury/vault.json"))?, b"original");
+    assert_eq!(fs::read(worktree.join(".jury/vault.json"))?, b"replacement");
+    Ok(())
+}
+
+#[test]
+fn linked_worktree_path_substitution_invalidates_the_retained_capability()
+-> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let primary = temp.path().join("primary");
+    let linked = temp.path().join("linked");
+    let retained = temp.path().join("retained");
+    fs::create_dir(&primary)?;
+    git(&primary, &["init", "--initial-branch=main"])?;
+    fs::write(primary.join("ExamplePublicFile"), b"first")?;
+    git(&primary, &["add", "ExamplePublicFile"])?;
+    git(
+        &primary,
+        &[
+            "-c",
+            "user.name=ExamplePrincipal",
+            "-c",
+            "user.email=example@example.invalid",
+            "commit",
+            "-m",
+            "first",
+        ],
+    )?;
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "example-linked",
+            linked.to_str().ok_or("non-UTF-8 linked path")?,
+        ],
+    )?;
+
+    let mut retained_repository = RepositoryLocation::discover(&linked)?;
+    retained_repository.create_jury_directory()?;
+    fs::write(linked.join(".jury/vault.json"), b"original")?;
+
+    fs::rename(&linked, &retained)?;
+    fs::create_dir(&linked)?;
+    git(&linked, &["init", "--initial-branch=replacement"])?;
+    let mut replacement = RepositoryLocation::discover(&linked)?;
+    replacement.create_jury_directory()?;
+    fs::write(linked.join(".jury/vault.json"), b"replacement")?;
+
+    assert_eq!(
+        retained_repository
+            .read_encrypted_shared_artifact(1024)
+            .err()
+            .ok_or("substituted linked worktree should fail")?
+            .kind(),
+        FilesystemErrorKind::IdentityChanged
+    );
+    assert_eq!(fs::read(retained.join(".jury/vault.json"))?, b"original");
+    assert_eq!(fs::read(linked.join(".jury/vault.json"))?, b"replacement");
     Ok(())
 }
 
@@ -138,11 +592,20 @@ fn symlinked_start_components_and_malformed_git_heads_fail_closed() -> Result<()
         .ok_or("symlinked start should fail")?;
     assert_eq!(alias_error.kind(), FilesystemErrorKind::LinkOrWrongType);
 
-    fs::write(worktree.join(".git/HEAD"), b"not-a-git-head\n")?;
-    let head_error = RepositoryLocation::discover(&worktree)
-        .err()
-        .ok_or("malformed HEAD should fail")?;
-    assert_eq!(head_error.kind(), FilesystemErrorKind::InvalidMarker);
+    for invalid in [
+        b"not-a-git-head\n".as_slice(),
+        b"ref: refs/heads/bad name\n".as_slice(),
+        b"ref: refs/heads/bad.lock\n".as_slice(),
+        b"ref: refs/heads/bad@{revision\n".as_slice(),
+        b"ref: refs/heads/double//separator\n".as_slice(),
+        b"ref: refs/heads/carriage\rreturn\n".as_slice(),
+    ] {
+        fs::write(worktree.join(".git/HEAD"), invalid)?;
+        let head_error = RepositoryLocation::discover(&worktree)
+            .err()
+            .ok_or("malformed HEAD should fail")?;
+        assert_eq!(head_error.kind(), FilesystemErrorKind::InvalidMarker);
+    }
     Ok(())
 }
 
@@ -592,6 +1055,27 @@ fn worktree_api_can_publish_only_the_fixed_encrypted_artifact_leaf() -> Result<(
         .err()
         .ok_or("noncanonical attributes should fail")?;
     assert_eq!(mismatch.kind(), FilesystemErrorKind::IdentityChanged);
+    Ok(())
+}
+
+#[test]
+fn real_git_treats_the_shared_vault_as_binary_and_unmergeable() -> Result<(), Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let worktree = temp.path().join("worktree");
+    fs::create_dir(&worktree)?;
+    git(&worktree, &["init", "--quiet", "--initial-branch=main"])?;
+    let mut repository = RepositoryLocation::discover(&worktree)?;
+    repository.create_jury_directory()?;
+    repository.ensure_vault_attributes()?;
+
+    let attributes = String::from_utf8(git(
+        &worktree,
+        &["check-attr", "diff", "merge", "--", ".jury/vault.json"],
+    )?)?;
+    assert_eq!(
+        attributes,
+        ".jury/vault.json: diff: unset\n.jury/vault.json: merge: unset\n"
+    );
     Ok(())
 }
 

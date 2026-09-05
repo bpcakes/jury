@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Record the release-mode J25 scale matrix on one native Linux machine.
+
+Consumer: J26 release-candidate validation. Feature gated: bounded public vault
+validation, replay, proof verification, catalog construction, and direct item
+unlock. Defect classes: pathological scale growth and unbounded peak RSS.
+Deletion condition: remove when the active 0.x release leaves support or an
+equal replacement measures these exact production operations and limits.
+
+The generated report is local evidence under target/, not a latency SLO or an
+independent review. Operation time excludes fixture construction; process peak
+RSS deliberately includes it so setup cannot hide resident-memory growth.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT = ROOT / "target/j25-measurements/report.json"
+TEST_NAME = "j25_measurements::release_measurement_case"
+DIGEST_EXCLUDED_PREFIXES = (b".agent/plans/", b".agent/state/", b".beads/")
+CASES = [
+    "process-baseline",
+    "public-validation-principals-1",
+    "public-validation-principals-50",
+    "public-validation-principals-256",
+    "public-validation-items-10",
+    "public-validation-items-100",
+    "public-validation-items-1000",
+    "policy-replay-1",
+    "policy-replay-100",
+    "policy-replay-4096",
+    "item-proofs-1",
+    "item-proofs-1000",
+    "item-proofs-65536",
+    "descriptor-catalog-1",
+    "descriptor-catalog-10",
+    "descriptor-catalog-100",
+    "descriptor-catalog-1000",
+    "one-item-unlock",
+    "ten-item-inject-preflight",
+    "reader-grant",
+    "read-revocation-reseal-1kib",
+    "read-revocation-reseal-1mib",
+    "read-revocation-reseal-near-file-cap",
+    "multi-item-principal-replacement",
+    "transfer-inspect-near-file-cap",
+    "transfer-dry-run-near-file-cap",
+    "divergent-transfer-refusal",
+    "hard-cap-refusal-policy-revisions",
+    "hard-cap-refusal-item-proofs",
+    "hard-cap-refusal-total-file",
+    "identity-kdf-portable",
+    "identity-kdf-hardened",
+    "backup-kdf-portable",
+    "backup-kdf-hardened",
+    "hostile-identity-kdf-header",
+    "hostile-backup-kdf-header",
+    "timing-hpke-invalid-encapsulation-vs-ciphertext",
+    "timing-storage-aead-first-vs-last-tag-byte",
+    "timing-hmac-first-vs-last-tag-byte",
+    "protected-memory-32",
+    "protected-memory-1mib",
+    "protected-memory-16mib",
+    "padding-overhead-all-buckets",
+    "cover-history-monthly-one-year",
+    "cover-history-weekly-one-year",
+    "cover-history-daily-one-year",
+]
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def run_text(arguments: list[str], *, cwd: Path = ROOT) -> str:
+    completed = subprocess.run(
+        arguments,
+        cwd=cwd,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    return completed.stdout.strip()
+
+
+def build_test_binary() -> Path:
+    completed = subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--release",
+            "--locked",
+            "-p",
+            "jury-core",
+            "--lib",
+            "--no-run",
+            "--message-format=json",
+        ],
+        cwd=ROOT,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    executables: list[Path] = []
+    for line in completed.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (
+            event.get("reason") == "compiler-artifact"
+            and event.get("target", {}).get("name") == "jury_core"
+            and event.get("profile", {}).get("test") is True
+            and event.get("executable")
+        ):
+            executables.append(Path(event["executable"]))
+    require(len(executables) == 1, "release jury-core test executable was not unique")
+    require(executables[0].is_file(), "release jury-core test executable is absent")
+    return executables[0]
+
+
+def working_tree_digest() -> str:
+    paths = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.split(b"\0")
+    digest = hashlib.sha256()
+    for raw_path in sorted(
+        path
+        for path in paths
+        if path and not path.startswith(DIGEST_EXCLUDED_PREFIXES)
+    ):
+        relative = raw_path.decode("utf-8", errors="strict")
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        digest.update(len(raw_path).to_bytes(8, "big"))
+        digest.update(raw_path)
+        contents = path.read_bytes()
+        digest.update(len(contents).to_bytes(8, "big"))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
+def machine_metadata() -> dict[str, Any]:
+    cpu_model = "unknown"
+    for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+        if line.startswith("model name"):
+            cpu_model = line.split(":", 1)[1].strip()
+            break
+    memory_kib = None
+    for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+        if line.startswith("MemTotal:"):
+            memory_kib = int(line.split()[1])
+            break
+    return {
+        "platform": platform.platform(),
+        "kernel": platform.release(),
+        "architecture": platform.machine(),
+        "logical_cpus": os.cpu_count(),
+        "cpu_model": cpu_model,
+        "memory_kib": memory_kib,
+        "rustc": run_text(["rustc", "-Vv"]),
+        "git_head": run_text(["git", "rev-parse", "HEAD"]),
+        "working_tree_sha256": working_tree_digest(),
+        "working_tree_digest_excludes": [
+            prefix.decode("ascii") for prefix in DIGEST_EXCLUDED_PREFIXES
+        ],
+    }
+
+
+def run_case(executable: Path, case: str) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="jury-j25-measurement-") as directory:
+        time_record = Path(directory) / "time.json"
+        environment = os.environ.copy()
+        environment["JURY_J25_MEASUREMENT_CASE"] = case
+        completed = subprocess.run(
+            [
+                "/usr/bin/time",
+                "-f",
+                '{"process_wall_seconds":%e,"peak_rss_kib":%M,"exit_status":%x}',
+                "-o",
+                str(time_record),
+                str(executable),
+                "--ignored",
+                "--exact",
+                TEST_NAME,
+                "--nocapture",
+                "--test-threads=1",
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        print(completed.stdout, end="")
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
+        require(completed.returncode == 0, f"measurement case failed: {case}")
+        records = [
+            json.loads(line.split("J25_MEASUREMENT=", 1)[1])
+            for line in completed.stdout.splitlines()
+            if "J25_MEASUREMENT=" in line
+        ]
+        require(len(records) == 1, f"measurement record count differs: {case}")
+        require(records[0]["case"] == case, f"measurement case identity differs: {case}")
+        resource = json.loads(time_record.read_text(encoding="utf-8"))
+        require(resource["exit_status"] == 0, f"time wrapper observed failure: {case}")
+        return records[0] | resource
+
+
+def normalized_series(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output = []
+    for prefix in (
+        "public-validation-principals-",
+        "public-validation-items-",
+        "policy-replay-",
+        "item-proofs-",
+        "descriptor-catalog-",
+        "cover-history-",
+    ):
+        series = [record for record in records if record["case"].startswith(prefix)]
+        series.sort(key=lambda record: record["count"])
+        output.append(
+            {
+                "series": prefix.removesuffix("-"),
+                "samples": [
+                    {
+                        "count": record["count"],
+                        "operation_ns_per_unit": record["operation_ns"] / record["count"],
+                        "peak_rss_kib": record["peak_rss_kib"],
+                    }
+                    for record in series
+                ],
+            }
+        )
+    return output
+
+
+def main() -> int:
+    require(sys.platform.startswith("linux"), "J25 measurement runner requires native Linux")
+    require(Path("/usr/bin/time").is_file(), "GNU time is required at /usr/bin/time")
+    executable = build_test_binary()
+    records = [run_case(executable, case) for case in CASES]
+    baseline_rss = next(
+        record["peak_rss_kib"] for record in records if record["case"] == "process-baseline"
+    )
+    for record in records:
+        record["peak_rss_delta_from_baseline_kib"] = max(
+            0, record["peak_rss_kib"] - baseline_rss
+        )
+    report = {
+        "schema": 1,
+        "consumer": "J26 release-candidate validation",
+        "feature": "bounded active Linux public vault and direct-item lifecycle",
+        "defect_classes": [
+            "pathological scale growth",
+            "count-limit bypass",
+            "unbounded resident memory",
+            "gross authentication-failure timing divergence",
+        ],
+        "deletion_condition": (
+            "active 0.x release leaves support or an equal exact-operation replacement exists"
+        ),
+        "interpretation": (
+            "Local single-sample evidence; no absolute latency SLO, certification, or independent review"
+        ),
+        "timing_scope": (
+            "operation_ns excludes fixture construction; process_wall_seconds and peak_rss_kib include it"
+        ),
+        "cover_cadence_scenarios": {
+            "window_days": 365,
+            "monthly": {"interval_days": 30, "reseals": 12},
+            "weekly": {"interval_days": 7, "reseals": 52},
+            "daily": {"interval_days": 1, "reseals": 365},
+            "scope": "measurement scenarios only; no operator schedule recommendation",
+        },
+        "machine": machine_metadata(),
+        "measurements": records,
+        "normalized_series": normalized_series(records),
+    }
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"J25 measurement report: {OUTPUT}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print(f"J25 measurement check failed: {error}", file=sys.stderr)
+        raise SystemExit(1)

@@ -718,4 +718,16 @@ mod tests {
         assert_eq!(policy_catalog_json_bytes(&catalog)?, bytes);
         Ok(())
     }
+
+    #[test]
+    fn local_catalog_parser_rejects_malformed_noncanonical_and_unknown_input() {
+        for bytes in [
+            b"{".as_slice(),
+            br#" {"version":1,"role_descriptors":[],"witness_policies":[]}"#,
+            br#"{"version":1,"role_descriptors":[],"witness_policies":[],"unknown":true}"#,
+            br#"{"version":2,"role_descriptors":[],"witness_policies":[]}"#,
+        ] {
+            assert!(PolicyCatalogV1::parse_local_compatible(bytes).is_err());
+        }
+    }
 }

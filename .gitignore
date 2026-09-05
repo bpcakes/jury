@@ -51,3 +51,7 @@ temp/
 # END JIG MANAGED BLOCK
 # br doctor per-run artifacts
 .doctor/
+
+# Coverage-guided fuzzing keeps generated corpora and crash artifacts local.
+/fuzz/corpus/
+/fuzz/artifacts/

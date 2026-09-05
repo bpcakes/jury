@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""Run J25's bounded repository-local lifecycle leak scan.
+
+Consumer: J26's release join. Gated feature: the repository-local direct
+lifecycle. Defect class: a supplied passphrase or plaintext value persisting in
+the named public, Git, diagnostic, local-evidence, snapshot, fixture, or
+controlled crash-artifact surfaces. Delete this check when that lifecycle no
+longer gates a supported release or a replacement gate inspects every named
+surface. This is scoped evidence, not proof that secrets cannot leak.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+from typing import Iterable
+
+
+ROOT = Path(__file__).resolve().parent.parent
+BINARY = ROOT / "target/debug/jury"
+
+
+class ScanFailure(Exception):
+    pass
+
+
+def run(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    input_bytes: bytes = b"",
+    expected: int | tuple[int, ...] = 0,
+) -> subprocess.CompletedProcess[bytes]:
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        input=input_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    expected_codes = (expected,) if isinstance(expected, int) else expected
+    if result.returncode not in expected_codes:
+        error_code = "unstructured-error"
+        try:
+            decoded = json.loads(result.stderr)
+            error_code = str(decoded.get("error", {}).get("code", error_code))
+        except (UnicodeError, json.JSONDecodeError):
+            pass
+        raise ScanFailure(
+            f"command returned {result.returncode}, expected {expected_codes}: "
+            f"{command[0]} {' '.join(command[1:5])}; error={error_code}"
+        )
+    return result
+
+
+def record(logs: Path, name: str, result: subprocess.CompletedProcess[bytes]) -> None:
+    (logs / f"{name}.stdout").write_bytes(result.stdout)
+    (logs / f"{name}.stderr").write_bytes(result.stderr)
+
+
+def jury(
+    repository: Path,
+    env: dict[str, str],
+    logs: Path,
+    name: str,
+    arguments: list[str],
+    input_bytes: bytes = b"",
+    expected: int = 0,
+) -> subprocess.CompletedProcess[bytes]:
+    result = run(
+        [str(BINARY), *arguments],
+        cwd=repository,
+        env=env,
+        input_bytes=input_bytes,
+        expected=expected,
+    )
+    record(logs, name, result)
+    return result
+
+
+def git(
+    repository: Path,
+    env: dict[str, str],
+    arguments: list[str],
+    expected: int | tuple[int, ...] = 0,
+) -> subprocess.CompletedProcess[bytes]:
+    return run(["git", *arguments], cwd=repository, env=env, expected=expected)
+
+
+def files_under(root: Path) -> Iterable[tuple[str, bytes]]:
+    if not root.exists():
+        return
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            yield str(path.relative_to(root)), path.read_bytes()
+
+
+def exact_needle_hits(
+    surfaces: dict[str, list[tuple[str, bytes]]], needles: tuple[bytes, ...]
+) -> list[dict[str, str]]:
+    hits: list[dict[str, str]] = []
+    for surface, entries in surfaces.items():
+        for name, contents in entries:
+            for needle in needles:
+                if needle in contents:
+                    hits.append(
+                        {
+                            "surface": surface,
+                            "entry": name,
+                            "needle_sha256_prefix": hashlib.sha256(needle).hexdigest()[:16],
+                        }
+                    )
+    return hits
+
+
+def git_object_stream(repository: Path, env: dict[str, str]) -> bytes:
+    return git(
+        repository,
+        env,
+        ["cat-file", "--batch-all-objects", "--batch"],
+    ).stdout
+
+
+def indexed_blobs(repository: Path, env: dict[str, str]) -> list[tuple[str, bytes]]:
+    names = git(repository, env, ["ls-files", "-z"]).stdout.split(b"\0")
+    output: list[tuple[str, bytes]] = []
+    for raw_name in names:
+        if not raw_name:
+            continue
+        name = raw_name.decode("utf-8", "surrogateescape")
+        blob = git(repository, env, ["show", f":{name}"]).stdout
+        output.append((name, blob))
+    return output
+
+
+def main() -> None:
+    if not BINARY.is_file():
+        raise ScanFailure("target/debug/jury is missing; run cargo build -p jury --locked")
+
+    token = secrets.token_hex(16)
+    passphrase = f"ExampleJ25Passphrase_{token}".encode()
+    value = f"ExampleJ25Plaintext_{token}".encode()
+    needles = (passphrase, value)
+
+    with tempfile.TemporaryDirectory(prefix="jury-j25-leak-") as temporary_text:
+        temporary = Path(temporary_text)
+        repository = temporary / "repository"
+        data = temporary / "data"
+        state = temporary / "state"
+        logs = temporary / "logs"
+        private = temporary / "authorized-private-output"
+        snapshots = temporary / "snapshots"
+        fixtures = temporary / "fixtures"
+        crash_artifacts = temporary / "controlled-crash-artifacts"
+        for path in (
+            repository,
+            data,
+            state,
+            logs,
+            private,
+            snapshots,
+            fixtures,
+            crash_artifacts,
+        ):
+            path.mkdir(mode=0o700)
+
+        env = {
+            "HOME": str(data),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "XDG_DATA_HOME": str(data),
+            "XDG_STATE_HOME": str(state),
+        }
+        git(repository, env, ["init", "--initial-branch=main"])
+        git(repository, env, ["config", "user.name", "ExamplePrincipal"])
+        git(repository, env, ["config", "user.email", "example@example.invalid"])
+
+        common = ["--json", "--passphrase-stdin", "--allow-degraded-protection"]
+        jury(
+            repository,
+            env,
+            logs,
+            "identity-init",
+            [*common, "identity", "init"],
+            passphrase + b"\n" + passphrase + b"\n",
+        )
+        jury(
+            repository,
+            env,
+            logs,
+            "vault-init",
+            [*common, "vault", "init"],
+            passphrase + b"\n",
+        )
+        jury(
+            repository,
+            env,
+            logs,
+            "item-create",
+            [*common, "item", "create", "ExampleItem", "--allow-direct"],
+            passphrase + b"\n",
+        )
+        git(repository, env, ["add", ".jury"])
+        git(repository, env, ["commit", "-m", "initialize encrypted ExampleVault"])
+
+        jury(
+            repository,
+            env,
+            logs,
+            "field-set",
+            [
+                *common,
+                "vault",
+                "field",
+                "set",
+                "ExampleItem",
+                "ExampleField",
+                "--value-stdin",
+            ],
+            passphrase + b"\n" + value,
+        )
+        git(repository, env, ["add", ".jury/vault.json"])
+        git(repository, env, ["commit", "-m", "update encrypted ExampleVault"])
+
+        read_output = private / "ExampleValue.out"
+        jury(
+            repository,
+            env,
+            logs,
+            "direct-read",
+            [
+                *common,
+                "read",
+                "ExampleItem",
+                "ExampleField",
+                "--direct",
+                "--out",
+                str(read_output),
+            ],
+            passphrase + b"\n",
+        )
+        if read_output.read_bytes() != value:
+            raise ScanFailure("direct read did not reproduce the synthetic value")
+
+        (fixtures / "ExampleTemplate.txt").write_text(
+            "prefix={{ExampleItem.ExampleField}};suffix", encoding="utf-8"
+        )
+        (fixtures / "ExampleTemplate.txt").chmod(0o644)
+        jury(
+            repository,
+            env,
+            logs,
+            "template-inject",
+            [
+                *common,
+                "inject",
+                "--direct",
+                "--template",
+                str(fixtures / "ExampleTemplate.txt"),
+                "--out",
+                str(private / "ExampleRendered.out"),
+            ],
+            passphrase + b"\n",
+        )
+        jury(
+            repository,
+            env,
+            logs,
+            "privacy-cover",
+            [*common, "privacy", "cover", "--item", "ExampleItem"],
+            passphrase + b"\n",
+        )
+        jury(repository, env, logs, "vault-status", ["--json", "vault", "status"])
+        jury(repository, env, logs, "history-status", ["--json", "history", "status"])
+        jury(
+            repository,
+            env,
+            logs,
+            "audit-verify",
+            [*common, "vault", "audit", "verify"],
+            passphrase + b"\n",
+        )
+        transfer = repository / "ExampleTransfer.json"
+        jury(
+            repository,
+            env,
+            logs,
+            "transfer-export",
+            [*common, "transfer", "export", "--out", str(transfer)],
+            passphrase + b"\n",
+        )
+        jury(
+            repository,
+            env,
+            logs,
+            "transfer-inspect",
+            ["--json", "transfer", "inspect", "--in", str(transfer)],
+        )
+        jury(
+            repository,
+            env,
+            logs,
+            "expected-error",
+            [
+                *common,
+                "read",
+                "MissingItem",
+                "MissingField",
+                "--direct",
+                "--out",
+                str(private / "Missing.out"),
+            ],
+            input_bytes=passphrase + b"\n",
+            expected=6,
+        )
+
+        crash_data = crash_artifacts / "data"
+        crash_state = crash_artifacts / "state"
+        crash_data.mkdir(mode=0o700)
+        crash_state.mkdir(mode=0o700)
+        crash_env = dict(env)
+        crash_env.update(
+            {
+                "HOME": str(crash_data),
+                "XDG_DATA_HOME": str(crash_data),
+                "XDG_STATE_HOME": str(crash_state),
+            }
+        )
+        interrupted = subprocess.Popen(
+            [
+                str(BINARY),
+                *common,
+                "identity",
+                "init",
+                "--name",
+                "crash-probe",
+            ],
+            cwd=repository,
+            env=crash_env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            interrupted_stdout, interrupted_stderr = interrupted.communicate(
+                input=passphrase + b"\n" + passphrase + b"\n", timeout=0.05
+            )
+        except subprocess.TimeoutExpired:
+            interrupted.kill()
+            interrupted_stdout, interrupted_stderr = interrupted.communicate()
+        else:
+            raise ScanFailure(
+                f"crash probe finished before interruption: {interrupted.returncode}"
+            )
+        if interrupted.returncode is None or interrupted.returncode >= 0:
+            raise ScanFailure("crash probe was not terminated by the injected process fault")
+        (crash_artifacts / "interrupted.stdout").write_bytes(interrupted_stdout)
+        (crash_artifacts / "interrupted.stderr").write_bytes(interrupted_stderr)
+
+        shutil.copytree(repository / ".jury", snapshots / "jury")
+        (snapshots / "status.json").write_bytes((logs / "vault-status.stdout").read_bytes())
+
+        git_dir = Path(
+            git(repository, env, ["rev-parse", "--absolute-git-dir"])
+            .stdout.decode()
+            .strip()
+        )
+        hook_dir = Path(git(repository, env, ["rev-parse", "--git-path", "hooks"]).stdout.decode().strip())
+        if not hook_dir.is_absolute():
+            hook_dir = repository / hook_dir
+        filter_config = git(
+            repository,
+            env,
+            ["config", "--show-origin", "--get-regexp", r"^filter\."],
+            expected=(0, 1),
+        ).stdout
+
+        surfaces: dict[str, list[tuple[str, bytes]]] = {
+            "worktree": [
+                (name, contents)
+                for name, contents in files_under(repository)
+                if name != ".git" and not name.startswith(".git/")
+            ],
+            "index": indexed_blobs(repository, env),
+            "objects": [("git-cat-file-batch", git_object_stream(repository, env))],
+            "diffs": [
+                ("working", git(repository, env, ["diff", "--binary"]).stdout),
+                ("staged", git(repository, env, ["diff", "--cached", "--binary"]).stdout),
+                ("history", git(repository, env, ["log", "-p", "--all", "--binary"]).stdout),
+            ],
+            "hooks": list(files_under(hook_dir)),
+            "filters": [("git-config", filter_config), ("gitattributes", (repository / ".jury/.gitattributes").read_bytes())],
+            "logs": list(files_under(logs)) + list(files_under(git_dir / "logs")),
+            "errors": [
+                (path.name, path.read_bytes()) for path in sorted(logs.glob("*.stderr"))
+            ],
+            "json": [
+                (str(path.relative_to(temporary)), path.read_bytes())
+                for path in sorted(temporary.rglob("*.json"))
+                if private not in path.parents
+            ]
+            + [
+                (str(path.relative_to(temporary)), path.read_bytes())
+                for path in sorted(temporary.rglob("*.jsonl"))
+                if private not in path.parents
+            ],
+            "receipts": [
+                (str(path.relative_to(temporary)), path.read_bytes())
+                for path in sorted(temporary.rglob("*receipt*"))
+                if path.is_file()
+            ],
+            "snapshots": list(files_under(snapshots)),
+            "fixtures": list(files_under(fixtures)),
+            "crash-artifacts": list(files_under(crash_artifacts)),
+        }
+
+        hits = exact_needle_hits(surfaces, needles)
+        if hits:
+            raise ScanFailure(f"synthetic input reached a scanned surface: {hits}")
+
+        seeded = {"seeded-self-test": [("leak.bin", b"prefix:" + value + b":suffix")]}
+        seeded_hits = exact_needle_hits(seeded, needles)
+        if len(seeded_hits) != 1 or seeded_hits[0]["surface"] != "seeded-self-test":
+            raise ScanFailure("scanner did not detect the seeded exact-value leak")
+
+        report = {
+            "schema": "jury-j25-scoped-repository-leak-scan-v1",
+            "consumer": "J26",
+            "gated_feature": "repository-local direct lifecycle",
+            "defect_class": "supplied passphrase or plaintext persisted in a named scanned surface",
+            "deletion_condition": "remove after this lifecycle no longer gates a supported release or a replacement inspects every named surface",
+            "scope": {name: len(entries) for name, entries in surfaces.items()},
+            "needle_count": len(needles),
+            "exact_hits": 0,
+            "seeded_leak_detected": True,
+            "authorized_plaintext_sinks_excluded": [
+                "authorized-private-output/ExampleValue.out",
+                "authorized-private-output/ExampleRendered.out",
+            ],
+            "omissions": [
+                "kernel memory, swap, and storage below the filesystem API",
+                "system journals and coredumps outside the controlled temporary root",
+                "child processes other than the invoked Jury and Git commands",
+                "remote Git hosts, CI service logs, and external backup systems",
+                "forensic recovery of overwritten or deallocated storage",
+            ],
+            "claim": "bounded exact-needle scan; not universal proof of secret absence",
+        }
+        print(json.dumps(report, sort_keys=True))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ScanFailure, UnicodeError, json.JSONDecodeError) as error:
+        print(f"J25 scoped repository leak scan failed: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

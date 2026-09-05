@@ -1,8 +1,8 @@
-use std::{io::Read as _, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use reqwest::{StatusCode, Url, blocking::Client, header::HeaderValue};
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize as _, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::*;
 
@@ -423,6 +423,23 @@ mod tests {
         assert!(validate_url(&Url::parse("http://192.0.2.1:7443")?, true).is_err());
         assert!(validate_url(&Url::parse("https://user@example.invalid")?, false).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn endpoint_parser_rejects_malformed_fields_before_private_file_reads() {
+        let id = "11".repeat(32);
+        for specification in [
+            String::new(),
+            format!("{id},http://127.0.0.1:7443"),
+            format!("{id},http://192.0.2.1:7443,/absent"),
+            format!("{id},https://user@example.invalid,/absent,/absent-ca"),
+            format!("{id},https://example.invalid?query=1,/absent,/absent-ca"),
+            format!("{id},https://example.invalid,/absent"),
+            "00,https://example.invalid,/absent,/absent-ca".to_owned(),
+            format!("{id},https://example.invalid,/absent,/absent-ca,extra"),
+        ] {
+            assert!(WitnessEndpointClient::parse(&specification, true).is_err());
+        }
     }
 
     #[test]

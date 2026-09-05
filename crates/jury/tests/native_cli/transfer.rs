@@ -467,6 +467,133 @@ fn assert_retained_checkpoint_rejects_absent_home(
     Ok(())
 }
 
+fn git(repository: &Path, arguments: &[&str]) -> TestResult<Output> {
+    let output = Command::new("git")
+        .current_dir(repository)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("HOME", repository)
+        .env("XDG_CONFIG_HOME", repository)
+        .args(arguments)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "git command failed: arguments={arguments:?}, stdout={:?}, stderr={:?}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    Ok(output)
+}
+
+fn assert_transfer_inspect_rejected_without_mutation(
+    paths: NativePaths<'_>,
+    transfer: &Path,
+) -> TestResult {
+    let repository_before = snapshot_tree(paths.repository)?;
+    let state_before = snapshot_tree(paths.state)?;
+    let rejected = run(
+        paths.repository,
+        paths.data,
+        paths.state,
+        &[
+            "--json",
+            "transfer",
+            "inspect",
+            "--in",
+            transfer.to_str().ok_or("non-UTF-8 transfer path")?,
+        ],
+        b"",
+    )?;
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    let error = serde_json::from_slice::<serde_json::Value>(&rejected.stderr)?;
+    assert_eq!(
+        error["error"]["code"], "invalid-transfer",
+        "unexpected transfer inspection error: {error}"
+    );
+    assert_eq!(snapshot_tree(paths.repository)?, repository_before);
+    assert_eq!(snapshot_tree(paths.state)?, state_before);
+    Ok(())
+}
+
+fn assert_forged_git_metadata_and_merge_output_grant_no_transfer_authority(
+    temporary: &Path,
+    data: &Path,
+    state: &Path,
+    base: &Path,
+    divergent: &Path,
+) -> TestResult {
+    let repository = temporary.join("forged-git-metadata");
+    fs::create_dir(&repository)?;
+    git(&repository, &["init", "--quiet"])?;
+    git(&repository, &["config", "user.name", "ExampleForger"])?;
+    git(
+        &repository,
+        &["config", "user.email", "example-forger@example.invalid"],
+    )?;
+
+    let conflict = repository.join("conflict.jury-transfer.json");
+    let mut conflict_bytes = b"<<<<<<< current\n".to_vec();
+    conflict_bytes.extend_from_slice(&fs::read(base)?);
+    conflict_bytes.extend_from_slice(b"=======\n");
+    conflict_bytes.extend_from_slice(&fs::read(divergent)?);
+    conflict_bytes.extend_from_slice(b">>>>>>> incoming\n");
+    fs::write(&conflict, conflict_bytes)?;
+    fs::set_permissions(&conflict, fs::Permissions::from_mode(0o644))?;
+
+    let mut spliced = TransferEnvelopeV1::parse(&fs::read(base)?)?;
+    let divergent_envelope = TransferEnvelopeV1::parse(&fs::read(divergent)?)?;
+    spliced.source_public_revision_hash = divergent_envelope.source_public_revision_hash;
+    spliced.vault_digest = divergent_envelope.vault_digest;
+    spliced.catalog_digest = divergent_envelope.catalog_digest;
+    spliced.vault_json = divergent_envelope.vault_json;
+    spliced.public_catalog_json = divergent_envelope.public_catalog_json;
+    let semantic_merge = repository.join("semantic-merge.jury-transfer.json");
+    fs::write(&semantic_merge, spliced.to_json_bytes()?)?;
+    fs::set_permissions(&semantic_merge, fs::Permissions::from_mode(0o644))?;
+    TransferEnvelopeV1::parse(&fs::read(&semantic_merge)?)?;
+
+    let signer = repository.join("fake-signer");
+    fs::write(
+        &signer,
+        b"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '[GNUPG:] SIG_CREATED D 1 10 00 0 0000000000000000000000000000000000000000' >&2\nprintf '%s\\n' '-----BEGIN PGP SIGNATURE-----' '' 'Zm9yZ2VkLWV4YW1wbGU=' '=AAAA' '-----END PGP SIGNATURE-----'\n",
+    )?;
+    fs::set_permissions(&signer, fs::Permissions::from_mode(0o700))?;
+    git(
+        &repository,
+        &[
+            "config",
+            "gpg.program",
+            signer.to_str().ok_or("non-UTF-8 signer path")?,
+        ],
+    )?;
+    git(&repository, &["add", "."])?;
+    git(
+        &repository,
+        &[
+            "commit",
+            "--quiet",
+            "-S",
+            "-m",
+            "Example forged signature metadata",
+        ],
+    )?;
+    let commit = git(&repository, &["cat-file", "-p", "HEAD"])?;
+    let commit = String::from_utf8(commit.stdout)?;
+    assert!(commit.contains("author ExampleForger <example-forger@example.invalid>"));
+    assert!(commit.contains("gpgsig -----BEGIN PGP SIGNATURE-----"));
+
+    let paths = NativePaths {
+        repository: &repository,
+        data,
+        state,
+    };
+    assert_transfer_inspect_rejected_without_mutation(paths, &conflict)?;
+    assert_transfer_inspect_rejected_without_mutation(paths, &semantic_merge)?;
+    Ok(())
+}
+
 #[test]
 fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestResult {
     let temporary = tempfile::tempdir()?;
@@ -533,6 +660,13 @@ fn transfer_is_portable_strict_and_write_free_on_preview_or_conflict() -> TestRe
     let divergent_path = temporary.path().join("divergent.jury-transfer.json");
     export(source, &divergent_path)?;
     assert_public_conflict_is_read_only(target, &divergent_path, "transfer-diverged")?;
+    assert_forged_git_metadata_and_merge_output_grant_no_transfer_authority(
+        temporary.path(),
+        &target_data,
+        &target_state,
+        &base_path,
+        &divergent_path,
+    )?;
     assert_retained_checkpoint_rejects_absent_home(target, &divergent_path, genesis)?;
     Ok(())
 }
