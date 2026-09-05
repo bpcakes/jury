@@ -23,12 +23,17 @@ jobs:
             rust: 1.90.0
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: jury
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       RUST_TEST_NOCAPTURE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: jury
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: featherenvy/sanitization
@@ -43,7 +48,7 @@ jobs:
           if [[ "$RUNNER_OS" == macOS ]]; then sw_vers; else cat /etc/os-release; fi
           rustc -vV
           git rev-parse HEAD
-          git -C provider rev-parse HEAD
+          git -C ../provider rev-parse HEAD
       - name: Provider selected-feature suite
         working-directory: provider
         run: cargo test --all-targets --no-default-features --features std,profile-guarded-native,require-fork-exclusion

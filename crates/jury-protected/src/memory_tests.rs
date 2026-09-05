@@ -421,3 +421,34 @@ fn strict_invalid_capacities_refuse_before_provider_entry() {
     );
     assert_eq!(PROVIDER_ENTRIES.get(), before);
 }
+
+#[test]
+fn strict_capture_refuses_degraded_controls_while_emergency_reports_them() {
+    if !crate::test_support::in_subprocess(concat!(
+        module_path!(),
+        "::strict_capture_refuses_degraded_controls_while_emergency_reports_them"
+    )) {
+        return;
+    }
+    let mut status = established_status();
+    status.memory_lock = RuntimeControlStatus::Failed;
+    let mut called = false;
+    let strict =
+        crate::capture_after_process_protection(ProtectionPolicy::Strict, status.clone(), || {
+            called = true
+        });
+    assert!(
+        matches!(strict, Err(error) if error.kind() == crate::CaptureErrorKind::DegradedMemory)
+    );
+    assert!(!called);
+    let emergency = crate::capture_after_process_protection(
+        ProtectionPolicy::EmergencyAllowDegraded,
+        status,
+        || called = true,
+    )
+    .unwrap_or_else(|_| panic!("explicit emergency capture"));
+    assert!(called);
+    assert!(emergency.status.is_degraded());
+    assert_eq!(emergency.status.memory_lock(), RuntimeControlStatus::Failed);
+    assert!(emergency.status.core_dump_suppressed());
+}
