@@ -39,12 +39,20 @@ pub(super) fn run_with_environment(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    child
+    let write_result = child
         .stdin
         .take()
         .ok_or("child standard input is unavailable")?
-        .write_all(input)?;
+        .write_all(input);
     let output = child.wait_with_output()?;
+    // Early rejection may close stdin before the parent finishes writing.
+    // Reap the child and preserve its response for the caller's assertions.
+    // A successful command or any other write error still fails the helper.
+    if let Err(error) = write_result {
+        if output.status.success() || error.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(error.into());
+        }
+    }
     if !output.status.success() {
         eprintln!("jury test command failed: {arguments:?}");
     }
