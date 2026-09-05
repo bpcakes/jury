@@ -534,7 +534,7 @@ fn validate_backup(receipt: &BackupReceipt) -> Result<(), LocalStateError> {
         || !strictly_sorted_unique(&coverage.direct_item_ids)
         || !strictly_sorted_unique(&coverage.witnessed_item_ids)
         || !strictly_sorted_unique(&coverage.unavailable_witnessed_item_ids)
-        || coverage.external_witness_recovery_required != !coverage.witnessed_item_ids.is_empty()
+        || coverage.external_witness_recovery_required == coverage.witnessed_item_ids.is_empty()
         || coverage
             .unavailable_witnessed_item_ids
             .iter()
