@@ -741,6 +741,25 @@ fn explicit_detached_home_supports_native_mutation_publication() -> TestResult {
 }
 
 #[test]
+fn strict_passphrase_capture_reports_established_protection() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let repository = temporary.path().join("repository");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
+    // Capture and its irreversible process controls run inside the CLI child.
+    let created = success_json(run(
+        &repository,
+        &temporary.path().join("data"),
+        &temporary.path().join("state"),
+        &["--json", "--passphrase-stdin", "identity", "init"],
+        b"ExamplePass1234\nExamplePass1234\n",
+    )?)?;
+    assert_eq!(created["protection_degraded"], false);
+    Ok(())
+}
+
+#[test]
 fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
     use std::io::Seek as _;
 

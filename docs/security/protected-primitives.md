@@ -78,6 +78,9 @@ and canary mandatory but permits lock, dump-exclusion, or fork-exclusion
 failure only as a stable `ProtectionStatus`. The status is serializable and the
 TUI renders the same `PROTECTION DEGRADED` fact. This is the only degraded
 override; callers cannot silently opt into pageable compact secrets.
+The TUI reports policy and observed controls separately: emergency policy
+remains visible when all controls are established, and a degraded strict status
+does not claim that an emergency override was selected.
 
 The pinned provider's `ForkProtectionReport.policy` records the requested fork
 behavior; its separate `state` records establishment. Preferred exclusion

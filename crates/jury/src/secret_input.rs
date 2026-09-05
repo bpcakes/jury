@@ -336,25 +336,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(unix)]
-    fn strict_capture_reports_established_protection() -> Result<(), Box<dyn std::error::Error>> {
-        let captured = capture_named_or_environment(
-            ProtectionPolicy::Strict,
-            false,
-            true,
-            "Example passphrase",
-            Some(SecretInputSource::provided(b"ExamplePass1234")),
-        )?;
-        assert!(!captured.protection_degraded());
-        assert!(
-            captured
-                .memory()
-                .expose(|bytes| bytes == b"ExamplePass1234")?
-        );
-        Ok(())
-    }
-
-    #[test]
     fn bounded_reader_preserves_exact_bytes_and_rejects_overflow()
     -> Result<(), Box<dyn std::error::Error>> {
         let policy = ProtectionPolicy::EmergencyAllowDegraded;

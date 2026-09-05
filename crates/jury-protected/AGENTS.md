@@ -27,5 +27,12 @@ pre-capture process-protection boundary.
 
 ## Common commands
 
+Native tests require working guarded mappings and enough `RLIMIT_MEMLOCK` for
+a page-rounded allocation larger than 1 MiB, including provider canaries.
+The Linux validation container uses a 64 MiB soft/hard MEMLOCK limit. Tests
+report insufficient limits as failures; they do not skip required protection.
+Core-limit cases run in subprocesses because lowering the hard limit cannot
+be undone by the parent test runner.
+
 - `cargo test -p jury-protected --all-targets`
 - `scripts/jig check clippy`

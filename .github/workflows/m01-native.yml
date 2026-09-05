@@ -67,7 +67,7 @@ jobs:
           set -euo pipefail
           ulimit -c 1024
           ulimit -c
-          cargo test --locked -p jury --lib secret_input::tests::strict_capture_reports_established_protection -- --exact --nocapture
+          cargo test --locked -p jury --test native_cli native_cli_additional::strict_passphrase_capture_reports_established_protection -- --exact --nocapture
           cargo test --locked -p jury --lib secret_input
       - name: Linux required repository checks
         if: runner.os == 'Linux'
