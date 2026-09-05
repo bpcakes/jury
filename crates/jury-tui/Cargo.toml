@@ -13,8 +13,5 @@ publish = false
 jury-core = { path = "../jury-core" }
 jury-protected = { path = "../jury-protected" }
 
-[target.'cfg(unix)'.dev-dependencies]
-rlimit = "=0.11.0"
-
 [lints]
 workspace = true

@@ -63,6 +63,15 @@ failure only as a stable `ProtectionStatus`. The status is serializable and the
 TUI renders the same `PROTECTION DEGRADED` fact. This is the only degraded
 override; callers cannot silently opt into pageable compact secrets.
 
+The pinned provider's `ForkProtectionReport.policy` records the requested fork
+behavior; its separate `state` records establishment. Preferred exclusion
+failure therefore remains `Exclude` with a failed or unsupported state, and
+Emergency retains the owner with that degraded state. Jury checks that the
+provider retained its requested policy in both modes; this check does not
+require successful exclusion in Emergency. The provider's
+`native_preferred_control_failures_remain_visible_after_fill` test exercises
+the failed preferred-control path.
+
 On Unix, capture first sets both `RLIMIT_CORE` limits to zero through the safe
 `rlimit` API and immediately reads back both limits. A failed set/read or a
 nonzero limit blocks the callback. Every Unix allocation records its observed

@@ -58,6 +58,8 @@ jobs:
         run: cargo test --locked -p jury-protected --all-targets
       - name: Jury protected-memory Clippy
         run: cargo clippy --locked -p jury-protected --all-targets -- -D warnings
+      - name: Jury TUI presentation tests
+        run: cargo test --locked -p jury-tui --all-targets
       - name: Linux secret input
         if: runner.os == 'Linux'
         run: cargo test --locked -p jury --lib secret_input

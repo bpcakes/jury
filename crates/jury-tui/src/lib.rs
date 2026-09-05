@@ -8,10 +8,14 @@ use jury_protected::ProtectionStatus;
 /// transient notification that callers can miss.
 #[must_use]
 pub fn protection_status_line(status: &ProtectionStatus) -> String {
-    if status.is_degraded() {
-        "PROTECTION DEGRADED — emergency override is active".to_owned()
+    protection_message(status.is_degraded()).to_owned()
+}
+
+fn protection_message(degraded: bool) -> &'static str {
+    if degraded {
+        "PROTECTION DEGRADED — emergency override is active"
     } else {
-        "Protection controls established".to_owned()
+        "Protection controls established"
     }
 }
 
@@ -27,9 +31,7 @@ pub fn unavailable_message() -> String {
 
 #[cfg(test)]
 mod tests {
-    use jury_protected::{ProtectedMemory, ProtectionPolicy};
-
-    use super::{protection_status_line, unavailable_message};
+    use super::{protection_message, unavailable_message};
 
     #[test]
     fn warning_names_the_product_and_maturity() {
@@ -40,34 +42,16 @@ mod tests {
     }
 
     #[test]
-    fn degraded_protection_remains_prominent() -> Result<(), Box<dyn std::error::Error>> {
-        // Exercise a real unavailable control. Emergency policy can be fully
-        // established when the host already suppresses cores; it is not itself
-        // evidence of degradation. Only this test in this binary allocates.
-        #[cfg(unix)]
-        let previous = rlimit::getrlimit(rlimit::Resource::MEMLOCK)?;
-        #[cfg(unix)]
-        rlimit::setrlimit(rlimit::Resource::MEMLOCK, 0, previous.1)?;
-        let memory = ProtectedMemory::initialize(
-            16,
-            ProtectionPolicy::EmergencyAllowDegraded,
-            |destination| {
-                destination.fill(0xa5);
-                Ok::<usize, ()>(destination.len())
-            },
-        );
-        #[cfg(unix)]
-        rlimit::setrlimit(rlimit::Resource::MEMLOCK, previous.0, previous.1)?;
-        let memory = memory?;
-        #[cfg(unix)]
-        assert_eq!(
-            memory.status().memory_lock(),
-            jury_protected::RuntimeControlStatus::Failed
-        );
-        assert!(memory.status().is_degraded());
-        let rendered = protection_status_line(memory.status());
+    fn degraded_protection_remains_prominent() {
+        // Test presentation only; jury-protected tests establish which native
+        // control outcomes produce the degradation fact supplied here.
+        let rendered = protection_message(true);
         assert!(rendered.contains("PROTECTION DEGRADED"));
         assert!(rendered.contains("emergency override"));
-        Ok(())
+    }
+
+    #[test]
+    fn established_protection_is_not_rendered_as_emergency() {
+        assert_eq!(protection_message(false), "Protection controls established");
     }
 }

@@ -1543,7 +1543,6 @@ version = "0.1.0"
 dependencies = [
  "jury-core",
  "jury-protected",
- "rlimit",
 ]
 
 [[package]]
