@@ -2319,7 +2319,7 @@ dependencies = [
 [[package]]
 name = "sanitization"
 version = "2.0.4"
-source = "git+https://github.com/featherenvy/sanitization.git?rev=f4c6d7567c5358a1a6f5aea669406178d618043a#f4c6d7567c5358a1a6f5aea669406178d618043a"
+source = "git+https://github.com/featherenvy/sanitization.git?rev=3f0a72c5640b4919dec93799725c7573b2878a8c#3f0a72c5640b4919dec93799725c7573b2878a8c"
 
 [[package]]
 name = "schannel"

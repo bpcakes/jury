@@ -8,7 +8,7 @@ security review.
 ## Protected memory provider
 
 `jury-protected` pins the authorized `featherenvy/sanitization` fork at immutable
-Git revision `f4c6d7567c5358a1a6f5aea669406178d618043a` (package 2.0.4),
+Git revision `3f0a72c5640b4919dec93799725c7573b2878a8c` (package 2.0.4),
 with MIT OR Apache-2.0 licensing. The fork is based on upstream v2.0.4 commit
 `0f95eec55aa16562be9dc3a08ee60a043d7a0da8`. Since the J02 v2.0.3 audit
 (`ffcb211cd931c6966b2e767ce5edffa4b47c4f07`, package checksum

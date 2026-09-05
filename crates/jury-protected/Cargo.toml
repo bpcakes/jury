@@ -14,7 +14,7 @@ aho-corasick = "=1.1.3"
 base64 = "=0.22.1"
 getrandom = "=0.4.3"
 rlimit = "=0.11.0"
-sanitization = { git = "https://github.com/featherenvy/sanitization.git", rev = "f4c6d7567c5358a1a6f5aea669406178d618043a", default-features = false, features = ["std", "profile-guarded-native", "require-fork-exclusion"] }
+sanitization = { git = "https://github.com/featherenvy/sanitization.git", rev = "3f0a72c5640b4919dec93799725c7573b2878a8c", default-features = false, features = ["std", "profile-guarded-native", "require-fork-exclusion"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.145"
 zeroize = "=1.9.0"

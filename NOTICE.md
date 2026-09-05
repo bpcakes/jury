@@ -25,7 +25,7 @@ Jury uses the MIT OR Apache-2.0 licensed `sanitization` 2.0.4 provider from
 [featherenvy/sanitization](https://github.com/featherenvy/sanitization), derived
 from [valkyoth/sanitization](https://github.com/valkyoth/sanitization).
 The exact dependency revision is recorded in `Cargo.lock`. Its original
-[MIT license](https://github.com/featherenvy/sanitization/blob/f4c6d7567c5358a1a6f5aea669406178d618043a/LICENSE-MIT)
-and [Apache-2.0 license](https://github.com/featherenvy/sanitization/blob/f4c6d7567c5358a1a6f5aea669406178d618043a/LICENSE-APACHE)
+[MIT license](https://github.com/featherenvy/sanitization/blob/3f0a72c5640b4919dec93799725c7573b2878a8c/LICENSE-MIT)
+and [Apache-2.0 license](https://github.com/featherenvy/sanitization/blob/3f0a72c5640b4919dec93799725c7573b2878a8c/LICENSE-APACHE)
 remain applicable. The fork adds macOS mapping fork exclusion, final guarded
 canary cleanup, and native tests; it does not imply upstream endorsement.
