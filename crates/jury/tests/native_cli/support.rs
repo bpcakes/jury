@@ -48,10 +48,10 @@ pub(super) fn run_with_environment(
     // Early rejection may close stdin before the parent finishes writing.
     // Reap the child and preserve its response for the caller's assertions.
     // A successful command or any other write error still fails the helper.
-    if let Err(error) = write_result {
-        if output.status.success() || error.kind() != std::io::ErrorKind::BrokenPipe {
-            return Err(error.into());
-        }
+    if let Err(error) = write_result
+        && (output.status.success() || error.kind() != std::io::ErrorKind::BrokenPipe)
+    {
+        return Err(error.into());
     }
     if !output.status.success() {
         eprintln!("jury test command failed: {arguments:?}");
