@@ -85,43 +85,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn partial_entropy_failure_returns_no_memory_or_bytes() {
-        if !crate::test_support::in_subprocess(concat!(
-            module_path!(),
-            "::partial_entropy_failure_returns_no_memory_or_bytes"
-        )) {
-            return;
-        }
+    crate::test_support::isolated_test! {
+        fn partial_entropy_failure_returns_no_memory_or_bytes() {
 
-        let result = protected_random(32, ProtectionPolicy::Strict, &mut PartialFailure);
-        assert!(matches!(
-            result.as_ref(),
-            Err(ProtectedRandomError::Entropy(EntropyError))
-        ));
-        assert_eq!(format!("{:?}", result.err()), "Some(Entropy(EntropyError))");
+            let result = protected_random(32, ProtectionPolicy::Strict, &mut PartialFailure);
+            assert!(matches!(
+                result.as_ref(),
+                Err(ProtectedRandomError::Entropy(EntropyError))
+            ));
+            assert_eq!(format!("{:?}", result.err()), "Some(Entropy(EntropyError))");
+        }
     }
 
-    #[test]
-    fn caller_supplied_source_fills_the_protected_mapping() -> Result<(), Box<dyn std::error::Error>>
-    {
-        if !crate::test_support::in_subprocess(concat!(
-            module_path!(),
-            "::caller_supplied_source_fills_the_protected_mapping"
-        )) {
-            return Ok(());
-        }
+    crate::test_support::isolated_test! {
+        fn caller_supplied_source_fills_the_protected_mapping() -> Result<(), Box<dyn std::error::Error>>
+        {
 
-        struct Fixed;
-        impl RandomSource for Fixed {
-            fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
-                destination.fill(0x5a);
-                Ok(())
+            struct Fixed;
+            impl RandomSource for Fixed {
+                fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+                    destination.fill(0x5a);
+                    Ok(())
+                }
             }
-        }
 
-        let memory = protected_random(7, ProtectionPolicy::Strict, &mut Fixed)?;
-        assert!(memory.expose(|bytes| bytes == [0x5a; 7])?);
-        Ok(())
+            let memory = protected_random(7, ProtectionPolicy::Strict, &mut Fixed)?;
+            assert!(memory.expose(|bytes| bytes == [0x5a; 7])?);
+            Ok(())
+        }
     }
 }

@@ -512,7 +512,17 @@ fn assert_transfer_inspect_rejected_without_mutation(
         error["error"]["code"], "invalid-transfer",
         "unexpected transfer inspection error: {error}"
     );
-    assert_eq!(snapshot_tree(paths.repository)?, repository_before);
+    let repository_after = snapshot_tree(paths.repository)?;
+    if repository_after != repository_before {
+        let changed: Vec<_> = repository_after
+            .iter()
+            .chain(repository_before.iter())
+            .filter(|entry| !repository_before.contains(entry) || !repository_after.contains(entry))
+            .map(|entry| &entry.0)
+            .take(16)
+            .collect();
+        panic!("transfer inspection changed repository paths (up to 16): {changed:?}");
+    }
     assert_eq!(snapshot_tree(paths.state)?, state_before);
     Ok(())
 }

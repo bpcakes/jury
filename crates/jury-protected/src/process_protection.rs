@@ -72,13 +72,13 @@ fn suppression_error() -> CaptureError {
 impl CoreLimits for PlatformCoreLimits {
     fn set_zero(&mut self) -> Result<(), CaptureError> {
         #[cfg(test)]
-        tests::before_set()?;
+        tests::native::before_set()?;
         rlimit::setrlimit(rlimit::Resource::CORE, 0, 0).map_err(|_| suppression_error())
     }
 
     fn read(&mut self) -> Result<(u64, u64), CaptureError> {
         #[cfg(test)]
-        if let Some(result) = tests::read_override() {
+        if let Some(result) = tests::native::read_override() {
             return result;
         }
         rlimit::getrlimit(rlimit::Resource::CORE).map_err(|_| suppression_error())

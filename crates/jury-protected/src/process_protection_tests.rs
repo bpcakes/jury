@@ -1,43 +1,5 @@
 use super::*;
-use crate::{ProtectedMemory, test_support::in_subprocess};
-use std::cell::{Cell, RefCell};
-
-#[derive(Clone, Copy)]
-pub(crate) enum CoreFailure {
-    Set,
-    Read,
-    SoftNonzero,
-    HardNonzero,
-}
-thread_local! {
-    static FAILURE: Cell<Option<CoreFailure>> = const { Cell::new(None) };
-}
-struct ResetFailure;
-impl Drop for ResetFailure {
-    fn drop(&mut self) {
-        FAILURE.set(None);
-    }
-}
-pub(crate) fn with_failure<T>(failure: CoreFailure, run: impl FnOnce() -> T) -> T {
-    FAILURE.set(Some(failure));
-    let _reset = ResetFailure;
-    run()
-}
-pub(super) fn before_set() -> Result<(), CaptureError> {
-    if matches!(FAILURE.get(), Some(CoreFailure::Set)) {
-        Err(suppression_error())
-    } else {
-        Ok(())
-    }
-}
-pub(super) fn read_override() -> Option<Result<(u64, u64), CaptureError>> {
-    match FAILURE.get() {
-        Some(CoreFailure::Read) => Some(Err(suppression_error())),
-        Some(CoreFailure::SoftNonzero) => Some(Ok((1, 0))),
-        Some(CoreFailure::HardNonzero) => Some(Ok((0, 1))),
-        _ => None,
-    }
-}
+use std::cell::RefCell;
 
 struct FakeLimits<'a> {
     set: Result<(), CaptureError>,
@@ -54,13 +16,9 @@ impl CoreLimits for FakeLimits<'_> {
         self.read
     }
 }
+// Synthetic status exercises capture decisions without allocating native pages.
 fn status() -> ProtectionStatus {
-    ProtectedMemory::initialize(31, ProtectionPolicy::EmergencyAllowDegraded, |bytes| {
-        Ok::<usize, ()>(bytes.len())
-    })
-    .unwrap_or_else(|_| panic!("guarded test owner unavailable"))
-    .status()
-    .clone()
+    crate::memory::tests::established_status()
 }
 
 #[test]
@@ -92,65 +50,114 @@ fn suppression_requires_set_and_exact_readback_before_capture() {
     }
 }
 
+#[cfg(not(unix))]
 #[test]
-fn native_core_suppression_is_verified_before_capture() -> Result<(), Box<dyn std::error::Error>> {
-    if !in_subprocess(concat!(
-        module_path!(),
-        "::native_core_suppression_is_verified_before_capture"
-    )) {
-        return Ok(());
-    }
-    let capture = capture_after_process_protection(ProtectionPolicy::Strict, status(), || {
-        rlimit::getrlimit(rlimit::Resource::CORE)
-    })?;
-    assert_eq!(capture.value?, (0, 0));
-    assert!(capture.status.core_dump_suppressed());
-    assert!(!capture.status.is_degraded());
-    Ok(())
-}
-
-#[test]
-fn native_readback_observation_never_invents_suppression() {
-    if !in_subprocess(concat!(
-        module_path!(),
-        "::native_readback_observation_never_invents_suppression"
-    )) {
-        return;
-    }
-    suppress_with(&mut PlatformCoreLimits).unwrap_or_else(|_| panic!("native suppression failed"));
-    assert!(core_dump_suppressed());
-    for failure in [
-        CoreFailure::Read,
-        CoreFailure::SoftNonzero,
-        CoreFailure::HardNonzero,
-    ] {
-        with_failure(failure, || {
-            assert!(!core_dump_suppressed());
-            let memory = ProtectedMemory::initialize(
-                31,
-                ProtectionPolicy::EmergencyAllowDegraded,
-                |bytes| Ok::<usize, ()>(bytes.len()),
-            )
-            .unwrap_or_else(|_| panic!("guarded owner"));
-            assert!(!memory.status().core_dump_suppressed());
-            assert!(memory.status().is_degraded());
-        });
-    }
-}
-
-#[test]
-fn native_set_failure_prevents_capture() {
-    if !in_subprocess(concat!(
-        module_path!(),
-        "::native_set_failure_prevents_capture"
-    )) {
-        return;
-    }
+fn unsupported_platform_refuses_capture_without_calling_it() {
     let mut called = false;
-    with_failure(CoreFailure::Set, || {
-        let result =
-            capture_after_process_protection(ProtectionPolicy::Strict, status(), || called = true);
-        assert!(matches!(result, Err(error) if error.kind() == CaptureErrorKind::CoreSuppression));
-    });
+    let result =
+        capture_after_process_protection(ProtectionPolicy::Strict, status(), || called = true);
+    assert!(matches!(result, Err(error) if error.kind() == CaptureErrorKind::UnsupportedPlatform));
     assert!(!called);
+    assert!(!core_dump_suppressed());
+}
+
+#[cfg(unix)]
+pub(crate) mod native {
+    use super::*;
+    use crate::ProtectedMemory;
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy)]
+    pub(crate) enum CoreFailure {
+        Set,
+        Read,
+        SoftNonzero,
+        HardNonzero,
+    }
+    thread_local! {
+        static FAILURE: Cell<Option<CoreFailure>> = const { Cell::new(None) };
+    }
+    struct ResetFailure;
+    impl Drop for ResetFailure {
+        fn drop(&mut self) {
+            FAILURE.set(None);
+        }
+    }
+    pub(crate) fn with_failure<T>(failure: CoreFailure, run: impl FnOnce() -> T) -> T {
+        FAILURE.set(Some(failure));
+        let _reset = ResetFailure;
+        run()
+    }
+    pub(crate) fn before_set() -> Result<(), CaptureError> {
+        if matches!(FAILURE.get(), Some(CoreFailure::Set)) {
+            Err(suppression_error())
+        } else {
+            Ok(())
+        }
+    }
+    pub(crate) fn read_override() -> Option<Result<(u64, u64), CaptureError>> {
+        match FAILURE.get() {
+            Some(CoreFailure::Read) => Some(Err(suppression_error())),
+            Some(CoreFailure::SoftNonzero) => Some(Ok((1, 0))),
+            Some(CoreFailure::HardNonzero) => Some(Ok((0, 1))),
+            _ => None,
+        }
+    }
+
+    fn status() -> ProtectionStatus {
+        ProtectedMemory::initialize(31, ProtectionPolicy::EmergencyAllowDegraded, |bytes| {
+            Ok::<usize, ()>(bytes.len())
+        })
+        .unwrap_or_else(|_| panic!("guarded test owner unavailable"))
+        .status()
+        .clone()
+    }
+
+    crate::test_support::isolated_test! {
+        fn native_core_suppression_is_verified_before_capture() -> Result<(), Box<dyn std::error::Error>> {
+            let capture = capture_after_process_protection(ProtectionPolicy::Strict, status(), || {
+                rlimit::getrlimit(rlimit::Resource::CORE)
+            })?;
+            assert_eq!(capture.value?, (0, 0));
+            assert!(capture.status.core_dump_suppressed());
+            assert!(!capture.status.is_degraded());
+            Ok(())
+        }
+    }
+
+    crate::test_support::isolated_test! {
+        fn native_readback_observation_never_invents_suppression() {
+            suppress_with(&mut PlatformCoreLimits).unwrap_or_else(|_| panic!("native suppression failed"));
+            assert!(core_dump_suppressed());
+            for failure in [
+                CoreFailure::Read,
+                CoreFailure::SoftNonzero,
+                CoreFailure::HardNonzero,
+            ] {
+                with_failure(failure, || {
+                    assert!(!core_dump_suppressed());
+                    let memory = ProtectedMemory::initialize(
+                        31,
+                        ProtectionPolicy::EmergencyAllowDegraded,
+                        |bytes| Ok::<usize, ()>(bytes.len()),
+                    )
+                    .unwrap_or_else(|_| panic!("guarded owner"));
+                    assert!(!memory.status().core_dump_suppressed());
+                    assert!(memory.status().is_degraded());
+                });
+            }
+        }
+    }
+
+    crate::test_support::isolated_test! {
+        fn native_set_failure_prevents_capture() {
+            let mut called = false;
+            with_failure(CoreFailure::Set, || {
+                let result =
+                    capture_after_process_protection(ProtectionPolicy::Strict, status(), || called = true);
+                assert!(matches!(result, Err(error) if error.kind() == CaptureErrorKind::CoreSuppression));
+            });
+            assert!(!called);
+        }
+    }
 }

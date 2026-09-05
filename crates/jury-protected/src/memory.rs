@@ -391,4 +391,4 @@ fn map_fill_error<E>(error: ProtectedSecretFillError<E>) -> MemoryError {
 
 #[cfg(test)]
 #[path = "memory_tests.rs"]
-mod tests;
+pub(crate) mod tests;
