@@ -4,7 +4,7 @@
 
 [Architecture](docs/architecture.md) · [Self-hosting](docs/self-hosting-juryd.md) ·
 [Recovery](docs/recovery.md) · [Roadmap](docs/jury-v1-master-plan.md) ·
-[Security](SECURITY.md)
+[Security](SECURITY.md) · [License](LICENSE.md)
 
 > [!WARNING]
 > Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
@@ -318,8 +318,14 @@ runtime dependency.
 
 ## Licensing
 
-[LICENSE.md](LICENSE.md) currently reserves all rights; no redistribution
-license has been selected.
-[docs/open-source.md](docs/open-source.md) describes the intended licensing
-model. The project is intended to become open source, but exact license texts
-remain undecided, so this repository is not ready for public redistribution.
+Jury is **source-available, free to self-host** under the
+[Elastic License 2.0 (ELv2)](LICENSE.md), SPDX identifier `Elastic-2.0`. This applies
+to the core, protocol, CLI, TUI scaffold, and witness server. ELv2 permits use,
+modification, and redistribution subject to its conditions, including the
+restriction on hosted or managed services that expose a substantial set of
+Jury's features or functionality to third parties. Jury is not open source.
+
+See the [licensing guide](docs/open-source.md), [copyright and third-party
+notice](NOTICE.md), and [contribution requirements](CONTRIBUTING.md). Licensing
+permission does not change Jury's pre-alpha status or make it suitable for real
+secrets.

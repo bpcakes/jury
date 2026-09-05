@@ -8339,7 +8339,8 @@ advertised as shipped.
 
 Scope:
 
-- finalize license selection and add exact texts;
+- include the adopted Elastic License 2.0 text, Jury copyright notice, and
+  applicable third-party licenses and notices in release artifacts;
 - publish format, direct/witnessed slot, protocol, receipt, and rollback-anchor
   specifications plus the vector corpus and exact J19 gate scope;
 - produce a native Linux binary, checksums, SBOM, provenance, and

@@ -4,6 +4,9 @@ description = "Capability-held repository and private-state filesystem primitive
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
 publish = false
 
 [dependencies]

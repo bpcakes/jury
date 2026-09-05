@@ -15,6 +15,9 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
+license = "Elastic-2.0"
+repository = "https://github.com/bpcakes/jury"
+readme = "README.md"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
