@@ -62,7 +62,13 @@ jobs:
         run: cargo test --locked -p jury-tui --all-targets
       - name: Linux secret input
         if: runner.os == 'Linux'
-        run: cargo test --locked -p jury --lib secret_input
+        shell: bash
+        run: |
+          set -euo pipefail
+          ulimit -c 1024
+          ulimit -c
+          cargo test --locked -p jury --lib secret_input::tests::strict_capture_reports_established_protection -- --exact --nocapture
+          cargo test --locked -p jury --lib secret_input
       - name: Linux required repository checks
         if: runner.os == 'Linux'
         shell: bash
@@ -71,7 +77,4 @@ jobs:
           scripts/jig check fmt
           scripts/jig check clippy
           scripts/jig check contract
-          for attempt in 1 2 3 4 5; do
-            cargo test --locked -p jury --test native_cli transfer_is_portable_strict_and_write_free_on_preview_or_conflict -- --nocapture
-          done
           scripts/jig check test
