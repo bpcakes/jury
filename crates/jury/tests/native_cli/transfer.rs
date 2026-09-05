@@ -512,7 +512,21 @@ fn assert_transfer_inspect_rejected_without_mutation(
         error["error"]["code"], "invalid-transfer",
         "unexpected transfer inspection error: {error}"
     );
-    assert_eq!(snapshot_tree(paths.repository)?, repository_before);
+    let repository_after = snapshot_tree(paths.repository)?;
+    assert!(
+        repository_after == repository_before,
+        "transfer inspection mutated repository paths: {:?}",
+        repository_before
+            .iter()
+            .filter(|entry| !repository_after.contains(entry))
+            .chain(
+                repository_after
+                    .iter()
+                    .filter(|entry| !repository_before.contains(entry))
+            )
+            .map(|entry| &entry.0)
+            .collect::<std::collections::BTreeSet<_>>()
+    );
     assert_eq!(snapshot_tree(paths.state)?, state_before);
     Ok(())
 }

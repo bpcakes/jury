@@ -71,4 +71,7 @@ jobs:
           scripts/jig check fmt
           scripts/jig check clippy
           scripts/jig check contract
+          for attempt in 1 2 3 4 5; do
+            cargo test --locked -p jury --test native_cli transfer_is_portable_strict_and_write_free_on_preview_or_conflict -- --nocapture
+          done
           scripts/jig check test

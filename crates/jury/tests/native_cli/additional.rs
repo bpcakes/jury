@@ -742,6 +742,8 @@ fn explicit_detached_home_supports_native_mutation_publication() -> TestResult {
 
 #[test]
 fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
+    use std::io::Seek as _;
+
     let temporary = tempfile::tempdir()?;
     let repository = temporary.path().join("repository");
     fs::create_dir(&repository)?;
@@ -763,5 +765,24 @@ fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
     assert!(output.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
     assert_eq!(error["error"]["code"], "passphrase-input-opt-in-required");
+
+    // A populated non-terminal source must remain unread. Cloned File handles
+    // share a cursor, making premature reads observable without a pipe race.
+    let mut input = tempfile::tempfile()?;
+    input.write_all(b"ExamplePass1234\nExamplePass1234\n")?;
+    input.rewind()?;
+    let output = jury_command(
+        &repository,
+        &temporary.path().join("data"),
+        &temporary.path().join("state"),
+    )
+    .args(["--json", "--allow-degraded-protection", "identity", "init"])
+    .stdin(input.try_clone()?)
+    .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["error"]["code"], "passphrase-input-opt-in-required");
+    assert_eq!(input.stream_position()?, 0, "input read before opt-in");
     Ok(())
 }
