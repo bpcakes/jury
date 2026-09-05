@@ -148,10 +148,12 @@ J25 outcome. Implement the entire active scope below before J26 release binding.
   exact staged-candidate Jig run passes all five required targets; the complete
   workspace test target took 834 seconds, and aggregate evidence plus all six
   configured gates are fresh and passing.
-- [ ] Integrate Linux CI; run full verification and work gates; audit every
-  requirement, disposition findings, and close J25 only on complete evidence.
-  The first pushed candidate exposed the three portability defects above; the
-  corrected candidate still requires a fresh exact-commit remote execution.
+- [x] (2026-09-05) Integrate Linux CI; run full verification and work gates;
+  audit every requirement, disposition findings, and close J25 only on complete
+  evidence. Exact commit `0cc80f701ee9938f00710fb1d1b97f1fa5c070ec`
+  passed Agent Map Check run `33968386662`, Repo Policy run `33968386692`,
+  Security invariants run `33968386675`, and Rust Tests run `33968386759`.
+  Every job in those four native Linux workflows completed successfully.
 
 ## Surprises & Discoveries
 
@@ -202,10 +204,15 @@ require a fresh exact-commit run rather than accepting partial workflow success.
 
 ## Outcomes & Retrospective
 
-In progress. Local implementation and verification are complete. J25 remains
-open until the exact candidate's newly wired Linux CI executes successfully;
-the measurements are host-specific observations and establish no performance
-SLO, certification, or independent review.
+Complete. The active J25 scope is implemented and verified locally and in native
+Linux CI at exact commit `0cc80f701ee9938f00710fb1d1b97f1fa5c070ec`.
+The adversarial corpus covers the inventoried parsers and durable transaction
+boundaries, exercises actual abrupt-process recovery, checks the frozen direct
+and witnessed protocols, compares the alternate primitive provider, scans the
+named repository surfaces for exact leak needles, and records the required
+46-case resource report for J26. The measurements are host-specific observations
+and establish no performance SLO, certification, or independent review. Jury
+remains an externally unreviewed pre-alpha and must not be used for real secrets.
 
 ## Context and Orientation
 
