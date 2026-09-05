@@ -41,6 +41,13 @@ mod tests {
 
     #[test]
     fn degraded_protection_remains_prominent() -> Result<(), Box<dyn std::error::Error>> {
+        // Exercise a real unavailable control. Emergency policy can be fully
+        // established when the host already suppresses cores; it is not itself
+        // evidence of degradation. Only this test in this binary allocates.
+        #[cfg(unix)]
+        let previous = rlimit::getrlimit(rlimit::Resource::MEMLOCK)?;
+        #[cfg(unix)]
+        rlimit::setrlimit(rlimit::Resource::MEMLOCK, 0, previous.1)?;
         let memory = ProtectedMemory::initialize(
             16,
             ProtectionPolicy::EmergencyAllowDegraded,
@@ -48,7 +55,16 @@ mod tests {
                 destination.fill(0xa5);
                 Ok::<usize, ()>(destination.len())
             },
-        )?;
+        );
+        #[cfg(unix)]
+        rlimit::setrlimit(rlimit::Resource::MEMLOCK, previous.0, previous.1)?;
+        let memory = memory?;
+        #[cfg(unix)]
+        assert_eq!(
+            memory.status().memory_lock(),
+            jury_protected::RuntimeControlStatus::Failed
+        );
+        assert!(memory.status().is_degraded());
         let rendered = protection_status_line(memory.status());
         assert!(rendered.contains("PROTECTION DEGRADED"));
         assert!(rendered.contains("emergency override"));
