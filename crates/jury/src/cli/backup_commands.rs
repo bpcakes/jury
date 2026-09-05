@@ -19,8 +19,7 @@ pub(super) fn backup_create(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let home = selected_home(cli, environment, current)?;
-    let output_root = private_backup_parent(&home, &arguments.out)?;
-    let output_parent = arguments.out.parent().ok_or_else(filesystem_error)?;
+    let output_parent = backup_output_parent(&arguments.out)?;
     let identity_home = identity_root(environment)?;
     let (owner_selector, _) = selected_identity(cli, None, environment)?;
     let owner_identity_parent = match &owner_selector {
@@ -51,8 +50,10 @@ pub(super) fn backup_create(
     }
     private_boundaries.extend(home.detached_path());
     for boundary in private_boundaries {
-        validate_path_separation(&[output_parent, boundary]).map_err(map_filesystem_error)?;
+        validate_path_separation(&[output_parent, boundary])
+            .map_err(map_private_output_separation_error)?;
     }
+    let output_root = private_backup_parent(&home, output_parent)?;
     let output_name = arguments.out.file_name().ok_or_else(filesystem_error)?;
     let destination = output_root
         .preview_private_file(Path::new(output_name))
@@ -607,8 +608,14 @@ fn restore_partial_conflict() -> CliError {
 
 fn private_backup_parent(
     home: &VaultHomeLocation,
-    path: &Path,
+    parent: &Path,
 ) -> Result<HardenedStateRoot, CliError> {
+    validate_detached_separation(parent, home).map_err(|_| private_output_separation_error())?;
+    HardenedStateRoot::open_existing(parent, &repository_refs(home))
+        .map_err(map_private_output_separation_error)
+}
+
+fn backup_output_parent(path: &Path) -> Result<&Path, CliError> {
     if !path.is_absolute()
         || path.file_name().is_none()
         || path.components().any(|component| {
@@ -624,9 +631,24 @@ fn private_backup_parent(
             "backup paths must be absolute and direct",
         ));
     }
-    let parent = path.parent().ok_or_else(filesystem_error)?;
-    validate_detached_separation(parent, home)?;
-    HardenedStateRoot::open_existing(parent, &repository_refs(home)).map_err(map_filesystem_error)
+    path.parent().ok_or_else(filesystem_error)
+}
+
+fn map_private_output_separation_error(error: FilesystemError) -> CliError {
+    match error.kind() {
+        FilesystemErrorKind::Containment | FilesystemErrorKind::Alias => {
+            private_output_separation_error()
+        }
+        _ => map_filesystem_error(error),
+    }
+}
+
+fn private_output_separation_error() -> CliError {
+    CliError::new(
+        CliErrorKind::InvalidArguments,
+        "private-output-overlap",
+        "the private output parent must be outside the selected vault, identity, and local-state trees",
+    )
 }
 
 fn backup_receipt(

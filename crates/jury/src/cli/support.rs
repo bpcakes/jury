@@ -202,10 +202,37 @@ pub(super) fn read_vault(home: &VaultHomeLocation) -> Result<Vec<u8>, CliError> 
     match home {
         VaultHomeLocation::Repository { repository } => repository
             .read_encrypted_shared_artifact(MAX_VAULT_BYTES)
-            .map_err(map_filesystem_error),
-        VaultHomeLocation::Detached { path, .. } => HardenedStateRoot::open_existing(path, &[])
-            .and_then(|root| root.read_private_file(Path::new("vault.json"), MAX_VAULT_BYTES))
-            .map_err(map_filesystem_error),
+            .map_err(map_uninitialized_vault_error),
+        VaultHomeLocation::Detached { path, .. } => {
+            let root = HardenedStateRoot::open_existing(path, &[])
+                .map_err(map_detached_vault_home_error)?;
+            root.read_private_file(Path::new("vault.json"), MAX_VAULT_BYTES)
+                .map_err(map_detached_vault_file_error)
+        }
+    }
+}
+
+fn map_uninitialized_vault_error(error: FilesystemError) -> CliError {
+    if error.kind() == FilesystemErrorKind::NotFound {
+        vault_not_initialized()
+    } else {
+        map_filesystem_error(error)
+    }
+}
+
+fn map_detached_vault_home_error(error: FilesystemError) -> CliError {
+    match error.kind() {
+        FilesystemErrorKind::NotFound => vault_not_initialized(),
+        FilesystemErrorKind::Permission => detached_vault_home_not_private(),
+        _ => map_filesystem_error(error),
+    }
+}
+
+fn map_detached_vault_file_error(error: FilesystemError) -> CliError {
+    match error.kind() {
+        FilesystemErrorKind::NotFound => vault_not_initialized(),
+        FilesystemErrorKind::Permission => detached_vault_file_not_private(),
+        _ => map_filesystem_error(error),
     }
 }
 
@@ -574,6 +601,30 @@ pub(super) const fn filesystem_error() -> CliError {
         CliErrorKind::Filesystem,
         "filesystem-error",
         "the selected filesystem state is unavailable",
+    )
+}
+
+pub(super) const fn vault_not_initialized() -> CliError {
+    CliError::new(
+        CliErrorKind::NotFound,
+        "vault-not-initialized",
+        "the selected vault is not initialized; run `jury vault init` with the same home selection",
+    )
+}
+
+pub(super) const fn detached_vault_home_not_private() -> CliError {
+    CliError::new(
+        CliErrorKind::Filesystem,
+        "detached-vault-home-not-private",
+        "the selected detached vault home must be an owner-only directory",
+    )
+}
+
+pub(super) const fn detached_vault_file_not_private() -> CliError {
+    CliError::new(
+        CliErrorKind::Filesystem,
+        "detached-vault-file-not-private",
+        "the selected detached vault file must be owner-only and owned by the current user",
     )
 }
 

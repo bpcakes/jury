@@ -763,3 +763,116 @@ fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
     assert_eq!(error["error"]["code"], "passphrase-input-opt-in-required");
     Ok(())
 }
+
+#[test]
+fn native_cli_explains_uninitialized_and_nonprivate_detached_vault_homes() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let repository = temporary.path().join("repository");
+    let data = temporary.path().join("data");
+    let state = temporary.path().join("state");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
+
+    let uninitialized = run(
+        &repository,
+        &data,
+        &state,
+        &["--json", "vault", "status"],
+        b"",
+    )?;
+    assert_eq!(uninitialized.status.code(), Some(3));
+    assert!(uninitialized.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&uninitialized.stderr)?;
+    assert_eq!(error["error"]["code"], "vault-not-initialized");
+    assert_eq!(
+        error["error"]["message"],
+        "the selected vault is not initialized; run `jury vault init` with the same home selection"
+    );
+
+    let detached_home = temporary.path().join("ExampleVault");
+    fs::create_dir(&detached_home)?;
+    fs::set_permissions(&detached_home, fs::Permissions::from_mode(0o770))?;
+    let nonprivate = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--home",
+            detached_home
+                .to_str()
+                .ok_or("non-UTF-8 detached vault home")?,
+            "vault",
+            "status",
+        ],
+        b"",
+    )?;
+    assert_eq!(nonprivate.status.code(), Some(1));
+    assert!(nonprivate.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&nonprivate.stderr)?;
+    assert_eq!(error["error"]["code"], "detached-vault-home-not-private");
+    assert_eq!(
+        error["error"]["message"],
+        "the selected detached vault home must be an owner-only directory"
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains(detached_home.to_str().unwrap_or_default())
+    );
+
+    fs::set_permissions(&detached_home, fs::Permissions::from_mode(0o700))?;
+    let uninitialized_detached = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--home",
+            detached_home
+                .to_str()
+                .ok_or("non-UTF-8 detached vault home")?,
+            "vault",
+            "status",
+        ],
+        b"",
+    )?;
+    assert_eq!(uninitialized_detached.status.code(), Some(3));
+    assert!(uninitialized_detached.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&uninitialized_detached.stderr)?;
+    assert_eq!(error["error"]["code"], "vault-not-initialized");
+
+    let vault_file = detached_home.join("vault.json");
+    fs::write(&vault_file, b"ExampleVault")?;
+    fs::set_permissions(&vault_file, fs::Permissions::from_mode(0o640))?;
+    let nonprivate_file = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "--home",
+            detached_home
+                .to_str()
+                .ok_or("non-UTF-8 detached vault home")?,
+            "vault",
+            "status",
+        ],
+        b"",
+    )?;
+    assert_eq!(nonprivate_file.status.code(), Some(1));
+    assert!(nonprivate_file.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&nonprivate_file.stderr)?;
+    assert_eq!(error["error"]["code"], "detached-vault-file-not-private");
+    assert_eq!(
+        error["error"]["message"],
+        "the selected detached vault file must be owner-only and owned by the current user"
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains(vault_file.to_str().unwrap_or_default())
+    );
+    Ok(())
+}

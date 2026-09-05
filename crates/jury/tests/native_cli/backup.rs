@@ -391,3 +391,76 @@ fn native_backup_verify_restore_and_real_drill_preserve_the_source_vault() -> Te
     restore_into_repository(root, paths, &backup, &identity, &vault, &source_before)?;
     assert_backup_status(paths, true)
 }
+
+#[test]
+fn backup_create_explains_private_output_parent_separation() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    let repository = root.join("repository");
+    let data = root.join("data");
+    let state = root.join("state");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
+    let output = repository.join("ExampleVault.backup");
+
+    let rejected = run(
+        &repository,
+        &data,
+        &state,
+        &[
+            "--json",
+            "backup",
+            "create",
+            "--out",
+            output.to_str().ok_or("non-UTF-8 backup output")?,
+        ],
+        b"",
+    )?;
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(rejected.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&rejected.stderr)?;
+    assert_eq!(error["error"]["code"], "private-output-overlap");
+    assert_eq!(
+        error["error"]["message"],
+        "the private output parent must be outside the selected vault, identity, and local-state trees"
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains(output.to_str().unwrap_or_default())
+    );
+    assert!(!output.exists());
+    Ok(())
+}
+
+#[test]
+fn backup_create_reports_malformed_output_paths_before_separation() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    let repository = root.join("repository");
+    let data = root.join("data");
+    let state = root.join("state");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
+
+    for output in ["ExampleVault.backup", "../ExampleVault.backup"] {
+        let rejected = run(
+            &repository,
+            &data,
+            &state,
+            &["--json", "backup", "create", "--out", output],
+            b"",
+        )?;
+        assert_eq!(rejected.status.code(), Some(2));
+        assert!(rejected.stdout.is_empty());
+        let error: serde_json::Value = serde_json::from_slice(&rejected.stderr)?;
+        assert_eq!(error["error"]["code"], "invalid-backup-path");
+        assert_eq!(
+            error["error"]["message"],
+            "backup paths must be absolute and direct"
+        );
+    }
+    Ok(())
+}
