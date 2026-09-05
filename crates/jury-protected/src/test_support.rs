@@ -1,4 +1,6 @@
 use std::{
+    ffi::OsStr,
+    path::PathBuf,
     process::{Child, Command, ExitCode, Stdio, Termination},
     time::{Duration, Instant},
 };
@@ -35,7 +37,33 @@ fn test_name(case: &str) -> &str {
 }
 
 fn is_child(name: &str) -> bool {
-    std::env::var(CASE_ENV).as_deref() == Ok(name)
+    child_completion(name).is_some()
+}
+
+fn child_completion(name: &str) -> Option<PathBuf> {
+    matching_completion(
+        name,
+        std::env::var(CASE_ENV).ok().as_deref(),
+        std::env::var_os(COMPLETION_ENV).as_deref(),
+    )
+}
+
+fn pending_record(name: &str) -> String {
+    format!("pending:{name}")
+}
+
+fn matching_completion(
+    name: &str,
+    case: Option<&str>,
+    completion: Option<&OsStr>,
+) -> Option<PathBuf> {
+    if case != Some(name) {
+        return None;
+    }
+    let path = PathBuf::from(completion?);
+    // The private temporary path is unique per invocation. Validate its pending
+    // record before any body runs; a lone or stale inherited marker is not a child.
+    (std::fs::read(&path).ok()?.as_slice() == pending_record(name).as_bytes()).then_some(path)
 }
 
 /// Success requires both a successful child and completion of the named body.
@@ -43,11 +71,8 @@ fn is_child(name: &str) -> bool {
 /// removed after the child is reaped, including on errors and timeouts.
 pub(crate) fn run_isolated<T: Termination>(case: &str, body: impl FnOnce() -> T) {
     let name = test_name(case);
-    if is_child(name) {
+    if let Some(completion) = child_completion(name) {
         assert_eq!(body().report(), ExitCode::SUCCESS, "isolated body failed");
-        let Some(completion) = std::env::var_os(COMPLETION_ENV) else {
-            panic!("completion path unavailable");
-        };
         assert!(
             std::fs::write(completion, name).is_ok(),
             "test completion acknowledgement failed"
@@ -74,6 +99,7 @@ fn run_child(name: &str, timeout: Duration) -> Result<(), IsolationError> {
     let before = rlimit::getrlimit(rlimit::Resource::CORE).map_err(|_| IsolationError::Io)?;
     let directory = tempfile::tempdir().map_err(|_| IsolationError::Io)?;
     let completion = directory.path().join("completion");
+    std::fs::write(&completion, pending_record(name)).map_err(|_| IsolationError::Io)?;
     let executable = std::env::current_exe().map_err(|_| IsolationError::Io)?;
     let child = Command::new(executable)
         .args(["--exact", name, "--nocapture"])
@@ -105,6 +131,37 @@ fn run_child(name: &str, timeout: Duration) -> Result<(), IsolationError> {
         before,
         rlimit::getrlimit(rlimit::Resource::CORE).map_err(|_| IsolationError::Io)?,
         "parent core limits unchanged"
+    );
+    Ok(())
+}
+
+#[test]
+fn child_dispatch_requires_a_matching_pending_invocation() -> std::io::Result<()> {
+    let name = "ExampleCase";
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("completion");
+    assert_eq!(matching_completion(name, Some(name), None), None);
+    assert_eq!(
+        matching_completion(name, Some(name), Some(path.as_os_str())),
+        None
+    );
+    std::fs::write(&path, pending_record(name))?;
+    assert_eq!(
+        matching_completion(name, None, Some(path.as_os_str())),
+        None
+    );
+    assert_eq!(
+        matching_completion(name, Some("ExampleOther"), Some(path.as_os_str())),
+        None
+    );
+    assert_eq!(
+        matching_completion(name, Some(name), Some(path.as_os_str())),
+        Some(path.clone())
+    );
+    std::fs::write(&path, name)?;
+    assert_eq!(
+        matching_completion(name, Some(name), Some(path.as_os_str())),
+        None
     );
     Ok(())
 }

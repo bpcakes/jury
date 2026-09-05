@@ -276,8 +276,9 @@ impl ProtectedMemory {
         )
         .map_err(map_fill_error)?;
         let report = inner.protection_report();
-        // The pinned provider retains the requested policy even when preferred
-        // establishment fails; report.fork.state carries that degraded outcome.
+        // Provider-contract assertion, not an establishment check: the pinned
+        // provider retains the requested policy even when preferred establishment
+        // fails. The strict predicate below checks the separate runtime state.
         if report.fork.policy != ForkPolicy::Exclude {
             return Err(MemoryError::new(MemoryErrorKind::Protection));
         }

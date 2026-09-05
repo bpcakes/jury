@@ -312,6 +312,14 @@ crate::test_support::isolated_test! {
 
 crate::test_support::isolated_test! {
     fn strict_boundary_capacities_and_page_accounting() -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(unix)]
+        {
+            let (soft, hard) = rlimit::getrlimit(rlimit::Resource::MEMLOCK)?;
+            assert!(
+                soft > MAX_PROTECTED_BYTES as u64,
+                "boundary tests require locking more than 1 MiB plus provider overhead; MEMLOCK soft={soft}, hard={hard}"
+            );
+        }
         // Denominator: compact maximum, first large capacity, and large maximum.
         // Refusals at the large ceiling are a countermetric, not silently skipped.
         for capacity in [

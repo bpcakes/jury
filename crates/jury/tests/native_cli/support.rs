@@ -33,12 +33,20 @@ pub(super) fn run_with_environment(
 ) -> TestResult<Output> {
     let mut command = jury_command(repository, data, state);
     command.envs(extra_environment.iter().copied());
-    let mut child = command
+    let child = command
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    let output = collect_after_input(child, input)?;
+    if !output.status.success() {
+        eprintln!("jury test command failed: {arguments:?}");
+    }
+    Ok(output)
+}
+
+fn collect_after_input(mut child: std::process::Child, input: &[u8]) -> TestResult<Output> {
     let write_result = child
         .stdin
         .take()
@@ -47,16 +55,47 @@ pub(super) fn run_with_environment(
     let output = child.wait_with_output()?;
     // Early rejection may close stdin before the parent finishes writing.
     // Reap the child and preserve its response for the caller's assertions.
-    // A successful command or any other write error still fails the helper.
+    // Only Jury's typed rejection (exit 2) may close input early. Success,
+    // panics, signals, other exit codes and other write errors fail the helper.
     if let Err(error) = write_result
-        && (output.status.success() || error.kind() != std::io::ErrorKind::BrokenPipe)
+        && (output.status.code() != Some(2) || error.kind() != std::io::ErrorKind::BrokenPipe)
     {
         return Err(error.into());
     }
-    if !output.status.success() {
-        eprintln!("jury test command failed: {arguments:?}");
-    }
     Ok(output)
+}
+
+#[test]
+fn closed_input_pipe_is_tolerated_only_for_typed_rejection() -> TestResult {
+    for code in [0, 1, 2, 101] {
+        // This is a real closed-pipe test of the helper, not proof of CLI policy.
+        // Waiting first guarantees that no reader remains, regardless of capacity.
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", &format!("exit {code}")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let input = child
+            .stdin
+            .take()
+            .ok_or("child standard input is unavailable")?;
+        assert_eq!(child.wait()?.code(), Some(code));
+        child.stdin = Some(input);
+        let result = collect_after_input(child, b"ExampleInput");
+        if code == 2 {
+            assert_eq!(result?.status.code(), Some(2));
+        } else {
+            let error = result.err().ok_or("closed input pipe was accepted")?;
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .map(std::io::Error::kind),
+                Some(std::io::ErrorKind::BrokenPipe)
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn success_json(output: Output) -> TestResult<serde_json::Value> {

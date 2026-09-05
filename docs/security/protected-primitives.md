@@ -30,6 +30,13 @@ zeroization before unmap, rollback reporting, and a permanent application
 maximum. Unsafe native operations stay inside the pinned dependency; Jury
 retains `unsafe_code = "forbid"`.
 
+For this exact provider pin, accounting reports the page-rounded locked writable
+region separately from the complete mapping. Strict status requires a nonzero
+page granule, locked bytes covering the requested bytes and divisible by that
+granule, and mapped bytes covering the locked region. Native boundary tests
+check the real accounting on both 4 KiB and 16 KiB page hosts. A provider update
+must preserve these meanings or explicitly revise their integration.
+
 Jury wraps the provider with a 1 MiB hard maximum for compact allocations and a
 separate explicit 16 MiB maximum for authenticated large value buckets. Callers
 select the logical capacity because native mappings are page-rounded. Provider
