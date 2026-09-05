@@ -419,7 +419,7 @@ pub(super) fn validate_plaintext_sink(
     out: Option<&Path>,
     reveal: bool,
 ) -> Result<(), CliError> {
-    if (out.is_none() && !reveal) || (out.is_some() && reveal) || (reveal && cli.json) {
+    if out.is_some() == reveal || (reveal && cli.json) {
         return Err(CliError::new(
             CliErrorKind::InvalidArguments,
             "private-output-selection-required",
