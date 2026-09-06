@@ -1,6 +1,6 @@
 schema = "jury-witness-construction-gate-v1"
 status = "accepted-for-implementation"
-checked_at = "2026-08-31"
+checked_at = "2026-09-06"
 pre_alpha = true
 independently_reviewed = false
 warning = "Externally unreviewed pre-alpha construction evidence. This gate does not establish that Jury protects real secrets."
@@ -12,11 +12,11 @@ defect_class = "construction, protocol, canonical corpus, provider, state-machin
 supersession_condition = "Replace when a new authenticated witness construction/protocol version supersedes witness-v1 or witnessed access is removed."
 
 [baseline]
-revision = "57f6c834bc71f82e85a97c4660e5e98cfdeae566"
+revision = "6b467d67c8f3d991c8256a8d4a90c8b82831e614"
 
 [checker]
 path = "scripts/check-witness-gate"
-sha256 = "dff1c2cf8ee4b45d2542260265a6e0ec1317e3fcc07f6167a9c0f6fbbe16d350"
+sha256 = "48b9be4d9ec4d7f65242676141f6ba5cf82b13f588bbed600aa01a2012d8d0f2"
 
 [direct_crypto_gate]
 path = "docs/security/jury-v0-direct-crypto-gate.toml"
@@ -34,11 +34,11 @@ approver_threshold = 2
 
 [corpus]
 path = "conformance/witness-v1/vectors.json"
-vectors_count = 34
+vectors_count = 41
 byte_mutations_count = 48
 scope_cases_count = 34
-presentation_cases_count = 12
-protocol_cases_count = 20
+presentation_cases_count = 19
+protocol_cases_count = 58
 split_write_cases_count = 9
 
 [model]
@@ -99,11 +99,11 @@ sha256 = "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275"
 
 [[bindings]]
 path = "docs/security/witness-v1/protocol.md"
-sha256 = "1e1c23218f668638f8fe6f24e1193f92783c57f2ee8f175a4a1142a8ea934319"
+sha256 = "2cf2117c3124a73e68a72edda6b7bde71a5aea2a7e5829d5c03012d4933fb5e1"
 
 [[bindings]]
 path = "docs/security/witness-v1/state-machines.md"
-sha256 = "7cbf65276bb60fbb1a2b72f9d1f12612ccba402de09eee3fb70a320bfdc5ca6f"
+sha256 = "2dfeb8218fa3299c1dc9bbfe55550f21e033109d4ec8026917f3ef26e125c8aa"
 
 [[bindings]]
 path = "docs/security/jury-v0-direct-crypto-gate.toml"
@@ -119,7 +119,7 @@ sha256 = "d2bc6b7879209bc4e2f65302ce715fe9cdffef37cb7fc01c68c1b48d452c5cfd"
 
 [[bindings]]
 path = "conformance/witness-v1/AGENTS.md"
-sha256 = "89f5772b7e14150cf12ea081ae6d7bb565ae4417119c3eb43698c9d3abbe0068"
+sha256 = "826c93e3e99f15f72614e4378eaf25c2177757b2e95ab3c5bbd1c5852735b867"
 
 [[bindings]]
 path = "conformance/witness-v1/Cargo.lock"
@@ -131,15 +131,15 @@ sha256 = "85c22b2b052d79877023bca75116e81590473f0b134a8f3b984ae9510923638e"
 
 [[bindings]]
 path = "conformance/witness-v1/README.md"
-sha256 = "4139e99a9a3137a30450743f0454f31bb872770b23e32a9f064dbefd4a6677a2"
+sha256 = "14fed7ffcd5812bb8c8cfbf91c3f284b36f60466f55c034ac703b39c52306819"
 
 [[bindings]]
 path = "conformance/witness-v1/alternate_runner.py"
-sha256 = "c5ae145eadf49f03ed0c86afe729966b91e007dca9c36fc71ffa47f67e3116b3"
+sha256 = "9ddd05d600fcfe15b8e7d1cfa1d9fe85fc6a08199fbf41bd6dcab37ce900e0b6"
 
 [[bindings]]
 path = "conformance/witness-v1/src/lib.rs"
-sha256 = "50969381de3aa907de289987b54e36c1127577d54dfb83bc794260368d9c8fe9"
+sha256 = "5864fa1065b0eabc168e76b7eaa07acb60f6c89d5b11b140f44ab0870df169e3"
 
 [[bindings]]
 path = "conformance/witness-v1/src/bin/generate.rs"
@@ -147,4 +147,20 @@ sha256 = "c3b7d696a0bb88998248830fd21fd861faa7ec39284e32b194928262a5b174e3"
 
 [[bindings]]
 path = "conformance/witness-v1/vectors.json"
-sha256 = "f414f33adee09a2178609c5fc6b31a5b325bbfa6b2dc6da7ec9e6edb6266d6ff"
+sha256 = "d850a1543e6d7868b221d2f4ab51e561fac1565143df4c065217cfb18520343a"
+
+[[bindings]]
+path = "conformance/witness-v1/src/cases.rs"
+sha256 = "8512c0fda61dc4a8815287435ca08be7a5803b7c81b4803c7145e326b7b3e417"
+
+[[bindings]]
+path = "conformance/witness-v1/src/consumer.rs"
+sha256 = "08fa940a7f102895254a8aa68bf8a148f5f9aadd9046c70628ea5c2d5dcf3552"
+
+[[bindings]]
+path = "conformance/witness-v1/src/vectors.rs"
+sha256 = "c1562ae1a36d74d1808809552bed41a549e7f8411f1de98aa5a6345cab973f81"
+
+[[bindings]]
+path = "conformance/witness-v1/src/vectors/fixtures.rs"
+sha256 = "35c88fd30a8780b55302c40fe08978cf0b3a8f4503d49ce7dcabfcabf166876b"
