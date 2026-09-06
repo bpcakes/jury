@@ -7,7 +7,9 @@ a Jury runtime dependency and contains only deterministic generic fixtures.
 
 ## Key entrypoints
 
-- `src/lib.rs` builds and consumes the corpus and runs the bounded model.
+- `src/lib.rs` assembles the corpus and runs the bounded model.
+- `src/vectors.rs` and `src/vectors/fixtures.rs` generate the fixed transcripts.
+- `src/cases.rs` owns rule cases; `src/consumer.rs` validates the frozen corpus.
 - `src/bin/generate.rs` emits the deterministic corpus.
 - `alternate_runner.py` independently consumes the JSON cases with Python's
   standard library.

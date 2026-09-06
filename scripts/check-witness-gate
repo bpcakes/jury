@@ -76,6 +76,28 @@ def run_command(argv: list[str]) -> None:
     require(process.returncode == 0, f"check failed ({process.returncode}): {' '.join(argv)}")
 
 
+def check_conformance_source_inventory(revision: str, bound_paths: list[str]) -> None:
+    prefix = "conformance/witness-v1/"
+    crate = ROOT / prefix
+    source_paths = {
+        str(path.relative_to(ROOT))
+        for path in crate.rglob("*.rs")
+        if path.relative_to(crate).parts[0] != "target"
+    }
+    result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "-z", revision, "--", prefix],
+        cwd=ROOT, stdout=subprocess.PIPE, check=False,
+    )
+    require(result.returncode == 0, "cannot inspect frozen conformance source inventory")
+    revision_paths = {
+        name.decode("utf-8") for name in result.stdout.split(b"\0")
+        if name.endswith(b".rs") and not name.startswith((prefix + "target/").encode())
+    }
+    bound_sources = {path for path in bound_paths if path.startswith(prefix) and path.endswith(".rs")}
+    require(bound_sources == source_paths == revision_paths,
+            "conformance source binding inventory changed")
+
+
 def run() -> None:
     with GATE_PATH.open("rb") as handle:
         gate = tomllib.load(handle)
@@ -99,9 +121,10 @@ def run() -> None:
     revision = str(gate["baseline"]["revision"])
     require(len(revision) == 40, "baseline revision is not a full Git SHA")
     bindings = gate["bindings"]
-    require(len(bindings) == 15, "bound input count changed")
+    require(len(bindings) == 19, "bound input count changed")
     bound_paths = [str(binding["path"]) for binding in bindings]
     require(len(set(bound_paths)) == len(bound_paths), "duplicate bound path")
+    check_conformance_source_inventory(revision, bound_paths)
     for binding in bindings:
         check_binding(revision, binding)
 
