@@ -55,3 +55,12 @@ The 0.0.1 hard cutover binds an explicit content-role byte in every automatic
 read target. Canonical descriptor/field vectors and concrete target cases check
 that descriptor permission cannot release body contents, exact field permission
 cannot release another field, and the old role-implicit target is refused.
+
+The same unreleased cutover replaces the per-policy checkpoint with an exact
+active-policy-set commitment. Canonical empty, single-policy and multi-policy
+set vectors pin the domain and fixed-element framing. Both consumers rebuild
+those bytes and evaluate concrete membership and checkpoint-transition cases.
+These are protocol-input and rule-model checks, not live witness evidence. The
+original signature, HPKE, scope, presentation, crash and retention checks remain;
+checkpoint-dependent signed/ciphertext vectors change because their deliberately
+changed checkpoint bytes are authenticated transitively.

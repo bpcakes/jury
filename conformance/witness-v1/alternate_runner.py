@@ -98,6 +98,19 @@ def check_hash_vectors(corpus: dict) -> int:
                 fail("invalid automatic target role/field")
             if encoded != expected: fail("automatic target encoding mismatch")
             checked += 1
+        if vector.get("kind") == "active-policy-set":
+            digests = [raw(value) for value in vector["policy_digests_hex"]]
+            if len(digests) > 16384 or any(len(d) != 32 or not any(d) for d in digests):
+                fail("invalid active policy set")
+            if any(left >= right for left, right in zip(digests, digests[1:])):
+                fail("noncanonical active policy set")
+            body = len(digests).to_bytes(4, "big") + b"".join(digests)
+            expected = jce("jury-witness-v1/active-policy-set/hash", body)
+            if raw(vector["body_hex"]) != body or raw(vector["preimage_hex"]) != expected:
+                fail("active policy set framing mismatch")
+            if raw(vector["digest_hex"]) != digest(expected):
+                fail("active policy set hash mismatch")
+            checked += 1
         if "hash_domain" in vector:
             expected = digest(
                 jce(
@@ -210,6 +223,8 @@ def presentation_result(case: dict) -> str:
 
 
 def protocol_result(case: dict) -> str:
+    if case.get("kind") == "global-checkpoint":
+        return checkpoint_result(case)
     if not all(case[field] for field in ("known_version", "known_suite", "known_construction")):
         return "unsupported-version"
     if not case["within_bounds"] or not case["canonical"]:
@@ -247,6 +262,50 @@ def split_write_result(case: dict) -> str:
         ("g+1", "candidate", "exact-candidate", False): "mark-published",
         ("g+1", "candidate", "published", True): "serve-stable-output",
     }.get(state, "anchor-conflict")
+
+
+def checkpoint_result(case: dict) -> str:
+    try:
+        active = [raw(value) for value in case["active_slot_policies"]]
+        committed = [raw(value) for value in case["checkpoint_policy_digests"]]
+        membership = [raw(value) for value in case["witness_policy_digests"]]
+    except (TypeError, ValueError):
+        return "invalid"
+    if any(len(value) != 32 or not any(value) for value in active + committed + membership):
+        return "invalid"
+    if len(committed) > 16384 or committed != sorted(set(committed)):
+        return "invalid"
+    if sorted(set(active)) != committed:
+        return "checkpoint-fork"
+    operation = case["operation"]
+    if operation == "register":
+        return "accepted" if set(active).intersection(membership) else "policy-denied"
+    if operation == "request":
+        try:
+            selected = raw(case["selected_policy_digest"])
+        except (TypeError, ValueError):
+            return "invalid"
+        if selected not in active or case["selected_policy_digest"] != case["slot_policy_digest"]:
+            return "wrong-scope"
+        return "accepted" if selected in membership else "policy-denied"
+    if operation != "advance":
+        return "invalid"
+    current, candidate = case["current"], case["candidate"]
+    if any(type(record[field]) is not int or not 0 <= record[field] < 2**64
+           for record in (current, candidate) for field in ("sequence", "issued_at_ms")):
+        return "invalid"
+    if candidate == current:
+        return "accepted"
+    difference = candidate["sequence"] - current["sequence"]
+    if difference < 0:
+        return "stale-policy"
+    if difference == 0:
+        return "checkpoint-fork"
+    if difference != 1:
+        return "witness-behind"
+    if candidate["predecessor_digest"] != current["digest"] or candidate["issued_at_ms"] <= current["issued_at_ms"]:
+        return "checkpoint-fork"
+    return "accepted"
 
 
 def check_cases(corpus: dict) -> None:

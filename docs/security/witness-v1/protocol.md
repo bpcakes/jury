@@ -196,8 +196,9 @@ Its digest is SHA-256 of JCE1 domain
 keys, and share indexes are unique across their own role; duplicate key material
 across roles is rejected. Revoked descriptors may remain for history but never
 count. Every active witness set has 2 through 32 entries, distinct indexes in
-`1..=32`, and a satisfiable threshold. The exact policy digest is bound by every
-request, checkpoint, capsule, decision, response, and receipt.
+`1..=32`, and a satisfiable threshold. The selected policy digest is bound by every request, capsule, decision,
+response, and receipt. The vault checkpoint commits the complete active policy
+set, including that selected policy.
 
 Every operation-rule approver ID must name an active descriptor whose
 `allowed_operations` contains that rule's operation. The active descriptor-set
@@ -723,12 +724,7 @@ locally while the original stable witness decision remains authoritative.
     genesis_fingerprint digest32
     vault_policy_sequence u64
     vault_policy_hash digest32
-    witness_policy_id id32
-    witness_policy_revision u64
-    witness_policy_digest digest32
-    witness_set_digest digest32
-    approver_set_digest digest32
-    review_label_set_digest digest32
+    active_witness_policy_set_digest digest32
     predecessor_checkpoint_digest digest32 (zero at first)
     issued_at_ms u64
     issuer_owner_id id32
@@ -737,12 +733,56 @@ locally while the original stable witness decision remains authoritative.
     signature fixed[64]
 
 Its digest uses domain `jury-witness-v1/checkpoint/hash`, signature-preimage
-bytes, and signature. Set digests cover the complete sorted active descriptors,
-using the descriptor-set domains above, not only their IDs. Equal checkpoint
-bytes are idempotent. Advancement requires
-the complete owner-authenticated intervening policy chain and an exact strict
-descendant. Gaps, lower sequences, same-sequence changes, different genesis,
-forks, and silent set replacement fail.
+bytes, and signature. There is one checkpoint per vault policy revision,
+shared by all witnessed item policies in that vault.
+
+`active_witness_policy_set_digest` is SHA-256 of JCE domain
+`jury-witness-v1/active-policy-set/hash` followed by a big-endian `u32` count
+and that many fixed 32-byte policy digests, in strictly increasing raw-byte
+order, without per-element length fields or an outer `bytes` wrapper. Inputs
+must be unique, nonzero digests; at most 16,384 digests are permitted. The set
+is exactly the distinct policies referenced by the current witnessed slots of
+all live items in the authenticated vault policy. An unreferenced historical
+policy is excluded. Multiple slots/items referencing one policy contribute
+one digest. Each referenced policy must be available and validated, including
+its ID, revision, vault lineage, committed predecessor policy hash, active
+descriptors and review-label set. Those commitments remain inside each exact
+policy digest; a checkpoint does not replace them with aggregate memberships.
+The empty set has its ordinary zero-count digest, allowing a checkpoint to
+record removal of the final witnessed path. It cannot authorize a request or
+initial witness registration.
+
+Every consumer recomputes this exact set digest from the validated current
+policy material before accepting the owner checkpoint signature. A witness
+may register if its exact active signing/contribution descriptor belongs to
+at least one referenced policy. For a request, the selected policy must be in
+the active set, must be the exact policy of the selected item slot, and must
+contain that witness's exact active descriptor. Membership in another policy
+in the same vault confers no request authority. Approvals, capsules, share
+indexes, labels, operation rules and quorum counting always come from that
+selected policy; they are never pooled across the active set.
+
+Equal checkpoint bytes are idempotent. Each advancement requires sequence
+`current + 1`, the exact current checkpoint digest as predecessor, a strictly
+later issuance time and the complete owner-authenticated policy chain. Supply
+multiple advances one link at a time. Gaps, lower sequences, same-sequence
+changes, different genesis, forks, and silent set replacement fail. A newly
+added item policy uses that next vault checkpoint; it is not registered as a
+second checkpoint at the existing sequence. All active policies use the same
+new checkpoint, invalidating pending requests from the earlier revision.
+
+The JSON checkpoint acknowledgement contains `active_witness_policy_set_digest`
+in place of the former single-policy digest. It must equal the requested
+checkpoint's recomputed set digest, and its exact signed anchor must bind the
+same vault/genesis, sequence and checkpoint digest. Propagation status expects
+the union of distinct active witnesses across all referenced policies. A shared
+witness counts once; contradictory descriptors for that same witness are
+invalid. This reports distribution only, not a combined quorum or global
+freshness.
+
+This is the unreleased 0.0.1 hard cutover. The former per-policy checkpoint and
+acknowledgement shapes are rejected, including inside requests, receipts and
+durable witness state. There is no compatibility reader or migration path.
 
 `WitnessRegistrationV1` is a three-message proof of initial configuration. The
 owner samples a 32-byte challenge. HPKE Base `info` is domain

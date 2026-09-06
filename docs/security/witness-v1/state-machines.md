@@ -49,7 +49,7 @@ approval signing, witness counting, or share work.
 | workload | recomputed full workload digest, operation context, every command/argument placeholder, working-directory commitment, environment target mapping, stdin target/mode, sink kind/commitment, platform assurance, timeout, output cap |
 | lifetime | issuance, optional not-before, expiry |
 | presentation | exact presentation digest and every subject commitment |
-| witness routing | request set equals the complete active policy set; no manifest field may imply another set |
+| witness routing | request set equals the complete active witness set of the selected item policy; no manifest field may imply another set |
 
 Any one-bit difference produces `wrong-scope`. A signature over either object
 does not let a caller select it as the source of truth.
@@ -151,17 +151,30 @@ provider can return a 32-byte value from a smaller set.
 
 ## Checkpoint state
 
-Each registered vault at a witness has exactly one current checkpoint.
+Each registered vault at a witness has exactly one current checkpoint covering
+its complete active witnessed-policy set. Recompute the set from all current
+item slots; historical unreferenced policies do not count. Registering a shared
+pair for two current item policies uses that same checkpoint. Request authority
+still comes solely from the exact selected slot policy, never the union of
+members or approvals across policies.
 
 | Current | Candidate | Result |
 | --- | --- | --- |
 | absent | valid first checkpoint plus completed registration and operator-confirmed genesis | anchor as initial checkpoint before acknowledgement |
 | `C` | byte-identical `C` | idempotent acknowledgement after anchor equality |
-| `C` | sequence `C+1` or later with exact predecessor chain and complete intervening owner policy history | validate every link and resulting sets; anchor strict descendant |
+| `C` | sequence `C+1` with exact predecessor digest, later issue time and complete owner policy history | validate the complete resulting active policy set; anchor strict descendant |
 | `C` | lower sequence | `stale-policy`; no change |
 | `C` | same sequence, different bytes/hash | `checkpoint-fork`; no change |
 | `C` | higher sequence with gap/missing predecessor or wrong owner | `witness-behind` or `checkpoint-fork`; no change |
 | `C` | different vault/genesis or silent membership/approver/label replacement | `checkpoint-fork`; no change |
+
+For a newly registered role, the current checkpoint may cover several item
+policies, but the role must belong to at least one active policy for first
+registration. A request additionally requires membership in its selected item
+policy. Adding, replacing or removing a policy advances the vault checkpoint;
+it never creates a sibling checkpoint at the same sequence. An empty active
+set can be advanced into and stops all new contributions. Existing replay and
+external-anchor rules continue to apply to every policy in the vault.
 
 A request checkpoint below current yields `stale-policy`; above current yields
 `witness-behind`; a same-sequence mismatch yields `checkpoint-fork`. A policy

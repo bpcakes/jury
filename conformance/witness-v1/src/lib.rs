@@ -160,6 +160,27 @@ fn digest_vector(name: &str, domain: &str, body: &[u8]) -> AnyResult<Value> {
     }))
 }
 
+fn active_policy_set_vector(name: &str, digests: &[Vec<u8>]) -> AnyResult<Value> {
+    if digests.len() > 16_384
+        || digests
+            .iter()
+            .any(|d| d.len() != 32 || d.iter().all(|b| *b == 0))
+        || digests.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err("invalid active policy set".to_owned());
+    }
+    let mut body = u32be(u32::try_from(digests.len()).map_err(|_| "policy set count")?);
+    body.extend(digests.concat());
+    let domain = "jury-witness-v1/active-policy-set/hash";
+    let preimage = jce(domain, std::slice::from_ref(&body));
+    Ok(
+        json!({"name": name, "kind": "active-policy-set", "domain": domain,
+        "policy_digests_hex": digests.iter().map(|d| hex_bytes(d)).collect::<Vec<_>>(),
+        "body_hex": hex_bytes(&body), "preimage_hex": hex_bytes(&preimage),
+        "digest_hex": hex_bytes(&sha256(&preimage)), "expected": "accepted"}),
+    )
+}
+
 fn descriptor_vector(
     name: &str,
     fingerprint_domain: &str,
@@ -673,26 +694,27 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
     .concat();
     vectors.insert("owner_policy_revision".to_owned(), policy_revision);
 
+    let single_set = active_policy_set_vector(
+        "active_policy_set_single",
+        std::slice::from_ref(&witness_policy_digest),
+    )?;
+    let active_policy_set_digest = vector_bytes(&single_set, "digest_hex")?;
+    vectors.insert("active_policy_set_single".to_owned(), single_set);
+    vectors.insert(
+        "active_policy_set_empty".to_owned(),
+        active_policy_set_vector("active_policy_set_empty", &[])?,
+    );
+    vectors.insert(
+        "active_policy_set_multiple".to_owned(),
+        active_policy_set_vector("active_policy_set_multiple", &[id(0xe1), id(0xe2)])?,
+    );
     let checkpoint_fields = vec![
         u16be(1),
         vault_id.clone(),
         genesis.clone(),
         u64be(7),
         id(0x72),
-        witness_policy_id.clone(),
-        u64be(1),
-        witness_policy_digest.clone(),
-        hash_preimage(
-            "jury-witness-v1/witness-descriptor-set/hash",
-            &[list_bytes(&witness_descriptors)?],
-        )
-        .to_vec(),
-        hash_preimage(
-            "jury-witness-v1/approver-descriptor-set/hash",
-            &[list_bytes(&approver_descriptors)?],
-        )
-        .to_vec(),
-        review_label_set_digest.to_vec(),
+        active_policy_set_digest.clone(),
         fixed(0, 32),
         u64be(issued_at - 500),
         owner_id.clone(),
@@ -1724,6 +1746,9 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
 }
 
 pub fn protocol_case_result(case: &Value) -> &'static str {
+    if case["kind"] == "global-checkpoint" {
+        return checkpoint_case_result(case);
+    }
     if case["known_version"].as_bool() != Some(true)
         || case["known_suite"].as_bool() != Some(true)
         || case["known_construction"].as_bool() != Some(true)
@@ -1925,8 +1950,230 @@ fn build_presentation_cases() -> Value {
     Value::Array(cases)
 }
 
+fn digest_list(value: &Value) -> Option<Vec<Vec<u8>>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|v| {
+            let bytes = hex::decode(v.as_str()?).ok()?;
+            (bytes.len() == 32 && bytes.iter().any(|b| *b != 0)).then_some(bytes)
+        })
+        .collect()
+}
+
+fn checkpoint_case_result(case: &Value) -> &'static str {
+    let (Some(mut active), Some(committed), Some(member)) = (
+        digest_list(&case["active_slot_policies"]),
+        digest_list(&case["checkpoint_policy_digests"]),
+        digest_list(&case["witness_policy_digests"]),
+    ) else {
+        return "invalid";
+    };
+    if committed.len() > 16_384 || committed.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return "invalid";
+    }
+    active.sort();
+    active.dedup();
+    if active != committed {
+        return "checkpoint-fork";
+    }
+    match case["operation"].as_str() {
+        Some("register") => {
+            if active.iter().any(|d| member.contains(d)) {
+                "accepted"
+            } else {
+                "policy-denied"
+            }
+        }
+        Some("request") => {
+            let Some(selected) = case["selected_policy_digest"]
+                .as_str()
+                .and_then(|v| hex::decode(v).ok())
+            else {
+                return "invalid";
+            };
+            if case["selected_policy_digest"] != case["slot_policy_digest"]
+                || !active.contains(&selected)
+            {
+                "wrong-scope"
+            } else if !member.contains(&selected) {
+                "policy-denied"
+            } else {
+                "accepted"
+            }
+        }
+        Some("advance") => {
+            let old = &case["current"];
+            let next = &case["candidate"];
+            let (Some(old_sequence), Some(next_sequence), Some(old_time), Some(next_time)) = (
+                old["sequence"].as_u64(),
+                next["sequence"].as_u64(),
+                old["issued_at_ms"].as_u64(),
+                next["issued_at_ms"].as_u64(),
+            ) else {
+                return "invalid";
+            };
+            if old == next {
+                "accepted"
+            } else if next_sequence < old_sequence {
+                "stale-policy"
+            } else if next_sequence == old_sequence {
+                "checkpoint-fork"
+            } else if old_sequence.checked_add(1) != Some(next_sequence) {
+                "witness-behind"
+            } else if next["predecessor_digest"] != old["digest"] || next_time <= old_time {
+                "checkpoint-fork"
+            } else {
+                "accepted"
+            }
+        }
+        _ => "invalid",
+    }
+}
+
+fn build_checkpoint_cases() -> Vec<Value> {
+    let a = hex_bytes(&id(0xe1));
+    let b = hex_bytes(&id(0xe2));
+    let c = hex_bytes(&id(0xe3));
+    let current = json!({"sequence":7,"digest":hex_bytes(&id(0xc1)),"predecessor_digest":hex_bytes(&id(0xc0)),"issued_at_ms":100});
+    let base = json!({"kind":"global-checkpoint","operation":"request",
+        "active_slot_policies":[a,b],"checkpoint_policy_digests":[a,b],
+        "witness_policy_digests":[a,b],"selected_policy_digest":a,"slot_policy_digest":a,
+        "current":current,"candidate":current});
+    let mut cases = Vec::new();
+    let mut add = |name: &str, changes: Value, expected: &str| {
+        let mut case = base.clone();
+        if let Some(changes) = changes.as_object() {
+            for (key, value) in changes {
+                case[key] = value.clone();
+            }
+        }
+        case["name"] = json!(format!("global-checkpoint-{name}"));
+        case["expected"] = json!(expected);
+        cases.push(case);
+    };
+    add("first-policy", json!({}), "accepted");
+    add(
+        "second-policy-same-checkpoint",
+        json!({"selected_policy_digest":b,"slot_policy_digest":b}),
+        "accepted",
+    );
+    add(
+        "shared-policy-deduplicated",
+        json!({"active_slot_policies":[a,a,b]}),
+        "accepted",
+    );
+    add(
+        "historical-extra-policy",
+        json!({"checkpoint_policy_digests":[a,b,c]}),
+        "checkpoint-fork",
+    );
+    add(
+        "omitted-active-policy",
+        json!({"checkpoint_policy_digests":[a]}),
+        "checkpoint-fork",
+    );
+    add(
+        "unsorted-set",
+        json!({"checkpoint_policy_digests":[b,a]}),
+        "invalid",
+    );
+    add(
+        "duplicate-set",
+        json!({"checkpoint_policy_digests":[a,a,b]}),
+        "invalid",
+    );
+    add(
+        "zero-digest",
+        json!({"checkpoint_policy_digests":[hex_bytes(&fixed(0,32)),a,b]}),
+        "invalid",
+    );
+    add(
+        "uncommitted-request-policy",
+        json!({"selected_policy_digest":c,"slot_policy_digest":c}),
+        "wrong-scope",
+    );
+    add(
+        "wrong-slot-policy",
+        json!({"selected_policy_digest":b}),
+        "wrong-scope",
+    );
+    add(
+        "other-policy-membership-is-not-authority",
+        json!({"witness_policy_digests":[b]}),
+        "policy-denied",
+    );
+    add(
+        "registration-any-active-policy",
+        json!({"operation":"register","witness_policy_digests":[b]}),
+        "accepted",
+    );
+    add(
+        "registration-historical-policy",
+        json!({"operation":"register","witness_policy_digests":[c]}),
+        "policy-denied",
+    );
+    add(
+        "registration-empty-set",
+        json!({"operation":"register","active_slot_policies":[],"checkpoint_policy_digests":[],"witness_policy_digests":[]}),
+        "policy-denied",
+    );
+    add(
+        "identical-checkpoint",
+        json!({"operation":"advance"}),
+        "accepted",
+    );
+    let successor = json!({"sequence":8,"digest":hex_bytes(&id(0xc2)),"predecessor_digest":hex_bytes(&id(0xc1)),"issued_at_ms":101});
+    add(
+        "strict-successor",
+        json!({"operation":"advance","candidate":successor}),
+        "accepted",
+    );
+    add(
+        "remove-last-policy",
+        json!({"operation":"advance","candidate":successor,"active_slot_policies":[],"checkpoint_policy_digests":[]}),
+        "accepted",
+    );
+    let mut gap = successor.clone();
+    gap["sequence"] = json!(9);
+    add(
+        "sequence-gap",
+        json!({"operation":"advance","candidate":gap}),
+        "witness-behind",
+    );
+    let mut old = successor.clone();
+    old["sequence"] = json!(6);
+    add(
+        "rollback",
+        json!({"operation":"advance","candidate":old}),
+        "stale-policy",
+    );
+    let mut fork = successor.clone();
+    fork["sequence"] = json!(7);
+    add(
+        "same-sequence-fork",
+        json!({"operation":"advance","candidate":fork}),
+        "checkpoint-fork",
+    );
+    let mut predecessor = successor.clone();
+    predecessor["predecessor_digest"] = json!(hex_bytes(&id(0xca)));
+    add(
+        "wrong-predecessor",
+        json!({"operation":"advance","candidate":predecessor}),
+        "checkpoint-fork",
+    );
+    let mut clock = successor;
+    clock["issued_at_ms"] = json!(100);
+    add(
+        "non-increasing-issuance",
+        json!({"operation":"advance","candidate":clock}),
+        "checkpoint-fork",
+    );
+    cases
+}
+
 fn build_protocol_cases() -> Value {
-    Value::Array(vec![
+    let mut cases = vec![
         protocol_case("accepted", None, "accepted"),
         protocol_case("identical-replay-idempotent", None, "accepted"),
         protocol_case("identical-duplicate-actor-counts-once", None, "accepted"),
@@ -1999,7 +2246,9 @@ fn build_protocol_cases() -> Value {
             Some(("explicit_witnessed_path", false)),
             "direct-downgrade",
         ),
-    ])
+    ];
+    cases.extend(build_checkpoint_cases());
+    Value::Array(cases)
 }
 
 fn build_split_write_cases() -> Value {
@@ -2083,8 +2332,8 @@ pub fn build_corpus() -> AnyResult<Value> {
             "j01b_revision": "560897e90fa7a7dc840458285ec64eff53a0a284",
             "j19a_construction_sha256": "23ded2718d4b2bb305a6cd83da246b8cecdd03135b4a8529ecd3ced333b8feac",
             "j19a_threat_model_sha256": "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275",
-            "j19b_protocol_sha256": "211a61609de4059d9c16f7da5d46f1483ed8319aacd6b21d75ad74823739591f",
-            "j19b_state_machines_sha256": "894b331c565ddc4c71879bd45bab3a3ef542ce5cf5759926d2f3aa0a3be9cdcb"
+            "j19b_protocol_sha256": "7672a3d4449835955c037e9477f195c93a2ab47ef1647afeb92d68cb2794838c",
+            "j19b_state_machines_sha256": "ddf06ee1a6ad2268c8cb4cd480f9e0daae6009720ba6da38cd23761635bbf6fc"
         },
         "normalization": {
             "unknown_version_suite_or_construction": "unsupported-version",
@@ -2241,6 +2490,16 @@ pub fn consume_corpus(corpus: &Value) -> AnyResult<()> {
     for (name, vector) in vectors {
         if vector["kind"] == "automatic-target" {
             consume_automatic_target(vector)?;
+        }
+        if vector["kind"] == "active-policy-set" {
+            let digests =
+                digest_list(&vector["policy_digests_hex"]).ok_or("invalid policy-set digests")?;
+            let expected = active_policy_set_vector(name, &digests)?;
+            for field in ["body_hex", "preimage_hex", "digest_hex"] {
+                if vector[field] != expected[field] {
+                    return Err(format!("{name}: policy-set {field} mismatch"));
+                }
+            }
         }
 
         if let Some(signature_hex) = vector["signature_hex"].as_str() {
@@ -2643,6 +2902,45 @@ mod tests {
         bytes[32] = 1;
         field["body_hex"] = hex_bytes(&bytes).into();
         assert!(consume_automatic_target(&field).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn active_policy_set_rejects_noncanonical_sets_and_framing() -> Result<(), String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors.json");
+        let corpus: Value =
+            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        for digests in [
+            vec![id(0xe2), id(0xe1)],
+            vec![id(0xe1), id(0xe1)],
+            vec![id(0)],
+        ] {
+            let mut changed = corpus.clone();
+            let vector = &mut changed["vectors"]["active_policy_set_multiple"];
+            vector["policy_digests_hex"] =
+                json!(digests.iter().map(|d| hex_bytes(d)).collect::<Vec<_>>());
+            let mut body = u32be(u32::try_from(digests.len()).map_err(|_| "count")?);
+            body.extend(digests.concat());
+            let preimage = jce(
+                "jury-witness-v1/active-policy-set/hash",
+                std::slice::from_ref(&body),
+            );
+            vector["body_hex"] = hex_bytes(&body).into();
+            vector["preimage_hex"] = hex_bytes(&preimage).into();
+            vector["digest_hex"] = hex_bytes(&sha256(&preimage)).into();
+            assert!(consume_corpus(&changed).is_err());
+        }
+        let mut changed = corpus.clone();
+        let vector = &mut changed["vectors"]["active_policy_set_multiple"];
+        let body = decode_field(vector, "body_hex")?;
+        let wrapped = jce(
+            "jury-witness-v1/active-policy-set/hash",
+            &[bytes_field(&body)?],
+        );
+        vector["preimage_hex"] = hex_bytes(&wrapped).into();
+        vector["digest_hex"] = hex_bytes(&sha256(&wrapped)).into();
+        assert!(consume_corpus(&changed).is_err());
         Ok(())
     }
 
