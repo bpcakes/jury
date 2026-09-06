@@ -132,6 +132,25 @@ The witness starts from the exact current `OperationRuleV1`.
 The witness does not combine decisions from different policy revisions or pick
 a favorable subset that hides a denial/conflict.
 
+## Owner-change intent
+
+After normal signature, current-checkpoint and selected-policy checks, an
+`owner-change` context under `administrative-rekey` requires the following:
+
+| Candidate | Result |
+| --- | --- |
+| grant registered human non-owner, current owner requester, next sequence, exact whole-item descriptor or body | authorize only the selected current revision after its normal human approval and witness quorum |
+| revoke another current owner with a remaining owner, otherwise same exact scope | same bounded authorization |
+| requester is not an owner; unknown or non-human target; grant existing owner; revoke non-owner; self/last-owner revoke | `policy-denied`; no contribution |
+| next sequence differs from current plus one, including overflow | `wrong-scope`; no contribution |
+| field target, different item, wrong content role, child fields or output sink | normal manifest/scope refusal; no contribution |
+
+Grant/revoke uses two separate role requests for each witnessed-only item. A
+consumer gathers all current item contents before preparing one owner-signed
+revision with fresh descriptor/body seals and slots. Partial approval never
+commits a partial owner change. Public requests and receipts may remain after a
+refusal or dry run; session receiver secrets and opened content are not persisted.
+
 ## Endpoint quorum assembly
 
 | Condition | Result |

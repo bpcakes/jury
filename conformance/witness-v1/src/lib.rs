@@ -181,6 +181,30 @@ fn active_policy_set_vector(name: &str, digests: &[Vec<u8>]) -> AnyResult<Value>
     )
 }
 
+fn owner_change_context_vector(
+    name: &str,
+    change: u8,
+    target: &[u8],
+    sequence: u64,
+) -> AnyResult<Value> {
+    if !matches!(change, 1 | 2)
+        || target.len() != 32
+        || target.iter().all(|b| *b == 0)
+        || sequence == 0
+    {
+        return Err("invalid owner-change context".to_owned());
+    }
+    let body = [u16be(1), vec![change], target.to_vec(), u64be(sequence)].concat();
+    let domain = "jury-witness-v1/operation-context/owner-change";
+    let preimage = jce(domain, std::slice::from_ref(&body));
+    Ok(
+        json!({"name": name, "kind": "owner-change-context", "domain": domain,
+        "change": change, "target_principal_id_hex": hex_bytes(target), "next_sequence": sequence,
+        "body_hex": hex_bytes(&body), "preimage_hex": hex_bytes(&preimage),
+        "digest_hex": hex_bytes(&sha256(&preimage)), "expected": "accepted"}),
+    )
+}
+
 fn descriptor_vector(
     name: &str,
     fingerprint_domain: &str,
@@ -506,6 +530,16 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
     let owner_fingerprint = signing_fingerprint(1, &owner_id, 1, &owner_public);
 
     let mut vectors = Map::new();
+    for (name, change) in [
+        ("owner_change_grant_context", 1),
+        ("owner_change_revoke_context", 2),
+    ] {
+        vectors.insert(
+            name.to_owned(),
+            owner_change_context_vector(name, change, &id(0x71), 8)?,
+        );
+    }
+
     let mut approver_descriptors = Vec::new();
     let mut approver_fingerprints = Vec::new();
     for index in 0..APPROVER_COUNT {
@@ -1746,6 +1780,10 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
 }
 
 pub fn protocol_case_result(case: &Value) -> &'static str {
+    if case["kind"] == "owner-change" {
+        return owner_change_case_result(case);
+    }
+
     if case["kind"] == "global-checkpoint" {
         return checkpoint_case_result(case);
     }
@@ -2031,6 +2069,141 @@ fn checkpoint_case_result(case: &Value) -> &'static str {
     }
 }
 
+fn owner_change_case_result(case: &Value) -> &'static str {
+    let (Some(current), Some(next), Some(owners), Some(principals)) = (
+        case["current_sequence"].as_u64(),
+        case["next_sequence"].as_u64(),
+        case["owners"].as_array(),
+        case["principals"].as_array(),
+    ) else {
+        return "invalid";
+    };
+    if !matches!(case["change"].as_str(), Some("grant" | "revoke")) {
+        return "invalid";
+    }
+    if case["operation"] != "administrative-rekey"
+        || !matches!(case["content_role"].as_str(), Some("descriptor" | "body"))
+        || case["field_id"] != Value::Null
+        || case["target_item_id"] != case["item_id"]
+        || case["output_sink"] != "none"
+    {
+        return "wrong-scope";
+    }
+    if current.checked_add(1) != Some(next) {
+        return "wrong-scope";
+    }
+    if !owners.contains(&case["requester"])
+        || !principals
+            .iter()
+            .any(|p| p["id"] == case["target"] && p["kind"] == "human")
+    {
+        return "policy-denied";
+    }
+    let target_is_owner = owners.contains(&case["target"]);
+    if (case["change"] == "grant" && target_is_owner)
+        || (case["change"] == "revoke"
+            && (!target_is_owner || owners.len() <= 1 || case["requester"] == case["target"]))
+    {
+        return "policy-denied";
+    }
+    "accepted"
+}
+
+fn build_owner_change_cases() -> Vec<Value> {
+    let owner = hex_bytes(&id(0x09));
+    let other = hex_bytes(&id(0x70));
+    let target = hex_bytes(&id(0x71));
+    let machine = hex_bytes(&id(0x72));
+    let item = hex_bytes(&id(0x03));
+    let base = json!({"kind":"owner-change", "operation":"administrative-rekey", "change":"grant",
+        "requester":owner, "target":target, "owners":[owner,other],
+        "principals":[{"id":owner,"kind":"human"},{"id":other,"kind":"human"},
+            {"id":target,"kind":"human"},{"id":machine,"kind":"machine"}],
+        "current_sequence":7, "next_sequence":8, "content_role":"body", "field_id":null,
+        "item_id":item,"target_item_id":item,"output_sink":"none"});
+    let mut cases = Vec::new();
+    let mut add = |name: &str, changes: Value, expected: &str| {
+        let mut case = base.clone();
+        if let Some(changes) = changes.as_object() {
+            for (key, value) in changes {
+                case[key] = value.clone();
+            }
+        }
+        case["name"] = json!(format!("owner-change-{name}"));
+        case["expected"] = json!(expected);
+        cases.push(case);
+    };
+    add("grant-body", json!({}), "accepted");
+    add(
+        "grant-descriptor",
+        json!({"content_role":"descriptor"}),
+        "accepted",
+    );
+    add(
+        "revoke-owner",
+        json!({"change":"revoke","target":other}),
+        "accepted",
+    );
+    add(
+        "grant-existing-owner",
+        json!({"target":other}),
+        "policy-denied",
+    );
+    add(
+        "revoke-nonowner",
+        json!({"change":"revoke"}),
+        "policy-denied",
+    );
+    add(
+        "self-revoke",
+        json!({"change":"revoke","target":owner}),
+        "policy-denied",
+    );
+    add(
+        "last-owner",
+        json!({"change":"revoke","target":owner,"owners":[owner]}),
+        "policy-denied",
+    );
+    add(
+        "unknown-principal",
+        json!({"target":hex_bytes(&id(0x73))}),
+        "policy-denied",
+    );
+    add(
+        "machine-principal",
+        json!({"target":machine}),
+        "policy-denied",
+    );
+    add(
+        "requester-not-owner",
+        json!({"requester":target}),
+        "policy-denied",
+    );
+    add("sequence-gap", json!({"next_sequence":9}), "wrong-scope");
+    add(
+        "sequence-overflow",
+        json!({"current_sequence":u64::MAX,"next_sequence":0}),
+        "wrong-scope",
+    );
+    add(
+        "field-target",
+        json!({"field_id":hex_bytes(&id(0x74))}),
+        "wrong-scope",
+    );
+    add(
+        "another-item",
+        json!({"target_item_id":hex_bytes(&id(0x75))}),
+        "wrong-scope",
+    );
+    add(
+        "plaintext-sink",
+        json!({"output_sink":"stdout"}),
+        "wrong-scope",
+    );
+    add("unknown-change", json!({"change":"replace"}), "invalid");
+    cases
+}
+
 fn build_checkpoint_cases() -> Vec<Value> {
     let a = hex_bytes(&id(0xe1));
     let b = hex_bytes(&id(0xe2));
@@ -2248,6 +2421,7 @@ fn build_protocol_cases() -> Value {
         ),
     ];
     cases.extend(build_checkpoint_cases());
+    cases.extend(build_owner_change_cases());
     Value::Array(cases)
 }
 
@@ -2490,6 +2664,20 @@ pub fn consume_corpus(corpus: &Value) -> AnyResult<()> {
     for (name, vector) in vectors {
         if vector["kind"] == "automatic-target" {
             consume_automatic_target(vector)?;
+        }
+        if vector["kind"] == "owner-change-context" {
+            let change = vector["change"]
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .ok_or("invalid change")?;
+            let target = decode_field(vector, "target_principal_id_hex")?;
+            let sequence = vector["next_sequence"].as_u64().ok_or("invalid sequence")?;
+            let expected = owner_change_context_vector(name, change, &target, sequence)?;
+            for field in ["domain", "body_hex", "preimage_hex", "digest_hex"] {
+                if vector[field] != expected[field] {
+                    return Err(format!("{name}: owner-change {field} mismatch"));
+                }
+            }
         }
         if vector["kind"] == "active-policy-set" {
             let digests =
@@ -2940,6 +3128,40 @@ mod tests {
         );
         vector["preimage_hex"] = hex_bytes(&wrapped).into();
         vector["digest_hex"] = hex_bytes(&sha256(&wrapped)).into();
+        assert!(consume_corpus(&changed).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn owner_change_context_rejects_unknown_tags_and_noncanonical_framing() -> Result<(), String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors.json");
+        let corpus: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        for (change, target, sequence) in [(3, id(0x71), 8), (1, id(0), 8), (1, id(0x71), 0)] {
+            let mut changed = corpus.clone();
+            let vector = &mut changed["vectors"]["owner_change_grant_context"];
+            vector["change"] = json!(change);
+            vector["target_principal_id_hex"] = json!(hex_bytes(&target));
+            vector["next_sequence"] = json!(sequence);
+            let body = [u16be(1), vec![change], target, u64be(sequence)].concat();
+            let encoded = jce(
+                "jury-witness-v1/operation-context/owner-change",
+                std::slice::from_ref(&body),
+            );
+            vector["body_hex"] = json!(hex_bytes(&body));
+            vector["preimage_hex"] = json!(hex_bytes(&encoded));
+            vector["digest_hex"] = json!(hex_bytes(&sha256(&encoded)));
+            assert!(consume_corpus(&changed).is_err());
+        }
+        let mut changed = corpus.clone();
+        let vector = &mut changed["vectors"]["owner_change_grant_context"];
+        let body = decode_field(vector, "body_hex")?;
+        let encoded = jce(
+            "jury-witness-v1/operation-context/owner-change",
+            &[bytes_field(&body)?],
+        );
+        vector["preimage_hex"] = json!(hex_bytes(&encoded));
+        vector["digest_hex"] = json!(hex_bytes(&sha256(&encoded)));
         assert!(consume_corpus(&changed).is_err());
         Ok(())
     }

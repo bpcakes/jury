@@ -388,6 +388,7 @@ does not exist.
 | `backup` | scope `u8` (`01 current-sealed-item`, `02 current-authorized-item-material`); archive format `u16`; destination commitment `digest32` |
 | `recovery` | mode `u8` (`01 open-to-absent-destination`, `02 reseal-to-new-policy`); destination commitment `digest32`; next item-access mode `u8` |
 | `administrative-rekey` | next vault-policy sequence `u64`; next vault-policy hash `digest32`; next witness-policy ID/revision/digest; rotation-record digest `digest32` |
+| `owner-change` (operation `administrative-rekey`) | change `u8` (`01 grant`, `02 revoke`); target principal ID `id32`; next vault-policy sequence `u64` |
 
 The complete domain is `jury-witness-v1/operation-context/` plus the suffix.
 Mutation field IDs must exactly equal the affected field approval targets;
@@ -396,6 +397,32 @@ recovery destination commitments must equal `output_sink_commitment`.
 Administrative rekey values must equal the candidate policy and rotation
 records supplied for approval. These context fields are public security fields
 and are rendered in full.
+
+`owner-change` is a distinct operation-context domain under the existing
+`administrative-rekey` operation permission. It authorizes opening one exact
+current descriptor or body for an owner grant/revoke; it does not commit to
+future ciphertext that cannot exist before the authorized opening. The target
+must be a currently registered human principal. Grant requires a non-owner;
+revoke requires an existing owner other than the requester and at least one
+remaining owner. The requester must be a current owner. The next vault-policy
+sequence must equal the current checkpoint sequence plus one without overflow.
+The approval target is exactly the current item, with no field selector,
+child-process fields, or output sink. Automatic read permission never authorizes
+owner changes. Each content role requires its own request, session and quorum;
+body authority cannot open the descriptor or vice versa.
+
+The CLI's owner-change consumer must collect all necessary current descriptor
+and body authority before publishing the atomic owner mutation. It preserves
+witness membership, thresholds, operations, review-label text and access modes;
+it advances the affected witness policies and fully rotates every affected
+item's descriptor/body keys, seals and slots under the next owner set. No direct
+slot is added to a witnessed-only item. A denied, incomplete, expired or invalid
+request prevents the vault mutation. Successful authorizations may have durable
+receipts even if a later item refuses or the caller requests a dry run.
+Approvals bind the explicit intent and current revision, not a claim that a
+trusted endpoint is cryptographically forced to perform the later mutation;
+the bounded endpoint-retention limitations remain unchanged.
+
 
 The workload digest is SHA-256 of domain
 `jury-witness-v1/workload/hash` and these manifest fields in order: operation,

@@ -64,3 +64,9 @@ These are protocol-input and rule-model checks, not live witness evidence. The
 original signature, HPKE, scope, presentation, crash and retention checks remain;
 checkpoint-dependent signed/ciphertext vectors change because their deliberately
 changed checkpoint bytes are authenticated transitively.
+
+The owner-change extension pins grant/revoke operation-context encodings and
+post-authentication owner/sequence/scope rules. Its intent is known before
+opening the old revision, unlike a commitment to future encrypted bytes. These
+cases do not claim to implement the CLI's atomic rotation or prove enforcement
+on an endpoint after it receives an authorized revision secret.

@@ -98,6 +98,19 @@ def check_hash_vectors(corpus: dict) -> int:
                 fail("invalid automatic target role/field")
             if encoded != expected: fail("automatic target encoding mismatch")
             checked += 1
+        if vector.get("kind") == "owner-change-context":
+            change, target, sequence = vector["change"], raw(vector["target_principal_id_hex"]), vector["next_sequence"]
+            if type(change) is not int or change not in (1, 2) or len(target) != 32 or not any(target):
+                fail("invalid owner-change intent")
+            if type(sequence) is not int or not 0 < sequence < 2**64:
+                fail("invalid owner-change sequence")
+            body = bytes([0, 1, change]) + target + sequence.to_bytes(8, "big")
+            domain = "jury-witness-v1/operation-context/owner-change"
+            encoded = jce(domain, body)
+            if vector["domain"] != domain or raw(vector["body_hex"]) != body or raw(vector["preimage_hex"]) != encoded:
+                fail("owner-change context framing mismatch")
+            if raw(vector["digest_hex"]) != digest(encoded): fail("owner-change context hash mismatch")
+            checked += 1
         if vector.get("kind") == "active-policy-set":
             digests = [raw(value) for value in vector["policy_digests_hex"]]
             if len(digests) > 16384 or any(len(d) != 32 or not any(d) for d in digests):
@@ -223,6 +236,8 @@ def presentation_result(case: dict) -> str:
 
 
 def protocol_result(case: dict) -> str:
+    if case.get("kind") == "owner-change":
+        return owner_change_result(case)
     if case.get("kind") == "global-checkpoint":
         return checkpoint_result(case)
     if not all(case[field] for field in ("known_version", "known_suite", "known_construction")):
@@ -262,6 +277,22 @@ def split_write_result(case: dict) -> str:
         ("g+1", "candidate", "exact-candidate", False): "mark-published",
         ("g+1", "candidate", "published", True): "serve-stable-output",
     }.get(state, "anchor-conflict")
+
+
+def owner_change_result(case: dict) -> str:
+    current, following = case["current_sequence"], case["next_sequence"]
+    if any(type(value) is not int or not 0 <= value < 2**64 for value in (current, following)):
+        return "invalid"
+    if case["change"] not in ("grant", "revoke"): return "invalid"
+    if (case["operation"] != "administrative-rekey" or case["content_role"] not in ("descriptor", "body")
+            or case["field_id"] is not None or case["target_item_id"] != case["item_id"]
+            or case["output_sink"] != "none" or current == 2**64 - 1 or following != current + 1):
+        return "wrong-scope"
+    target, owners = case["target"], case["owners"]
+    if case["requester"] not in owners or not any(p["id"] == target and p["kind"] == "human" for p in case["principals"]):
+        return "policy-denied"
+    if case["change"] == "grant": return "policy-denied" if target in owners else "accepted"
+    return "policy-denied" if target not in owners or len(owners) < 2 or target == case["requester"] else "accepted"
 
 
 def checkpoint_result(case: dict) -> str:
