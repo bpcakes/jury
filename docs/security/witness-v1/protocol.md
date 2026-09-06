@@ -141,9 +141,18 @@ An `OperationRuleV1` is:
     max_output_bytes u32
     max_target_count u8 <= 64
     required_platform_assurance u8
-    automatic_read_targets list<bytes> sorted by item_id then field_id
+    automatic_read_targets list<bytes> sorted by item_id, content_role, then field_id
 
-An automatic-read target is `item_id || optional<field_id>`. Threshold zero is
+An automatic-read target is `item_id || content_role u8 || optional<field_id>`.
+The only valid combinations are descriptor (role 1) with absent field ID and
+body (role 2) with an exact field ID. Body with absent field ID is invalid:
+automatic authority never permits whole-body reads. Descriptor targets cannot
+authorize body requests, even when item and absent field ID match. Every
+manifest target must match an automatic target in item ID, content role, and
+field ID. This is the unreleased 0.0.1 cutover; the prior role-implicit encoding
+is rejected without migration or fallback.
+
+Threshold zero is
 legal only for `read-stdout`, requires at least one exact automatic target, and
 requires a manifest containing only a subset of those targets, stdout output,
 no executable, arguments, working directory, environment, or stdin, and the
@@ -152,6 +161,15 @@ one and an empty automatic-target list. Automatic behavior is never inferred
 from an empty decision list. A denial does not veto a quorum; it simply does not
 count as an approval. A witness denies once the remaining undecided eligible
 approvers can no longer make the threshold reachable.
+
+The CLI's automatic field-read selection also declares a separate descriptor
+target so authorized metadata readers can resolve item and field names and the
+owner can enforce vault-wide name uniqueness. Help and policy inspection must
+show that descriptor permission explicitly. It still requires the same live
+witness quorum and current principal metadata entitlement; it creates no direct
+slot and permits no other body field. Descriptor-only automatic selection is
+also permitted. Human-approved operation rules keep their existing explicit
+content-role binding and do not gain automatic descriptor access.
 
 `WitnessPolicyV1` is one canonical body authenticated inside the owner-signed
 J01A policy journal:

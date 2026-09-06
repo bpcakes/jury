@@ -50,3 +50,8 @@ enumerated or named exclusions, not silently counted as success.
 Exhausting this finite model is engineering evidence only. It is not a formal
 proof, security certification, external review, production implementation, or
 claim that Jury protects secrets.
+
+The 0.0.1 hard cutover binds an explicit content-role byte in every automatic
+read target. Canonical descriptor/field vectors and concrete target cases check
+that descriptor permission cannot release body contents, exact field permission
+cannot release another field, and the old role-implicit target is refused.

@@ -291,10 +291,34 @@ pub fn scope_result(
     }
 }
 
+fn automatic_targets_match(case: &Value) -> bool {
+    let Some(allowed) = case["automatic_targets"].as_array() else {
+        return false;
+    };
+    let Some(requested) = case["manifest_targets"].as_array() else {
+        return false;
+    };
+    if allowed.is_empty() || requested.is_empty() {
+        return false;
+    }
+    let valid = |target: &Value| {
+        target["item_id"].as_str().is_some_and(|id| !id.is_empty())
+            && match target["content_role"].as_str() {
+                Some("descriptor") => target.get("field_id").is_some_and(Value::is_null),
+                Some("body") => target["field_id"].as_str().is_some_and(|id| !id.is_empty()),
+                _ => false,
+            }
+    };
+    allowed.iter().all(valid)
+        && requested
+            .iter()
+            .all(|target| valid(target) && allowed.contains(target))
+}
+
 pub fn presentation_result(case: &Value) -> &'static str {
     let human = case["human"].as_bool().unwrap_or(false);
     if !human {
-        return if case["automatic_rule_match"].as_bool().unwrap_or(false)
+        return if automatic_targets_match(case)
             && case["empty_presentation"].as_bool().unwrap_or(false)
         {
             "accepted"
@@ -577,6 +601,29 @@ fn build_protocol_vectors() -> AnyResult<(Map<String, Value>, Value)> {
         list_bytes(&[])?,
     ]
     .concat();
+    // Canonical automatic-target bytes deliberately bind the content role.
+    for (name, role, field) in [
+        ("automatic_descriptor_target", 1_u8, None),
+        ("automatic_field_target", 2_u8, Some(id(0x44))),
+    ] {
+        let mut body = id(0x03);
+        body.push(role);
+        match &field {
+            Some(field) => {
+                body.push(1);
+                body.extend_from_slice(field);
+            }
+            None => body.push(0),
+        }
+        vectors.insert(
+            name.to_owned(),
+            json!({
+                "kind": "automatic-target", "item_id_hex": hex_bytes(&id(0x03)),
+                "content_role": role, "field_id_hex": field.as_ref().map(|id| hex_bytes(id)),
+                "body_hex": hex_bytes(&body)
+            }),
+        );
+    }
     let policy_body = [
         u16be(1),
         witness_policy_id.clone(),
@@ -1773,7 +1820,6 @@ fn build_scope_cases() -> Value {
 fn build_presentation_cases() -> Value {
     let base = json!({
         "human": true,
-        "automatic_rule_match": false,
         "empty_presentation": false,
         "complete": true,
         "digest_match": true,
@@ -1807,20 +1853,75 @@ fn build_presentation_cases() -> Value {
         case["expected"] = json!("wrong-scope");
         cases.push(case);
     }
-    cases.push(json!({
-        "name": "automatic-exact-rule",
-        "human": false,
-        "automatic_rule_match": true,
-        "empty_presentation": true,
-        "expected": "accepted"
-    }));
-    cases.push(json!({
-        "name": "automatic-rule-mismatch",
-        "human": false,
-        "automatic_rule_match": false,
-        "empty_presentation": true,
-        "expected": "policy-denied"
-    }));
+    let descriptor =
+        json!({"item_id": "ExampleItem", "content_role": "descriptor", "field_id": null});
+    let field =
+        json!({"item_id": "ExampleItem", "content_role": "body", "field_id": "ExampleField"});
+    let whole_body = json!({"item_id": "ExampleItem", "content_role": "body", "field_id": null});
+    let other_field =
+        json!({"item_id": "ExampleItem", "content_role": "body", "field_id": "ExampleOtherField"});
+    let legacy = json!({"item_id": "ExampleItem", "field_id": null});
+    for (name, allowed, requested, expected) in [
+        (
+            "automatic-exact-field",
+            vec![field.clone()],
+            vec![field.clone()],
+            "accepted",
+        ),
+        (
+            "automatic-exact-descriptor",
+            vec![descriptor.clone()],
+            vec![descriptor.clone()],
+            "accepted",
+        ),
+        (
+            "automatic-explicit-field-and-descriptor",
+            vec![descriptor.clone(), field.clone()],
+            vec![descriptor.clone()],
+            "accepted",
+        ),
+        (
+            "automatic-descriptor-cannot-read-body",
+            vec![descriptor.clone()],
+            vec![whole_body.clone()],
+            "policy-denied",
+        ),
+        (
+            "automatic-field-cannot-read-descriptor",
+            vec![field.clone()],
+            vec![descriptor.clone()],
+            "policy-denied",
+        ),
+        (
+            "automatic-field-cannot-read-other-field",
+            vec![field.clone()],
+            vec![other_field],
+            "policy-denied",
+        ),
+        (
+            "automatic-whole-body-rule-invalid",
+            vec![whole_body.clone()],
+            vec![whole_body],
+            "policy-denied",
+        ),
+        (
+            "automatic-old-role-implicit-rule-invalid",
+            vec![legacy.clone()],
+            vec![legacy],
+            "policy-denied",
+        ),
+        (
+            "automatic-empty-request-invalid",
+            vec![descriptor],
+            vec![],
+            "policy-denied",
+        ),
+    ] {
+        cases.push(
+            json!({"name": name, "human": false, "automatic_targets": allowed,
+            "manifest_targets": requested, "empty_presentation": true, "expected": expected}),
+        );
+    }
     Value::Array(cases)
 }
 
@@ -1982,8 +2083,8 @@ pub fn build_corpus() -> AnyResult<Value> {
             "j01b_revision": "560897e90fa7a7dc840458285ec64eff53a0a284",
             "j19a_construction_sha256": "23ded2718d4b2bb305a6cd83da246b8cecdd03135b4a8529ecd3ced333b8feac",
             "j19a_threat_model_sha256": "3334eee2c86c07afd5799c1bbfadc4a0fed00eadec86a40f32811a21548ad275",
-            "j19b_protocol_sha256": "1e1c23218f668638f8fe6f24e1193f92783c57f2ee8f175a4a1142a8ea934319",
-            "j19b_state_machines_sha256": "7cbf65276bb60fbb1a2b72f9d1f12612ccba402de09eee3fb70a320bfdc5ca6f"
+            "j19b_protocol_sha256": "211a61609de4059d9c16f7da5d46f1483ed8319aacd6b21d75ad74823739591f",
+            "j19b_state_machines_sha256": "894b331c565ddc4c71879bd45bab3a3ef542ce5cf5759926d2f3aa0a3be9cdcb"
         },
         "normalization": {
             "unknown_version_suite_or_construction": "unsupported-version",
@@ -2097,6 +2198,39 @@ fn decode_field(value: &Value, field: &str) -> AnyResult<Vec<u8>> {
         .map_err(|error| format!("decode field {field}: {error}"))
 }
 
+fn consume_automatic_target(vector: &Value) -> AnyResult<()> {
+    let bytes = decode_field(vector, "body_hex")?;
+    let item = decode_field(vector, "item_id_hex")?;
+    if item.len() != 32
+        || item.iter().all(|byte| *byte == 0)
+        || bytes.get(..32) != Some(item.as_slice())
+    {
+        return Err("automatic target item mismatch".to_owned());
+    }
+    match vector["content_role"].as_u64() {
+        Some(1)
+            if vector.get("field_id_hex").is_some_and(Value::is_null)
+                && bytes.get(32..) == Some(&[1, 0]) =>
+        {
+            Ok(())
+        }
+        Some(2) => {
+            let field = decode_field(vector, "field_id_hex")?;
+            if field.len() == 32
+                && field.iter().any(|byte| *byte != 0)
+                && bytes.len() == 66
+                && bytes[32..34] == [2, 1]
+                && bytes[34..] == field
+            {
+                Ok(())
+            } else {
+                Err("automatic body target must contain one exact field".to_owned())
+            }
+        }
+        _ => Err("invalid automatic target role or field encoding".to_owned()),
+    }
+}
+
 pub fn consume_corpus(corpus: &Value) -> AnyResult<()> {
     if corpus["schema"] != "jury-witness-v1-conformance-corpus" || corpus["schema_version"] != 1 {
         return Err("unknown corpus schema".to_owned());
@@ -2105,6 +2239,10 @@ pub fn consume_corpus(corpus: &Value) -> AnyResult<()> {
         .as_object()
         .ok_or_else(|| "vectors must be an object".to_owned())?;
     for (name, vector) in vectors {
+        if vector["kind"] == "automatic-target" {
+            consume_automatic_target(vector)?;
+        }
+
         if let Some(signature_hex) = vector["signature_hex"].as_str() {
             let signature_bytes =
                 hex::decode(signature_hex).map_err(|error| format!("{name}: {error}"))?;
@@ -2289,8 +2427,7 @@ fn consume_construction(construction: &Value) -> AnyResult<()> {
         "jury-witness-v1/capsule-set/hash",
         &[list_bytes(&capsule_bytes)?],
     );
-    if expected_capsule_set.as_slice() != decode_field(construction, "capsule_set_digest_hex")?
-    {
+    if expected_capsule_set.as_slice() != decode_field(construction, "capsule_set_digest_hex")? {
         return Err("capsule-set digest mismatch".to_owned());
     }
     let witnessed_slot = decode_field(construction, "witnessed_slot_hex")?;
@@ -2298,17 +2435,14 @@ fn consume_construction(construction: &Value) -> AnyResult<()> {
         "jury-witness-v1/slot/hash",
         &[bytes_field(&witnessed_slot)?],
     );
-    if expected_slot_digest.as_slice()
-        != decode_field(construction, "witnessed_slot_digest_hex")?
-    {
+    if expected_slot_digest.as_slice() != decode_field(construction, "witnessed_slot_digest_hex")? {
         return Err("witnessed-slot digest mismatch".to_owned());
     }
     let expected_state_digest = hash_preimage(
         "jury-witness-v1/slot-set/hash",
         &[list_bytes(std::slice::from_ref(&witnessed_slot))?],
     );
-    if expected_state_digest.as_slice()
-        != decode_field(construction, "witnessed_state_digest_hex")?
+    if expected_state_digest.as_slice() != decode_field(construction, "witnessed_state_digest_hex")?
     {
         return Err("witnessed-state digest mismatch".to_owned());
     }
@@ -2482,6 +2616,35 @@ fn consume_cases(corpus: &Value) -> AnyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_target_encoding_rejects_legacy_and_cross_role_shapes() -> Result<(), String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("vectors.json");
+        let corpus: Value =
+            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        let descriptor = &corpus["vectors"]["automatic_descriptor_target"];
+        consume_automatic_target(descriptor)?;
+        let mut legacy = descriptor.clone();
+        let mut bytes = decode_field(&legacy, "body_hex")?;
+        bytes.remove(32);
+        legacy["body_hex"] = hex_bytes(&bytes).into();
+        assert!(consume_automatic_target(&legacy).is_err());
+        let mut whole_body = descriptor.clone();
+        whole_body["content_role"] = 2.into();
+        let mut bytes = decode_field(&whole_body, "body_hex")?;
+        bytes[32] = 2;
+        whole_body["body_hex"] = hex_bytes(&bytes).into();
+        assert!(consume_automatic_target(&whole_body).is_err());
+        let mut field = corpus["vectors"]["automatic_field_target"].clone();
+        consume_automatic_target(&field)?;
+        field["content_role"] = 1.into();
+        let mut bytes = decode_field(&field, "body_hex")?;
+        bytes[32] = 1;
+        field["body_hex"] = hex_bytes(&bytes).into();
+        assert!(consume_automatic_target(&field).is_err());
+        Ok(())
+    }
 
     #[test]
     fn checked_in_corpus_matches_generation_and_consumes() -> Result<(), String> {

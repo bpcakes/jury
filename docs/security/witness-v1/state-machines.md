@@ -68,6 +68,11 @@ does not let a caller select it as the source of truth.
 | `Rendered` | expiry/cancellation occurs | `Terminal`; emit nothing |
 | `Signed` | retry | return identical signed bytes; never mint a new ID, nonce, or expiry |
 
+Automatic target matching compares item ID, descriptor/body role, and field ID.
+Only descriptor-without-field and body-with-exact-field targets are valid.
+An absent field ID never acts as a wildcard. The unreleased role-implicit
+encoding is invalid; there is no compatibility path.
+
 An automatic decision uses the same public validation and equality function,
 then matches the exact typed policy rule. It does not enter `Rendered` and does
 not claim meaningful human review. An automatic-only manifest uses the frozen

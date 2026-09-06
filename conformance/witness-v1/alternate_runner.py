@@ -84,6 +84,20 @@ def combine(shares: list[bytes]) -> bytes:
 def check_hash_vectors(corpus: dict) -> int:
     checked = 0
     for name, vector in corpus["vectors"].items():
+        if vector.get("kind") == "automatic-target":
+            item, encoded = raw(vector["item_id_hex"]), raw(vector["body_hex"])
+            if len(item) != 32 or not any(item): fail("invalid automatic target item")
+            role, field = vector["content_role"], vector["field_id_hex"]
+            if role == 1 and field is None:
+                expected = item + bytes([1, 0])
+            elif role == 2 and isinstance(field, str):
+                field = raw(field)
+                if len(field) != 32 or not any(field): fail("invalid automatic target field")
+                expected = item + bytes([2, 1]) + field
+            else:
+                fail("invalid automatic target role/field")
+            if encoded != expected: fail("automatic target encoding mismatch")
+            checked += 1
         if "hash_domain" in vector:
             expected = digest(
                 jce(
@@ -169,11 +183,18 @@ def check_construction(corpus: dict) -> None:
 
 def presentation_result(case: dict) -> str:
     if not case["human"]:
-        return (
-            "accepted"
-            if case["automatic_rule_match"] and case["empty_presentation"]
-            else "policy-denied"
-        )
+        def valid(target):
+            if not isinstance(target, dict) or not isinstance(target.get("item_id"), str) or not target["item_id"]:
+                return False
+            if target.get("content_role") == "descriptor":
+                return "field_id" in target and target["field_id"] is None
+            return target.get("content_role") == "body" and isinstance(target.get("field_id"), str) and bool(target["field_id"])
+        allowed, requested = case.get("automatic_targets"), case.get("manifest_targets")
+        accepted = (isinstance(allowed, list) and isinstance(requested, list) and bool(allowed) and bool(requested)
+                    and all(valid(target) for target in allowed)
+                    and all(valid(target) and target in allowed for target in requested)
+                    and case["empty_presentation"])
+        return "accepted" if accepted else "policy-denied"
     checks = (
         "complete",
         "digest_match",
