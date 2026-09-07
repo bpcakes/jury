@@ -24,7 +24,10 @@ fn preview_after_bootstrap_role_removal(
     let portable = catalog.for_vault(&vault)?;
     assert_eq!(portable.registration_proofs.len(), catalog.registration_proofs.len());
     let source = jury_core::rollover::RolloverSource::validate(&vault, &catalog.witness_policies)?;
-    let out = home.parent().ok_or("missing parent")?.join("ExampleNextVault");
+    let next_homes = home.parent().ok_or("missing parent")?.join("ExampleNextHomes");
+    fs::create_dir(&next_homes)?;
+    fs::set_permissions(&next_homes, fs::Permissions::from_mode(0o700))?;
+    let out = next_homes.join("ExampleNextVault");
     let backup = home.parent().ok_or("missing parent")?.join("ExampleOffline/ExampleNextBackup");
     let transfer = home.parent().ok_or("missing parent")?.join("ExampleNextTransfer");
     let preview = success_json(run(context.repository, context.data, context.state,
