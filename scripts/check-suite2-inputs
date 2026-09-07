@@ -29,6 +29,7 @@ PATHS = {
     "conformance/suite-2/verify-primitives.py", "conformance/suite-2/alternate/boringssl_runner.cc",
     "crates/jury-protocol/src/hpke_context.rs", "crates/jury-protocol/src/vault_v1/preimage.rs",
     "crates/jury-protocol/tests/vault_v1.rs", "crates/jury-protocol/tests/vault_v1/suite2.rs",
+    "crates/jury-protocol/tests/vault_v1/bounds.rs",
     "scripts/check-suite2-inputs", "scripts/test-suite2-inputs.py",
 }
 

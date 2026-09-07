@@ -76,7 +76,7 @@ sha256 = "6178eb899bbbb52bd5fa1c26b4e03223517e41b506275782797e516da1986c5b"
 
 [[bindings]]
 path = "crates/jury-protocol/tests/vault_v1.rs"
-sha256 = "4e71af6ed127eb769e4c19a7a2e5cae48d5768d52a7d562619f0b556966e0bae"
+sha256 = "9a0fd6e1940f33d2575cc6fce464c16fab06ae3d205f9e615d0d98cf234c3ab9"
 
 [[bindings]]
 path = "crates/jury-protocol/tests/vault_v1/suite2.rs"
@@ -96,8 +96,12 @@ sha256 = "1504c5aefaab2185376d166a2bd627e492aa72be1ace6d86c4a5bf8734fc1fc4"
 
 [[bindings]]
 path = "scripts/check-suite2-inputs"
-sha256 = "9a86b859fb225c93633e3ebc8211f544a344b71a1e8eedd140ebe7c0c9f278a4"
+sha256 = "d26bbeb63f805524aff652c2bde677c7447db6b707fa61e2b25ef206bf380317"
 
 [[bindings]]
 path = "scripts/test-suite2-inputs.py"
 sha256 = "2fa9bf12faf955c620e20d786a38ce07fdbe502813e4800a6e06403bad8004ee"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/vault_v1/bounds.rs"
+sha256 = "5e83372ddadfca6def3d4d638a3e548f6bc22ae1e93e22e3c2b99f112ca8ad3b"
