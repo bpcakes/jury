@@ -41,7 +41,7 @@ impl TransferPublicCatalogV1 {
         &self,
         vault: &VaultFileV1,
         policy: &PolicyState,
-    ) -> Result<(), TransferError> {
+    ) -> Result<Option<PolicyState>, TransferError> {
         let invalid = || TransferError::new(TransferErrorKind::InvalidCatalog);
         let expected = required_roles(vault, policy);
         let mut supplied = BTreeSet::new();
@@ -58,8 +58,7 @@ impl TransferPublicCatalogV1 {
         if supplied != expected.keys().copied().collect() {
             return Err(invalid());
         }
-        crate::rollover::validate_retained_bootstrap(vault, self).map_err(|_| invalid())?;
-        Ok(())
+        crate::rollover::validate_retained_bootstrap(vault, self).map_err(|_| invalid())
     }
 }
 

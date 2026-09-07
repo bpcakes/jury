@@ -329,7 +329,11 @@ impl RolloverSource<'_> {
         if vault.policy.revisions.len() != 1 {
             return Err(invalid());
         }
-        self.verify_direct_destination(vault, &[], true)
+        let destination = super::bootstrap::ValidatedDestination::validate(
+            vault,
+            &crate::transfer::TransferPublicCatalogV1::empty(),
+        )?;
+        self.verify_direct_destination(&destination, true)
     }
 
     /// Validate the signed bootstrap after ordinary destination mutations.
@@ -341,24 +345,19 @@ impl RolloverSource<'_> {
         vault: &VaultFileV1,
         catalog: &crate::transfer::TransferPublicCatalogV1,
     ) -> Result<(), RolloverError> {
-        let current = RolloverSource::validate(vault, &catalog.witness_policies)?;
-        catalog.to_json_bytes().map_err(|_| invalid())?;
-        catalog
-            .validate_for_policy(vault, &current.policy)
-            .map_err(|_| invalid())?;
-        self.verify_direct_destination(vault, &catalog.witness_policies, false)
+        let destination = super::bootstrap::ValidatedDestination::validate(vault, catalog)?;
+        self.verify_direct_destination(&destination, false)
     }
 
     fn verify_direct_destination(
         &self,
-        vault: &VaultFileV1,
-        witness_policies: &[crate::policy::WitnessPolicy],
+        destination: &super::bootstrap::ValidatedDestination<'_>,
         fresh: bool,
     ) -> Result<(), RolloverError> {
         self.require_direct()?;
+        let vault = destination.vault();
         self.verify_source_authorization(&vault.policy.genesis)?;
-        RolloverSource::validate(vault, witness_policies)?;
-        let bootstrap = super::bootstrap_state(vault, witness_policies)?;
+        let bootstrap = destination.bootstrap();
         let Some(SourceAttestationV1::Rollover { statement }) =
             &vault.policy.genesis.source_attestation
         else {
@@ -400,7 +399,7 @@ impl RolloverSource<'_> {
                 || entry.initial_item_revision_hash != item.current_item_revision_hash
                 || entry.direct_slot_set_digest != direct_digest(&item.direct_slots)?
                 || entry.grants != grants(&self.policy, entry.source_item_id)?
-                || entry.grants != grants(&bootstrap, entry.destination_item_id)?
+                || entry.grants != grants(bootstrap, entry.destination_item_id)?
                 || entry.witnessed.is_some()
             {
                 return Err(invalid());

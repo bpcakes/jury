@@ -40,13 +40,9 @@ impl RolloverSource<'_> {
     ) -> Result<(), RolloverError> {
         roles::validate_source_catalog(self, source_catalog)?;
         self.verify_source_authorization(&vault.policy.genesis)?;
-        let destination = RolloverSource::validate(vault, &catalog.witness_policies)?;
-        catalog.to_json_bytes().map_err(|_| invalid())?;
-        catalog
-            .validate_for_policy(vault, &destination.policy)
-            .map_err(|_| invalid())?;
-        let bootstrap = super::super::bootstrap_state(vault, &catalog.witness_policies)?;
-        let selected = bootstrap_catalog(catalog, &bootstrap)?;
+        let destination = super::super::bootstrap::ValidatedDestination::validate(vault, catalog)?;
+        let bootstrap = destination.bootstrap();
+        let selected = bootstrap_catalog(catalog, bootstrap)?;
         if fresh && &selected != catalog {
             return Err(invalid());
         }
@@ -125,7 +121,7 @@ impl RolloverSource<'_> {
                 || entry.initial_item_revision_hash != item.current_item_revision_hash
                 || entry.direct_slot_set_digest != direct_digest(&item.direct_slots)?
                 || entry.grants != grants(&self.policy, entry.source_item_id)?
-                || entry.grants != grants(&bootstrap, entry.destination_item_id)?
+                || entry.grants != grants(bootstrap, entry.destination_item_id)?
             {
                 return Err(invalid());
             }

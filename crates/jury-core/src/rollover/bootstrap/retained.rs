@@ -16,12 +16,12 @@ use std::collections::BTreeSet;
 pub(crate) fn validate_retained_bootstrap(
     vault: &VaultFileV1,
     catalog: &TransferPublicCatalogV1,
-) -> Result<(), RolloverError> {
+) -> Result<Option<PolicyState>, RolloverError> {
     crate::rollover::migration::verify(vault)?;
     let Some(SourceAttestationV1::Rollover { statement }) =
         &vault.policy.genesis.source_attestation
     else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(manifest) = &statement.bootstrap_manifest else {
         // The protocol parser retains the original reserved preimage corpus,
@@ -178,5 +178,5 @@ pub(crate) fn validate_retained_bootstrap(
     {
         return Err(invalid());
     }
-    Ok(())
+    Ok(Some(bootstrap))
 }

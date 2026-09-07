@@ -6,6 +6,37 @@ use jury_protocol::{
 };
 pub(crate) use retained::validate_retained_bootstrap;
 
+/// A complete current artifact and its authenticated retained bootstrap. Only
+/// this constructor can pair the borrowed artifact with the validated state;
+/// verification helpers cannot accept a caller-supplied replay result.
+pub(super) struct ValidatedDestination<'a> {
+    vault: &'a VaultFileV1,
+    bootstrap: PolicyState,
+}
+
+impl<'a> ValidatedDestination<'a> {
+    pub(super) fn validate(
+        vault: &'a VaultFileV1,
+        catalog: &crate::transfer::TransferPublicCatalogV1,
+    ) -> Result<Self, RolloverError> {
+        let current = RolloverSource::validate(vault, &catalog.witness_policies)?;
+        catalog.to_json_bytes().map_err(|_| invalid())?;
+        let bootstrap = catalog
+            .validate_for_policy(vault, &current.policy)
+            .map_err(|_| invalid())?
+            .ok_or_else(invalid)?;
+        Ok(Self { vault, bootstrap })
+    }
+
+    pub(super) fn vault(&self) -> &'a VaultFileV1 {
+        self.vault
+    }
+
+    pub(super) fn bootstrap(&self) -> &PolicyState {
+        &self.bootstrap
+    }
+}
+
 pub(super) fn bootstrap_state(
     vault: &VaultFileV1,
     witness_policies: &[WitnessPolicy],

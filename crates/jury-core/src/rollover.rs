@@ -9,7 +9,7 @@ use std::fmt;
 mod bootstrap;
 mod direct;
 pub(crate) use bootstrap::validate_retained_bootstrap;
-use bootstrap::{bootstrap_state, verify_fresh_envelope};
+use bootstrap::verify_fresh_envelope;
 mod governed;
 mod intent;
 mod migration;
