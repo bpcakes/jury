@@ -1,0 +1,10 @@
+/target/
+tools/*/target/
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/target/
+__pycache__/
+*.py[cod]
+PENTEST.md
+pentest.md
+MORE.md

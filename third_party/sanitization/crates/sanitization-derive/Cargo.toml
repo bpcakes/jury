@@ -1,0 +1,30 @@
+[package]
+publish = false
+name = "sanitization-derive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Optional derive macros for the sanitization crate."
+license.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/sanitization-derive"
+homepage.workspace = true
+repository.workspace = true
+keywords = ["zeroize", "secrets", "security", "derive"]
+categories = ["cryptography", "no-std", "memory-management"]
+include = ["Cargo.toml", "README.md", "src/**/*.rs"]
+
+[package.metadata.sanitization]
+role = "proc-macro"
+generated-runtime-crate = "sanitization"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.107"
+quote = "1.0.47"
+syn = { version = "3.0.4", features = ["full"] }

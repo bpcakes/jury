@@ -1,0 +1,10 @@
+[package]
+name = "consume-once-loom"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+loom = "0.7"

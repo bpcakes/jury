@@ -1,0 +1,178 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  pull_request:
+    branches:
+      - main
+      - temp-dev-2.0.0
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  checks:
+    name: Format, lint, test, and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Audit dependencies
+        shell: bash
+        run: |
+          if ! cargo audit --version >/dev/null 2>&1; then
+            cargo install cargo-audit --version 0.22.2 --locked
+          fi
+          if [ "$(cargo deny --version 2>/dev/null || true)" != "cargo-deny 0.20.2" ]; then
+            cargo install cargo-deny --version 0.20.2 --locked --force
+          fi
+          cargo audit --deny warnings
+
+      - name: Run checks
+        run: scripts/checks.sh
+
+  platform:
+    name: Platform tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Test default features
+        run: cargo test --all-targets
+
+      - name: Test all features
+        if: runner.os == 'Linux'
+        run: cargo test --all-targets --all-features
+
+      - name: Test portable native features
+        if: runner.os != 'Linux'
+        run: cargo test --all-targets --features "alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native"
+
+      - name: Check no_std library build
+        run: cargo check --no-default-features --lib
+
+  target-build:
+    name: no_std target build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - wasm32-unknown-unknown
+          - thumbv7em-none-eabihf
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Check no_std library build
+        run: cargo check --no-default-features --lib --target ${{ matrix.target }}
+
+  mapped-backend-build:
+    name: mapped backend build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            features: all
+          - target: aarch64-unknown-linux-gnu
+            features: memory-lock,guard-pages,multi-pass-clear
+          - target: x86_64-apple-darwin
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: aarch64-apple-darwin
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: aarch64-apple-ios
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: x86_64-apple-ios
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: x86_64-pc-windows-gnu
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: aarch64-linux-android
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: x86_64-linux-android
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+          - target: x86_64-unknown-freebsd
+            features: memory-lock,guard-pages,multi-pass-clear
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Check mapped backend library build
+        shell: bash
+        run: |
+          if [ "${{ matrix.features }}" = "all" ]; then
+            cargo check --lib --all-features --target ${{ matrix.target }}
+          else
+            cargo check --lib --features "${{ matrix.features }}" --target ${{ matrix.target }}
+          fi

@@ -1,0 +1,82 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/consume-once-loom
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/core-dump-probe
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/ct-leakage
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/direct-exposure-codegen
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/downstream-migration
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/lifecycle-probes
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: cargo
+    directory: /tools/performance-baseline
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    reviewers:
+      - valkyoth
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    reviewers:
+      - valkyoth

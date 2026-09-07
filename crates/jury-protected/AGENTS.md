@@ -18,7 +18,8 @@ pre-capture process-protection boundary.
 ## Invariants
 
 - Keep `unsafe_code = "forbid"`; native memory operations belong to the pinned
-  reviewed provider.
+  reviewed provider in `third_party/sanitization`. Read its `AGENTS.md` before
+  changing native operations; production and fuzz use the same path dependency.
 - Compact protected secrets never fall back to ordinary Jury-owned heap bytes.
 - Errors, `Debug`, JSON status, and tests never expose secret values.
 - Strict protection fails closed. The sole emergency policy reports every
@@ -26,6 +27,13 @@ pre-capture process-protection boundary.
 - This crate contains no cryptographic algorithms and no Jig dependency.
 
 ## Common commands
+
+Native tests require working guarded mappings and enough `RLIMIT_MEMLOCK` for
+a page-rounded allocation larger than 1 MiB, including provider canaries.
+The Linux validation container uses a 64 MiB soft/hard MEMLOCK limit. Tests
+report insufficient limits as failures; they do not skip required protection.
+Core-limit cases run in subprocesses because lowering the hard limit cannot
+be undone by the parent test runner.
 
 - `cargo test -p jury-protected --all-targets`
 - `scripts/jig check clippy`

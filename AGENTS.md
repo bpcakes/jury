@@ -30,7 +30,9 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 - Treat `.` as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+
 - Keep transport logic thin and business logic in the owning crate.
+
 
 
 
@@ -44,7 +46,9 @@ No web apps are configured in `.jig.toml`.
 
 - `scripts/jig bootstrap`
 - `scripts/jig doctor`
+
 - `scripts/jig dev`
+
 - `scripts/jig check test`
 - `scripts/jig check fmt`
 
@@ -111,6 +115,18 @@ serves that outcome and never becomes the product.
   deterrent. The full catalog with countermeasures lives in the
   just-say-no-to-process-porn-and-ceremony skill; ask the operator for it
   if you cannot resolve that reference.
+
+## Rust file-size policy
+
+- The maintained `third_party/sanitization/` tree is excluded from Jury's Rust
+  file-size policy by explicit operator decision. Use
+  `scripts/jig check repo:file-budget` for the repo policy, configured in
+  `.jig/file-budget.toml`. Direct diagnostics use `scripts/jig file-budget check`
+  with `--staged` or `--base <ref>`; use `file-budget audit --strict` for a full
+  inventory and `file-budget explain <path>` to inspect classification.
+  This exclusion applies only
+  to file sizes; provider compilation, formatting, Clippy, and tests remain
+  required through `.github/workflows/sanitization.yml`.
 
 ## Jury Security Boundary
 

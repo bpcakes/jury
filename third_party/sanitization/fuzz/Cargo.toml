@@ -1,0 +1,30 @@
+[package]
+name = "sanitization-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+sanitization = { version = "2.0.4", path = "../crates/sanitization", features = ["alloc", "derive", "serde"] }
+
+[[bin]]
+name = "owned_lifecycle"
+path = "fuzz_targets/owned_lifecycle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ct_primitives"
+path = "fuzz_targets/ct_primitives.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

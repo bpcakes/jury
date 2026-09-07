@@ -1,4 +1,4 @@
-_commit = "2c0496fade6d9d9d8a24dadced92ed875689bfbb"
+_commit = "8629700b92cd9ab8b09f8ff86de4fc1573469c83"
 _src_path = "https://github.com/bpcakes/jig-sh.git"
 _template_local_path = ""
 _template_mode = ""
@@ -27,13 +27,11 @@ plugins = [
 source = "bpcakes/jig-skills"
 
 [commands]
-api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --locked -- -D warnings; else printf '%s\n' 'No Cargo.toml found; skipping cargo clippy.'; fi'''
+api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files; else printf '%s\n' 'No Cargo.toml found; skipping cargo clippy.'; fi'''
 api_fmt_command = '''if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\n' 'No Cargo.toml found; skipping cargo fmt.'; fi'''
 api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
 api_test_locked_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi'''
 repo_bootstrap_command = '''if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi; if [ -f web/package.json ]; then (cd web && bun install); fi'''
-repo_rust_file_loc_command = "scripts/check-rust-file-loc.sh main"
-rust_file_loc_command = "scripts/check-rust-file-loc.sh main"
 
 [dev]
 http2 = true
@@ -320,36 +318,32 @@ action = "contract"
 component = "repo"
 
 [[repository.actions]]
-description = "Enforce the changed-file Rust source size policy."
-effects = [
-    "read_only",
-    "process",
-]
-inputs = [
-    "**/*.rs",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "scripts/check-rust-file-loc.sh",
-]
+description = "Enforce repository-owned source file budgets."
+effects = ["read_only"]
+inputs = ["**"]
 intent = "check"
-legacy_aliases = ["jig.rust_file_loc"]
+legacy_aliases = ["jig.file_budget"]
 
 [repository.actions.provenance]
 effects = "inherited"
 inputs = "inherited"
 intent = "inherited"
 legacy_aliases = "inherited"
-runner = "inferred"
+runner = "inherited"
 target = "inherited"
 
 [repository.actions.runner]
-command = "repo_rust_file_loc_command"
-kind = "command"
+kind = "native"
+operation = "jig.file_budget"
+
+[repository.actions.runner.configuration]
+kind = "file_budget"
+max_candidates = 10000
+max_total_bytes = 268435456
+missing_comparison = "block"
 
 [repository.actions.target]
-action = "rust-file-loc"
+action = "file-budget"
 component = "repo"
 
 [[repository.components]]
@@ -402,7 +396,7 @@ action = "contract"
 component = "repo"
 
 [[repository.profiles.targets]]
-action = "rust-file-loc"
+action = "file-budget"
 component = "repo"
 
 [status]
@@ -425,9 +419,10 @@ kind = "check"
 tool = "jig.contract_check"
 
 [[work.gates]]
-id = "rust-file-loc"
-kind = "check"
-tool = "jig.rust_file_loc"
+id = "file-budget"
+kind = "evidence"
+target = "repo:file-budget"
+conclusion = "success"
 
 [[work.gates]]
 id = "rust-fmt"

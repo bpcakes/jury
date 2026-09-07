@@ -13,7 +13,7 @@ import sys
 import tarfile
 import tempfile
 import tomllib
-from linux_release_support import (collect_notices, extract_vendor, file_record,
+from linux_release_support import (collect_notices, collect_provider_notices, extract_vendor, file_record,
     snapshot_files, vendor_config, verify_packaged_binaries, normalize_sbom, normalized_sha256,
     package_documentation)
 
@@ -198,6 +198,7 @@ def build_candidate(args):
         package_documentation(source, bundle)
         notices = bundle/'third-party-notices'
         notice_inventory = collect_notices(vendor, source/'licenses/vendor-supplements', notices/'cargo')
+        notice_inventory.append(collect_provider_notices(source, notices/'cargo'))
         shutil.copytree(notice_output/'rust-notices', notices/'rust')
         (notices/'inventory.json').write_bytes(json_bytes(notice_inventory))
         (notices/'README.txt').write_text('Cargo license and notice files cover every vendored package, including build and development dependencies. Missing published-crate license files are supplemented from recorded upstream revisions. Nested native-provider notices and Rust toolchain notices are included. See inventory.json and supplement-sources.json for the exact coverage and source bindings.\n')
@@ -224,7 +225,7 @@ def build_candidate(args):
             require(bom['metadata']['component']['version'] == version, 'SBOM version mismatch')
             (bundle/f'{binary}.cdx.json').write_bytes(json_bytes(bom))
             matches[0].unlink()
-        # Retain the exact provider sources for offline reproduction and license inspection.
+        # External dependencies are here; the maintained provider is in the source archive.
         archive(vendor, output/f'jury-{version}-vendor.tar.gz', 'vendor')
         # Remove any additional SBOM products before freezing the source archive.
         for path in sbom_source.rglob('*.cdx.json'):

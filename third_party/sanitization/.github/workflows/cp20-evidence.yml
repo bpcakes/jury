@@ -1,0 +1,257 @@
+name: CP-20 target evidence
+
+on:
+  push:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  native:
+    name: Native evidence (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64-linux
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            tier: A
+            features: all
+            python: python3
+          - label: aarch64-linux
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            tier: B
+            features: all
+            python: python3
+          - label: x86_64-windows
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            tier: B
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+            python: python
+          - label: aarch64-macos
+            runner: macos-15
+            target: aarch64-apple-darwin
+            tier: B
+            features: alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native
+            python: python3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Run native functional tests
+        shell: bash
+        run: |
+          if [ "${{ matrix.features }}" = "all" ]; then
+            cargo test -p sanitization --all-targets --all-features
+            PYTHON="${{ matrix.python }}" SANITIZATION_CODEGEN_FEATURES=all scripts/verify-codegen.sh
+          else
+            cargo test -p sanitization --all-targets --features "${{ matrix.features }}"
+            PYTHON="${{ matrix.python }}" SANITIZATION_CODEGEN_FEATURES="${{ matrix.features }}" scripts/verify-codegen.sh
+          fi
+
+      - name: Collect performance baseline
+        shell: bash
+        run: |
+          cargo run --quiet --release --manifest-path tools/performance-baseline/Cargo.toml -- \
+            --samples 31 --inner 20 \
+            --output "target/cp20/${{ matrix.label }}/performance.json"
+          ${{ matrix.python }} scripts/verify-target-evidence.py \
+            --performance "target/cp20/${{ matrix.label }}/performance.json"
+
+      - name: Capture native target manifest
+        shell: bash
+        run: |
+          ${{ matrix.python }} scripts/capture-target-evidence.py \
+            --output "target/cp20/${{ matrix.label }}/manifest.json" \
+            --target "${{ matrix.target }}" \
+            --tier "${{ matrix.tier }}" \
+            --kind native-functional \
+            --features "${{ matrix.features }}" \
+            --completed-check "cargo test --all-targets" \
+            --completed-check "path-specific release LLVM IR and assembly scan" \
+            --completed-check "relative performance baseline"
+          ${{ matrix.python }} scripts/verify-target-evidence.py \
+            --manifest "target/cp20/${{ matrix.label }}/manifest.json"
+
+      - name: Upload native evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cp20-native-${{ matrix.label }}
+          path: target/cp20/${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 30
+
+  leakage:
+    name: Multi-seed leakage (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x86_64-linux
+            runner: ubuntu-24.04
+          - label: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - label: aarch64-macos
+            runner: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Collect default and strict multi-seed evidence
+        shell: bash
+        run: |
+          python3 scripts/collect-leakage-evidence.py \
+            --output-dir "target/cp20/${{ matrix.label }}/leakage" \
+            --samples 50000 \
+            --inner 200 \
+            --warmup 1000 \
+            --threshold 4.5
+          python3 scripts/verify-target-evidence.py \
+            --leakage-summary "target/cp20/${{ matrix.label }}/leakage/summary.json"
+
+      - name: Upload leakage evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cp20-leakage-${{ matrix.label }}
+          path: target/cp20/${{ matrix.label }}/leakage
+          if-no-files-found: error
+          retention-days: 30
+
+  compile-only:
+    name: Compile-only evidence (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: freebsd-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-freebsd
+            tier: B
+            kind: compile-only
+            features: memory-lock,guard-pages,multi-pass-clear
+            python: python3
+          - label: android-aarch64
+            runner: ubuntu-24.04
+            target: aarch64-linux-android
+            tier: B
+            kind: compile-only
+            features: alloc,std,memory-lock,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,multi-pass-clear
+            python: python3
+          - label: ios-aarch64
+            runner: macos-15
+            target: aarch64-apple-ios
+            tier: B
+            kind: compile-only
+            features: alloc,std,memory-lock,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,multi-pass-clear
+            python: python3
+          - label: embedded-thumbv7em
+            runner: ubuntu-24.04
+            target: thumbv7em-none-eabihf
+            tier: B/C
+            kind: compile-only
+            features: default
+            python: python3
+          - label: embedded-riscv32
+            runner: ubuntu-24.04
+            target: riscv32imac-unknown-none-elf
+            tier: B/C
+            kind: compile-only
+            features: default
+            python: python3
+          - label: wasm-unknown
+            runner: ubuntu-24.04
+            target: wasm32-unknown-unknown
+            tier: C
+            kind: wasm-compatibility
+            features: alloc,memory-lock,wasm-compat,random-canary,multi-pass-clear
+            python: python3
+          - label: wasip1
+            runner: ubuntu-24.04
+            target: wasm32-wasip1
+            tier: C
+            kind: wasm-compatibility
+            features: alloc,wasm-compat,random-canary,multi-pass-clear
+            python: python3
+          - label: wasip2
+            runner: ubuntu-24.04
+            target: wasm32-wasip2
+            tier: C
+            kind: wasm-compatibility
+            features: wasm-compat,random-canary
+            python: python3
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: scripts/ci_install_rust.sh
+
+      - name: Install target
+        shell: bash
+        run: rustup target add "${{ matrix.target }}"
+
+      - name: Cross-check target
+        shell: bash
+        run: |
+          if [ "${{ matrix.features }}" = "default" ]; then
+            cargo check -p sanitization --lib --no-default-features --target "${{ matrix.target }}"
+          else
+            cargo check -p sanitization --lib --features "${{ matrix.features }}" --target "${{ matrix.target }}"
+          fi
+
+      - name: Capture compile-only target manifest
+        shell: bash
+        run: |
+          ${{ matrix.python }} scripts/capture-target-evidence.py \
+            --output "target/cp20/${{ matrix.label }}/manifest.json" \
+            --target "${{ matrix.target }}" \
+            --tier "${{ matrix.tier }}" \
+            --kind "${{ matrix.kind }}" \
+            --features "${{ matrix.features }}" \
+            --completed-check "cargo check --lib --target ${{ matrix.target }}"
+          ${{ matrix.python }} scripts/verify-target-evidence.py \
+            --manifest "target/cp20/${{ matrix.label }}/manifest.json"
+
+      - name: Upload compile-only evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cp20-compile-${{ matrix.label }}
+          path: target/cp20/${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 30

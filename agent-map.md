@@ -15,6 +15,8 @@ Fast jump index for agent-facing guidance in this repository.
 - [jury-process](./crates/jury-process/AGENTS.md)
 - [jury-filesystem](./crates/jury-filesystem/AGENTS.md)
 
+- [maintained sanitization provider](./third_party/sanitization/AGENTS.md)
+
 ## Suggested usage pattern
 
 1. Start with the root [AGENTS.md](./AGENTS.md).

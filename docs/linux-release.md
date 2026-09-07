@@ -112,3 +112,10 @@ Add `~/.local/bin` to `PATH` if necessary. See the
 witness and anchor configuration. Remove the two installed binaries to
 uninstall. Data and identity directories require an explicit separate decision;
 removing binaries does not remove them.
+
+The maintained `sanitization` provider lives in `third_party/sanitization` and
+ships in the source archive. Cargo's vendor archive contains external
+dependencies; both archives are required for offline reproduction. The binary
+notice inventory includes the local provider's original MIT and Apache-2.0
+licenses. The source inventory and hashes cover its manifests, implementation,
+and tests just as they cover Jury's own source.

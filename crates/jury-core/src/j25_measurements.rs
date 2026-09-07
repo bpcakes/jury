@@ -1502,6 +1502,9 @@ fn protected_memory(case: &str, bytes: usize) -> TestResult {
         "page_granule": status.page_granule(),
         "outcome": "accepted",
     });
+    // This Linux-only J25 harness measures standalone mapping controls, not
+    // capture readiness: is_degraded() also requires process core suppression.
+    // M08/M09 own adaptation of these measurements to native Darwin execution.
     if status.memory_lock() != RuntimeControlStatus::Established
         || status.dump_exclusion() != RuntimeControlStatus::Established
         || status.fork_exclusion() != RuntimeControlStatus::Established

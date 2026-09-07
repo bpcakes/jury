@@ -1,0 +1,30 @@
+pub mod sanitization_bytes
+pub struct sanitization_bytes::CapacityError
+pub sanitization_bytes::CapacityError::additional: usize
+pub sanitization_bytes::CapacityError::capacity: usize
+pub sanitization_bytes::CapacityError::len: usize
+impl core::fmt::Display for sanitization_bytes::CapacityError
+pub fn sanitization_bytes::CapacityError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct sanitization_bytes::SecretBytesMut
+impl sanitization_bytes::SecretBytesMut
+pub fn sanitization_bytes::SecretBytesMut::as_slice(&self) -> &[u8]
+pub fn sanitization_bytes::SecretBytesMut::capacity(&self) -> usize
+pub fn sanitization_bytes::SecretBytesMut::clear_secret(&mut self)
+pub fn sanitization_bytes::SecretBytesMut::extend_from_slice(&mut self, &[u8]) -> core::result::Result<(), sanitization_bytes::CapacityError>
+pub fn sanitization_bytes::SecretBytesMut::from_bytes_mut(bytes::bytes_mut::BytesMut) -> Self
+pub fn sanitization_bytes::SecretBytesMut::from_slice(&[u8]) -> Self
+pub fn sanitization_bytes::SecretBytesMut::into_cleared(self)
+pub fn sanitization_bytes::SecretBytesMut::is_empty(&self) -> bool
+pub fn sanitization_bytes::SecretBytesMut::len(&self) -> usize
+pub fn sanitization_bytes::SecretBytesMut::new() -> Self
+pub fn sanitization_bytes::SecretBytesMut::with_capacity(usize) -> Self
+pub fn sanitization_bytes::SecretBytesMut::with_secret<R>(&self, impl core::ops::function::FnOnce(&[u8]) -> R) -> R
+pub fn sanitization_bytes::SecretBytesMut::with_secret_mut<R>(&mut self, impl core::ops::function::FnOnce(&mut [u8]) -> R) -> R
+impl core::default::Default for sanitization_bytes::SecretBytesMut
+pub fn sanitization_bytes::SecretBytesMut::default() -> Self
+impl core::fmt::Debug for sanitization_bytes::SecretBytesMut
+pub fn sanitization_bytes::SecretBytesMut::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for sanitization_bytes::SecretBytesMut
+pub fn sanitization_bytes::SecretBytesMut::drop(&mut self)
+impl sanitization::owned::SecureSanitize for sanitization_bytes::SecretBytesMut
+pub fn sanitization_bytes::SecretBytesMut::secure_sanitize(&mut self)

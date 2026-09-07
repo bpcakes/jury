@@ -1,0 +1,19 @@
+[package]
+name = "sanitization-downstream-migration"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+publish = false
+
+[workspace]
+
+[dependencies]
+arrayvec = { version = "0.7", default-features = false }
+sanitization = { version = "2.0.4", path = "../../crates/sanitization", default-features = false, features = ["alloc", "std", "derive", "serde"] }
+sanitization-arrayvec = { version = "2.0.4", path = "../../crates/sanitization-arrayvec" }
+sanitization-bytes = { version = "2.0.4", path = "../../crates/sanitization-bytes" }
+sanitization-crypto-interop = { version = "2.0.4", path = "../../crates/sanitization-crypto-interop", features = ["blake3", "hmac-sha2", "sha2"] }
+serde_json = "1"
+
+[lib]
+path = "src/lib.rs"

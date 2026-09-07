@@ -1529,6 +1529,7 @@ dependencies = [
  "sanitization",
  "serde",
  "serde_json",
+ "tempfile",
  "zeroize",
 ]
 
@@ -2337,9 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "sanitization"
-version = "2.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e43f2762b31232062e8ba7bfbdfcbd33c80c43bf7a306a7e195c3c4f734e0f"
+version = "2.0.4"
 
 [[package]]
 name = "schannel"

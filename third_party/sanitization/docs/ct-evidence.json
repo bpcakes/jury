@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "crate": "sanitization",
+  "release_line": "2.0.0",
+  "status": "release-evidence-recorded",
+  "rust_min_version": "1.90.0",
+  "claim": {
+    "summary": "Dependency-free data-oblivious primitives with explicit declassification boundaries and documented target limits.",
+    "claimed": [
+      "provided ct primitives avoid secret-dependent control flow in their source-level structure",
+      "provided ct memory helpers avoid secret-dependent memory access in their source-level structure",
+      "fixed-size equality scans every byte and does not stop at the first differing byte",
+      "fixed-size ordering scans every byte and does not stop at the first differing byte",
+      "slice length, allocation behavior, page faults, panics, scheduling, and OS faults are public effects",
+      "normal branching on secret-derived results requires explicit declassification APIs"
+    ],
+    "not_claimed": [
+      "identical wall-clock timing on every CPU",
+      "complete protection from cache, branch predictor, SMT, transient-execution, power, or EM side channels",
+      "constant-time behavior for arbitrary caller closures",
+      "browser or Node WASM JIT constant-time behavior",
+      "protection for copies made outside crate-owned containers",
+      "target-specific leakage-test evidence for every supported target"
+    ]
+  },
+  "targets": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "tier": "A",
+      "features": ["asm-compare", "strict-compare"],
+      "barrier_strategy": ["branchless source structure", "black_box boundary", "inline assembly comparison backend"],
+      "evidence": ["native feature tests", "path-specific release LLVM IR scan", "release assembly scan", "multi-seed default and strict leakage artifacts", "relative performance baseline", "Kani harnesses", "Miri on supported paths"],
+      "limitations": ["statistical timing runs are target- and environment-specific evidence, not proof", "accepted workflow URLs and artifact digests are recorded in docs/release-evidence-2.0.0.json"]
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "tier": "B-native",
+      "features": ["asm-compare", "strict-compare"],
+      "barrier_strategy": ["branchless source structure", "black_box boundary", "inline assembly comparison backend"],
+      "evidence": ["native feature tests", "native AArch64 release codegen scan", "multi-seed default and strict leakage artifacts", "relative performance baseline", "Kani source-level harnesses"],
+      "limitations": ["Tier B does not imply the Tier A evidence breadth", "statistical timing evidence is not proof", "the no-default-features portable equality fallback is excluded from the AArch64 Linux timing claim after repeated release-candidate leakage failures"]
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "tier": "B-native",
+      "features": ["asm-compare", "strict-compare"],
+      "barrier_strategy": ["branchless source structure", "black_box boundary", "inline assembly equality backend"],
+      "evidence": ["native feature tests", "native x86_64 release codegen scan", "relative performance baseline"],
+      "limitations": ["no target-specific timing claim"]
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "tier": "B-native",
+      "features": ["asm-compare", "strict-compare"],
+      "barrier_strategy": ["branchless source structure", "black_box boundary", "inline assembly equality backend"],
+      "evidence": ["native feature tests", "native AArch64 release codegen scan", "multi-seed default and strict leakage artifacts", "relative performance baseline"],
+      "limitations": ["Tier B does not imply the Tier A evidence breadth", "statistical timing evidence is not proof"]
+    },
+    {
+      "target": "bsd-android-ios-embedded",
+      "tier": "B-compile-only",
+      "features": [],
+      "barrier_strategy": ["source-level discipline only"],
+      "evidence": ["dated cross-compilation manifests"],
+      "limitations": ["no native runtime evidence", "no device-level leakage-test evidence"]
+    },
+    {
+      "target": "wasm32-*",
+      "tier": "C",
+      "features": ["wasm-compat"],
+      "barrier_strategy": ["branchless source structure", "black_box boundary", "inline-never volatile clear boundary"],
+      "evidence": ["API compatibility checks", "documented reduced WASM guarantees"],
+      "limitations": ["WASM has no volatile memory operation", "browser and Node JIT behavior is not claimed constant-time", "no mlock or guard pages"]
+    }
+  ],
+  "checks": [
+    {
+      "name": "workspace-checks",
+      "command": "scripts/checks.sh",
+      "coverage": [
+        "formatting",
+        "feature matrix",
+        "derive macro tests",
+        "derive rejection checks",
+        "leakage-harness smoke testing",
+        "clippy",
+        "docs",
+        "package listing and generated archive verification",
+        "release codegen",
+        "optional Kani"
+      ]
+    },
+    {
+      "name": "derive-failures",
+      "command": "scripts/verify-derive-failures.sh",
+      "coverage": [
+        "compile-fail checks for enum native ct derives",
+        "compile-fail checks for skipped conditionally selectable fields",
+        "compile-fail checks for strict enum sanitization derive rejection"
+      ]
+    },
+    {
+      "name": "leakage-smoke",
+      "command": "scripts/verify-leakage-smoke.sh",
+      "coverage": [
+        "ct leakage harness compile check",
+        "ct leakage harness JSON output check",
+        "not release timing evidence"
+      ]
+    },
+    {
+      "name": "multi-seed-leakage",
+      "command": "scripts/collect-leakage-evidence.py --output-dir target/cp20/leakage",
+      "coverage": [
+        "at least three distinct default-comparison seeds",
+        "at least three distinct strict-comparison seeds",
+        "fixed equality sizes 16, 32, and 64",
+        "ordering, selection, option/result, copy, swap, and oblivious lookup",
+        "hashed per-run reports with commit and target metadata",
+        "fail-closed primary excursions with exactly two diagnostic confirmations"
+      ]
+    },
+    {
+      "name": "performance-baseline",
+      "command": "cargo run --release --manifest-path tools/performance-baseline/Cargo.toml -- --output target/cp20/performance.json",
+      "coverage": [
+        "large wipe scaling threshold",
+        "specialized bulk wipe versus generic per-element clearing",
+        "SecretBytes bulk clearing versus generic per-element clearing"
+      ]
+    },
+    {
+      "name": "target-evidence",
+      "command": "scripts/verify-target-evidence.py --manifest target/cp20/manifest.json",
+      "coverage": [
+        "native versus compile-only classification",
+        "dated compiler, commit, feature, runner, and workflow metadata",
+        "Tier C WASM classification",
+        "dirty and failed evidence rejection"
+      ]
+    },
+    {
+      "name": "miri",
+      "command": "scripts/verify-miri.sh",
+      "coverage": [
+        "interpreter checks for supported safe and unsafe-boundary core paths",
+        "all-feature core library unit tests through the private lifecycle model",
+        "portable downstream comparison, derive integration, and companion crate paths without native assembly"
+      ]
+    },
+    {
+      "name": "miri-test-backend-gates",
+      "command": "scripts/verify-miri-test-gates.py",
+      "coverage": [
+        "Miri simulator selection requires cfg(all(miri, test))",
+        "native backend complements remain selected outside crate unit tests",
+        "normal release compilation retains native paths under a manually supplied cfg(miri)",
+        "release compilation rejects forged cfg(miri) plus cfg(test) simulator selection"
+      ]
+    },
+    {
+      "name": "kani",
+      "command": "scripts/verify-kani.sh",
+      "coverage": ["bounded functional proofs for clearing, equality, ordering, selection, and capacity arithmetic"]
+    },
+    {
+      "name": "codegen",
+      "command": "scripts/verify-codegen.sh && scripts/verify-codegen-matrix.sh",
+      "coverage": [
+        "release LLVM IR wipe checks",
+        "path-specific downstream cleanup probes",
+        "optimization, LTO, panic, and codegen-unit matrix",
+        "native ct helper symbol checks",
+        "native ct optimizer-barrier and mask-generation checks",
+        "memcmp/bcmp absence checks",
+        "x86_64 assembly backend checks when run on x86_64"
+      ]
+    },
+    {
+      "name": "lifecycle-probes",
+      "command": "cargo test --manifest-path tools/lifecycle-probes/Cargo.toml -- --test-threads=1",
+      "coverage": [
+        "quarantined released-allocation marker checks",
+        "growth allocation cleanup",
+        "required protection setup fault rollback model"
+      ]
+    },
+    {
+      "name": "loom",
+      "command": "scripts/verify-loom.sh",
+      "coverage": [
+        "consume-once claim ordering",
+        "pool slot clear, release, generation, and reuse",
+        "retired protection-state access ordering"
+      ]
+    },
+    {
+      "name": "verification-negative-fixtures",
+      "command": "scripts/test-verification-fail-closed.py",
+      "coverage": [
+        "malformed evidence rejection",
+        "missing path-specific codegen probe rejection"
+      ]
+    }
+  ],
+  "proofs": [
+    "prove_wipe_bytes_clears_fixed_buffer",
+    "prove_secret_bytes_clear_erases_visible_contents",
+    "prove_secret_bytes_constant_time_eq_matches_byte_equality",
+    "prove_ct_choice_is_normalized",
+    "prove_ct_choice_boolean_algebra_matches_public_bits",
+    "prove_ct_fixed_equality_matches_byte_equality",
+    "prove_ct_fixed_ordering_matches_lexicographic_ordering",
+    "prove_ct_unsigned_ordering_matches_rust_ordering",
+    "prove_ct_signed_ordering_matches_rust_ordering",
+    "prove_ct_public_length_equality_rejects_mismatch",
+    "prove_ct_conditional_copy_matches_choice",
+    "prove_ct_conditional_swap_matches_choice",
+    "prove_ct_oblivious_lookup_matches_public_index",
+    "prove_ct_select_slice_matches_choice",
+    "prove_ct_option_unwrap_or_matches_presence",
+    "prove_ct_option_and_or_match_presence_bits",
+    "prove_ct_result_unwrap_or_and_maps_match_success_bit",
+    "prove_ct_option_and_result_conditional_select_match_choice",
+    "prove_constant_time_eq_rejects_length_mismatch",
+    "prove_secret_bytes_replacement_commits_complete_new_value",
+    "prove_next_secret_capacity_never_under_allocates"
+  ],
+  "release_candidate_requirements": [
+    "preserve exact accepted CI run URLs in docs/release-evidence-2.0.0.json",
+    "record exact rustc version and target triples used for release evidence",
+    "rerun checks after any compiler, unsafe-code, comparison-backend, or target-tier change",
+    "retain docs/release-evidence-2.0.0.json after temporary workflow artifact downloads expire",
+    "do not publish stable 2.0.0 with open high or medium pentest findings"
+  ]
+}

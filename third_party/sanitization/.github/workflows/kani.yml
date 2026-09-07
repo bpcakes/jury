@@ -1,0 +1,39 @@
+name: Kani Verification
+
+on:
+  push:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  pull_request:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kani:
+    name: Bounded proof harnesses
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify no-default harnesses
+        uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
+        with:
+          args: --output-format=terse --no-default-features
+
+      - name: Verify alloc harnesses
+        uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
+        with:
+          args: --output-format=terse --no-default-features --features alloc
+
+      - name: Verify std harnesses
+        uses: model-checking/kani-github-action@f838096619a707b0f6b2118cf435eaccfa33e51f # v1.1
+        with:
+          args: --output-format=terse --no-default-features --features std

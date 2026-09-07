@@ -1,0 +1,73 @@
+pub mod sanitization_crypto_interop
+pub mod sanitization_crypto_interop::blake3
+pub struct sanitization_crypto_interop::blake3::SanitizedBlake3
+impl sanitization_crypto_interop::blake3::SanitizedBlake3
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::finalize(self) -> [u8; 32]
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::finalize_xof_64(self) -> [u8; 64]
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::finalize_xof_fill(self, &mut [u8])
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::new() -> Self
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::new_keyed(&[u8; 32]) -> Self
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::update(&mut self, &[u8])
+impl core::default::Default for sanitization_crypto_interop::blake3::SanitizedBlake3
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::default() -> Self
+impl core::ops::drop::Drop for sanitization_crypto_interop::blake3::SanitizedBlake3
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::drop(&mut self)
+impl sanitization::owned::SecureSanitize for sanitization_crypto_interop::blake3::SanitizedBlake3
+pub fn sanitization_crypto_interop::blake3::SanitizedBlake3::secure_sanitize(&mut self)
+pub fn sanitization_crypto_interop::blake3::blake3_digest(&[u8]) -> [u8; 32]
+pub fn sanitization_crypto_interop::blake3::blake3_digest_verify(&[u8], &[u8; 32]) -> bool
+pub fn sanitization_crypto_interop::blake3::blake3_keyed_digest(&[u8; 32], &[u8]) -> [u8; 32]
+pub fn sanitization_crypto_interop::blake3::blake3_keyed_digest_verify(&[u8; 32], &[u8], &[u8; 32]) -> bool
+pub fn sanitization_crypto_interop::blake3::blake3_keyed_xof_64(&[u8; 32], &[u8]) -> [u8; 64]
+pub fn sanitization_crypto_interop::blake3::blake3_keyed_xof_64_verify(&[u8; 32], &[u8], &[u8; 64]) -> bool
+pub fn sanitization_crypto_interop::blake3::blake3_keyed_xof_fill(&[u8; 32], &[u8], &mut [u8])
+pub fn sanitization_crypto_interop::blake3::blake3_xof_64(&[u8]) -> [u8; 64]
+pub fn sanitization_crypto_interop::blake3::blake3_xof_64_verify(&[u8], &[u8; 64]) -> bool
+pub fn sanitization_crypto_interop::blake3::blake3_xof_fill(&[u8], &mut [u8])
+pub mod sanitization_crypto_interop::hmac_sha2
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha256(&[u8], &[u8]) -> [u8; 32]
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha256_verify(&[u8], &[u8], &[u8; 32]) -> bool
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha384(&[u8], &[u8]) -> [u8; 48]
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha384_verify(&[u8], &[u8], &[u8; 48]) -> bool
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha512(&[u8], &[u8]) -> [u8; 64]
+pub fn sanitization_crypto_interop::hmac_sha2::hmac_sha512_verify(&[u8], &[u8], &[u8; 64]) -> bool
+pub mod sanitization_crypto_interop::sha2
+pub struct sanitization_crypto_interop::sha2::SanitizedSha256
+impl sanitization_crypto_interop::sha2::SanitizedSha256
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::finalize(self) -> [u8; 32]
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::new() -> Self
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::update(&mut self, &[u8])
+impl core::default::Default for sanitization_crypto_interop::sha2::SanitizedSha256
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::default() -> Self
+impl core::ops::drop::Drop for sanitization_crypto_interop::sha2::SanitizedSha256
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::drop(&mut self)
+impl sanitization::owned::SecureSanitize for sanitization_crypto_interop::sha2::SanitizedSha256
+pub fn sanitization_crypto_interop::sha2::SanitizedSha256::secure_sanitize(&mut self)
+pub struct sanitization_crypto_interop::sha2::SanitizedSha384
+impl sanitization_crypto_interop::sha2::SanitizedSha384
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::finalize(self) -> [u8; 48]
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::new() -> Self
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::update(&mut self, &[u8])
+impl core::default::Default for sanitization_crypto_interop::sha2::SanitizedSha384
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::default() -> Self
+impl core::ops::drop::Drop for sanitization_crypto_interop::sha2::SanitizedSha384
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::drop(&mut self)
+impl sanitization::owned::SecureSanitize for sanitization_crypto_interop::sha2::SanitizedSha384
+pub fn sanitization_crypto_interop::sha2::SanitizedSha384::secure_sanitize(&mut self)
+pub struct sanitization_crypto_interop::sha2::SanitizedSha512
+impl sanitization_crypto_interop::sha2::SanitizedSha512
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::finalize(self) -> [u8; 64]
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::new() -> Self
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::update(&mut self, &[u8])
+impl core::default::Default for sanitization_crypto_interop::sha2::SanitizedSha512
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::default() -> Self
+impl core::ops::drop::Drop for sanitization_crypto_interop::sha2::SanitizedSha512
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::drop(&mut self)
+impl sanitization::owned::SecureSanitize for sanitization_crypto_interop::sha2::SanitizedSha512
+pub fn sanitization_crypto_interop::sha2::SanitizedSha512::secure_sanitize(&mut self)
+pub fn sanitization_crypto_interop::sha2::sha224_digest(&[u8]) -> [u8; 28]
+pub fn sanitization_crypto_interop::sha2::sha256_digest(&[u8]) -> [u8; 32]
+pub fn sanitization_crypto_interop::sha2::sha384_digest(&[u8]) -> [u8; 48]
+pub fn sanitization_crypto_interop::sha2::sha512_224_digest(&[u8]) -> [u8; 28]
+pub fn sanitization_crypto_interop::sha2::sha512_256_digest(&[u8]) -> [u8; 32]
+pub fn sanitization_crypto_interop::sha2::sha512_digest(&[u8]) -> [u8; 64]

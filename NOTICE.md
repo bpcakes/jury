@@ -18,3 +18,16 @@ license and copyright notice.
 The software license does not grant rights to Jury or Banana Pancakes trademarks
 beyond applicable law. Do not imply endorsement of a modified distribution or
 third-party service by Banana Pancakes.
+
+## Protected-memory provider
+
+Jury maintains the MIT OR Apache-2.0 licensed `sanitization` provider in
+`third_party/sanitization`, imported from the owned
+[featherenvy/sanitization](https://github.com/featherenvy/sanitization) fork at
+`3f0a72c5640b4919dec93799725c7573b2878a8c`, derived from
+[valkyoth/sanitization](https://github.com/valkyoth/sanitization) 2.0.4.
+Its original MIT and Apache-2.0 license files remain applicable and accompany
+the source and binary distributions. Jury's Git commit and release source
+hashes bind the maintained provider bytes. The fork adds macOS mapping fork
+exclusion, final guarded canary cleanup, and native tests; it does not imply
+upstream endorsement.

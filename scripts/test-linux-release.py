@@ -11,12 +11,30 @@ import subprocess
 import shutil
 import unittest
 
-from linux_release_support import (collect_notices, extract_vendor, snapshot_files,
+from linux_release_support import (collect_notices, collect_provider_notices, extract_vendor, snapshot_files,
                                    vendor_config, verify_packaged_binaries, normalize_sbom,
                                    package_documentation, verify_documentation_links)
 
 
 class ReleaseInputs(unittest.TestCase):
+    def test_local_provider_notices_ship_without_a_vendor_entry(self):
+        source = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)/'notices'
+            record = collect_provider_notices(source, destination)
+            self.assertEqual(record['name'], 'sanitization')
+            self.assertEqual(record['license'], 'MIT OR Apache-2.0')
+            self.assertEqual(record['source'], 'third_party/sanitization')
+            for name in record['files']:
+                self.assertEqual((destination/f"sanitization-{record['version']}"/name).read_bytes(),
+                                 (source/'third_party/sanitization'/name).read_bytes())
+            isolated = Path(directory)/'source'
+            shutil.copytree(source/'third_party/sanitization', isolated/'third_party/sanitization',
+                            ignore=shutil.ignore_patterns('target'))
+            (isolated/'third_party/sanitization/LICENSE-MIT').unlink()
+            with self.assertRaisesRegex(ValueError, 'local provider license is absent'):
+                collect_provider_notices(isolated, Path(directory)/'missing-notices')
+
     def test_real_operator_guides_ship_their_setup_files_and_resolve_local_links(self):
         source = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +183,7 @@ class ReleaseInputs(unittest.TestCase):
     def test_verifier_requires_external_digest_and_detects_artifact_and_source_drift(self):
         recipe = runpy.run_path(str(Path(__file__).with_name('build-linux-release')))
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             source, output = root/'source', root/'output'
             source.mkdir()
             output.mkdir()

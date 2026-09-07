@@ -1,0 +1,81 @@
+[package]
+publish = false
+name = "sanitization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Dependency-free no_std secret memory sanitization with safe defaults and an explicit volatile wipe backend."
+license.workspace = true
+readme = "../../README.md"
+documentation = "https://docs.rs/sanitization"
+homepage.workspace = true
+repository.workspace = true
+keywords = ["zeroize", "secrets", "security", "no-std", "memory"]
+categories = ["cryptography", "no-std", "memory-management"]
+include = [
+    "Cargo.toml",
+    "src/**/*.rs",
+    "tests/**/*.rs",
+    "examples/**/*.rs",
+]
+
+[package.metadata.sanitization]
+role = "core"
+clearing-owner = "sanitization"
+default-runtime-dependencies = 0
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(miri)'] }
+
+[dependencies]
+sanitization-derive = { version = "=2.0.4", path = "../sanitization-derive", optional = true }
+serde = { version = "1.0.229", default-features = false, features = ["alloc"], optional = true }
+subtle = { version = "2", default-features = false, optional = true }
+zeroize = { version = "1", default-features = false, optional = true }
+
+[features]
+default = ["asm-compare"]
+alloc = []
+std = ["alloc"]
+derive = ["dep:sanitization-derive"]
+serde = ["dep:serde"]
+subtle-interop = ["dep:subtle"]
+zeroize-interop = ["dep:zeroize"]
+memory-lock = []
+wasm-compat = []
+canary-check = ["memory-lock"]
+random-canary = ["canary-check"]
+asm-compare = []
+strict-compare = ["asm-compare"]
+cache-flush = []
+register-scrub = []
+guard-pages = []
+page-seal = ["guard-pages"]
+require-fork-exclusion = ["memory-lock"]
+strict-canary-check = ["random-canary"]
+multi-pass-clear = []
+hardware-secrets = []
+split-secret = []
+profile-hardened-native = [
+    "memory-lock",
+    "random-canary",
+    "strict-canary-check",
+    "strict-compare",
+]
+profile-guarded-native = [
+    "profile-hardened-native",
+    "guard-pages",
+]
+profile-hardened-linux = [
+    "profile-hardened-native",
+    "require-fork-exclusion",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dev-dependencies]
+serde_json = "1"
+
+[lib]
+path = "src/lib.rs"

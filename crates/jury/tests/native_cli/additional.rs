@@ -734,7 +734,28 @@ fn explicit_detached_home_supports_native_mutation_publication() -> TestResult {
 }
 
 #[test]
+fn strict_passphrase_capture_reports_established_protection() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let repository = temporary.path().join("repository");
+    fs::create_dir(&repository)?;
+    fs::create_dir(repository.join(".git"))?;
+    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
+    // Capture and its irreversible process controls run inside the CLI child.
+    let created = success_json(run(
+        &repository,
+        &temporary.path().join("data"),
+        &temporary.path().join("state"),
+        &["--json", "--passphrase-stdin", "identity", "init"],
+        b"ExamplePass1234\nExamplePass1234\n",
+    )?)?;
+    assert_eq!(created["protection_degraded"], false);
+    Ok(())
+}
+
+#[test]
 fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
+    use std::io::Seek as _;
+
     let temporary = tempfile::tempdir()?;
     let repository = temporary.path().join("repository");
     fs::create_dir(&repository)?;
@@ -748,12 +769,33 @@ fn non_terminal_passphrase_requires_explicit_opt_in() -> TestResult {
         &temporary.path().join("data"),
         &temporary.path().join("state"),
         &["--json", "--allow-degraded-protection", "identity", "init"],
-        b"ExamplePass1234\nExamplePass1234\n",
+        // The pipe is non-terminal even when empty. Opt-in must be checked
+        // before attempting a read, so no passphrase delivery is expected.
+        b"",
     )?;
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
     assert_eq!(error["error"]["code"], "passphrase-input-opt-in-required");
+
+    // A populated non-terminal source must remain unread. Cloned File handles
+    // share a cursor, making premature reads observable without a pipe race.
+    let mut input = tempfile::tempfile()?;
+    input.write_all(b"ExamplePass1234\nExamplePass1234\n")?;
+    input.rewind()?;
+    let output = jury_command(
+        &repository,
+        &temporary.path().join("data"),
+        &temporary.path().join("state"),
+    )
+    .args(["--json", "--allow-degraded-protection", "identity", "init"])
+    .stdin(input.try_clone()?)
+    .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr)?;
+    assert_eq!(error["error"]["code"], "passphrase-input-opt-in-required");
+    assert_eq!(input.stream_position()?, 0, "input read before opt-in");
     Ok(())
 }
 

@@ -1,0 +1,17 @@
+version = 1
+
+[[rules]]
+id = "rust-source"
+category = "source"
+include = [
+  "**/*.rs",
+]
+exclude = []
+notice_lines = 400
+warn_lines = 500
+max_lines = 800
+
+[[exclusions]]
+pattern = "third_party/sanitization/**"
+kind = "vendored"
+reason = "Operator-authorized size exemption for the maintained provider fork; native format, Clippy, compilation and tests remain required."

@@ -72,22 +72,6 @@
     "version": "0.1.1"
   },
   {
-    "file": "sanitization-2.0.3/LICENSE-MIT",
-    "package": "sanitization",
-    "revision_source": "crate-vcs-info",
-    "sha256": "f52a33a618ebb9130fb4eb82c3d3b6f13e42889f61ff4e9bb3c7016abc9846e2",
-    "url": "https://raw.githubusercontent.com/valkyoth/sanitization/ffcb211cd931c6966b2e767ce5edffa4b47c4f07/LICENSE-MIT",
-    "version": "2.0.3"
-  },
-  {
-    "file": "sanitization-2.0.3/LICENSE-APACHE",
-    "package": "sanitization",
-    "revision_source": "crate-vcs-info",
-    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "url": "https://raw.githubusercontent.com/valkyoth/sanitization/ffcb211cd931c6966b2e767ce5edffa4b47c4f07/LICENSE-APACHE",
-    "version": "2.0.3"
-  },
-  {
     "file": "wasip2-1.0.1+wasi-0.2.4/LICENSE-MIT",
     "package": "wasip2",
     "revision_source": "crate-vcs-info",

@@ -1,0 +1,5 @@
+pub mod sanitization_derive
+pub proc macro sanitization_derive::#[derive(ConditionallySelectable)]
+pub proc macro sanitization_derive::#[derive(ConstantTimeEq)]
+pub proc macro sanitization_derive::#[derive(SecureSanitize)]
+pub proc macro sanitization_derive::#[derive(SecureSanitizeOnDrop)]

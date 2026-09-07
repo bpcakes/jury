@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "crates/sanitization",
+    "crates/sanitization-arrayvec",
+    "crates/sanitization-bytes",
+    "crates/sanitization-crypto-interop",
+    "crates/sanitization-derive",
+]
+default-members = ["crates/sanitization"]
+resolver = "2"
+
+[workspace.package]
+version = "2.0.4"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/valkyoth/sanitization"
+repository = "https://github.com/bpcakes/jury"
+
+# Import provenance; current source is maintained and pinned by Jury's Git history.
+[workspace.metadata.jury]
+upstream-version = "2.0.4"
+upstream-repository = "https://github.com/valkyoth/sanitization"
+upstream-revision = "0f95eec55aa16562be9dc3a08ee60a043d7a0da8"
+import-repository = "https://github.com/featherenvy/sanitization"
+import-revision = "3f0a72c5640b4919dec93799725c7573b2878a8c"

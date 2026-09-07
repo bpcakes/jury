@@ -1,5 +1,5 @@
 {
-  "contract_version": 6,
+  "contract_version": 7,
   "tool_namespace": "jig",
 
   "required_commands": [
@@ -7,8 +7,7 @@
   "api_fmt_command",
   "api_test_command",
   "api_test_locked_command",
-  "repo_bootstrap_command",
-  "repo_rust_file_loc_command"
+  "repo_bootstrap_command"
 ],
   "tools": [
   {
@@ -30,16 +29,16 @@
     "name": "jig.contract_check"
   },
   {
+    "command": null,
+    "description": "Enforce repository-owned source file budgets.",
+    "kind": "native",
+    "name": "jig.file_budget"
+  },
+  {
     "command": "api_fmt_command",
     "description": "Check Rust formatting.",
     "kind": "command",
     "name": "jig.fmt_check"
-  },
-  {
-    "command": "repo_rust_file_loc_command",
-    "description": "Enforce the changed-file Rust source size policy.",
-    "kind": "command",
-    "name": "jig.rust_file_loc"
   },
   {
     "command": "api_test_command",
@@ -361,37 +360,37 @@
     }
   },
   {
-    "description": "Enforce the changed-file Rust source size policy.",
+    "description": "Enforce repository-owned source file budgets.",
     "effects": [
-      "read_only",
-      "process"
+      "read_only"
     ],
     "inputs": [
-      "**/*.rs",
-      "Cargo.toml",
-      "Cargo.lock",
-      "rust-toolchain*",
-      ".cargo/**",
-      "scripts/check-rust-file-loc.sh"
+      "**"
     ],
     "intent": "check",
     "legacy_aliases": [
-      "jig.rust_file_loc"
+      "jig.file_budget"
     ],
     "provenance": {
       "effects": "inherited",
       "inputs": "inherited",
       "intent": "inherited",
       "legacy_aliases": "inherited",
-      "runner": "inferred",
+      "runner": "inherited",
       "target": "inherited"
     },
     "runner": {
-      "command": "repo_rust_file_loc_command",
-      "kind": "command"
+      "configuration": {
+        "kind": "file_budget",
+        "max_candidates": 10000,
+        "max_total_bytes": 268435456,
+        "missing_comparison": "block"
+      },
+      "kind": "native",
+      "operation": "jig.file_budget"
     },
     "target": {
-      "action": "rust-file-loc",
+      "action": "file-budget",
       "component": "repo"
     }
   }
@@ -422,7 +421,7 @@
         "component": "repo"
       },
       {
-        "action": "rust-file-loc",
+        "action": "file-budget",
         "component": "repo"
       }
     ]

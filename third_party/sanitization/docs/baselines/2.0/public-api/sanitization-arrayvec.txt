@@ -1,0 +1,30 @@
+pub mod sanitization_arrayvec
+pub struct sanitization_arrayvec::SanitizedCapacityError
+impl core::error::Error for sanitization_arrayvec::SanitizedCapacityError
+impl core::fmt::Display for sanitization_arrayvec::SanitizedCapacityError
+pub fn sanitization_arrayvec::SanitizedCapacityError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct sanitization_arrayvec::SecretArrayVec<T: sanitization::owned::SecureSanitize, const CAP: usize>
+impl<T: sanitization::owned::SecureSanitize, const CAP: usize> sanitization_arrayvec::SecretArrayVec<T, CAP>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::as_mut_slice(&mut self) -> &mut [T]
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::as_slice(&self) -> &[T]
+pub const fn sanitization_arrayvec::SecretArrayVec<T, CAP>::capacity(&self) -> usize
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::clear_secret(&mut self)
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::from_arrayvec(arrayvec::arrayvec::ArrayVec<T, CAP>) -> Self
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::into_cleared(self)
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::is_empty(&self) -> bool
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::len(&self) -> usize
+pub const fn sanitization_arrayvec::SecretArrayVec<T, CAP>::new() -> Self
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::pop(&mut self) -> core::option::Option<T>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::push(&mut self, T) -> core::result::Result<(), arrayvec::errors::CapacityError<T>>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::push_or_sanitize(&mut self, T) -> core::result::Result<(), sanitization_arrayvec::SanitizedCapacityError>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::truncate(&mut self, usize)
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::with_secret<R>(&self, impl core::ops::function::FnOnce(&[T]) -> R) -> R
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::with_secret_mut<R>(&mut self, impl core::ops::function::FnOnce(&mut [T]) -> R) -> R
+impl<T: sanitization::owned::SecureSanitize, const CAP: usize> core::default::Default for sanitization_arrayvec::SecretArrayVec<T, CAP>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::default() -> Self
+impl<T: sanitization::owned::SecureSanitize, const CAP: usize> core::fmt::Debug for sanitization_arrayvec::SecretArrayVec<T, CAP>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: sanitization::owned::SecureSanitize, const CAP: usize> core::ops::drop::Drop for sanitization_arrayvec::SecretArrayVec<T, CAP>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::drop(&mut self)
+impl<T: sanitization::owned::SecureSanitize, const CAP: usize> sanitization::owned::SecureSanitize for sanitization_arrayvec::SecretArrayVec<T, CAP>
+pub fn sanitization_arrayvec::SecretArrayVec<T, CAP>::secure_sanitize(&mut self)

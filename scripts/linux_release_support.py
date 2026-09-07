@@ -156,6 +156,27 @@ def collect_notices(vendor, supplements, destination):
     return inventory
 
 
+def collect_provider_notices(source, destination):
+    """The maintained path dependency is in the source archive, not cargo vendor."""
+    provider = source/'third_party/sanitization'
+    workspace = tomllib.loads((provider/'Cargo.toml').read_text())['workspace']['package']
+    package = tomllib.loads((provider/'crates/sanitization/Cargo.toml').read_text())['package']
+    require(package['name'] == 'sanitization' and package['version'] == {'workspace': True}
+            and package['license'] == {'workspace': True}, 'provider metadata layout changed')
+    target = destination/f"sanitization-{workspace['version']}"
+    target.mkdir(parents=True, exist_ok=False)
+    names = ['LICENSE-MIT', 'LICENSE-APACHE']
+    for name in names:
+        path = provider/name
+        require(path.is_file() and not path.is_symlink(), 'local provider license is absent')
+        shutil.copy2(path, target/name)
+    shutil.copy2(provider/'Cargo.toml', target/'workspace-Cargo.toml')
+    shutil.copy2(provider/'crates/sanitization/Cargo.toml', target/'Cargo.toml')
+    return {'name': package['name'], 'version': workspace['version'],
+            'license': workspace['license'], 'files': names,
+            'source': 'third_party/sanitization'}
+
+
 def verify_packaged_binaries(archive, version, target, expected):
     with tarfile.open(archive) as package:
         for name, value in expected.items():

@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "status": "infrastructure",
+  "harnesses": [
+    {
+      "name": "declassification-reason-lint",
+      "claim": "Every Rust CT declassification, high-level CT final-decision, and core fixed-secret export boundary has a reviewable call-site literal and rejects known placeholder wording.",
+      "command": "scripts/lint-declassification-reasons.py"
+    },
+    {
+      "name": "declassification-reason-lint-fixtures",
+      "claim": "The boundary-reason lint accepts meaningful declassification and export boundaries while rejecting placeholder, generic, dynamic, and macro-generated reasons.",
+      "command": "scripts/test-declassification-reasons.py"
+    },
+    {
+      "name": "fail-closed-initialization-lint",
+      "claim": "Production secret-storage source does not discard try_* initialization results through explicit drop, .ok(), or unhandled underscore bindings, or call the lossy pool allocate() shape.",
+      "command": "scripts/lint-fail-closed-initialization.py --root crates/sanitization/src --exclude-file crates/sanitization/src/tests.rs"
+    },
+    {
+      "name": "fail-closed-initialization-lint-fixtures",
+      "claim": "The initialization lint accepts checked propagation and rejects explicit drop, .ok(), unhandled underscore bindings, and lossy pool allocation.",
+      "command": "scripts/test-fail-closed-initialization-lint.py"
+    },
+    {
+      "name": "path-specific-codegen",
+      "claim": "Public secret and CT paths reach the reviewed backend without forbidden substitutions.",
+      "command": "scripts/verify-codegen.sh"
+    },
+    {
+      "name": "codegen-profile-matrix",
+      "claim": "Path-specific codegen invariants survive opt 2/3/s/z, Thin/Fat LTO, cgu 1/many, and unwind/abort.",
+      "command": "scripts/verify-codegen-matrix.sh"
+    },
+    {
+      "name": "allocation-quarantine",
+      "claim": "Released SecretVec allocations do not retain full secret markers after drop or growth.",
+      "command": "cargo test --manifest-path tools/lifecycle-probes/Cargo.toml -- --test-threads=1"
+    },
+    {
+      "name": "protection-fault-model",
+      "claim": "Required setup failures roll back established model resources and never return live storage.",
+      "command": "cargo test --manifest-path tools/lifecycle-probes/Cargo.toml every_required_setup_fault"
+    },
+    {
+      "name": "concurrency-loom",
+      "claim": "Consume-once, pool reuse, and generation ordering hold under hand-maintained modeled interleavings.",
+      "command": "scripts/verify-loom.sh"
+    },
+    {
+      "name": "dependency-policy",
+      "claim": "Every independent Cargo graph uses approved licenses and registries, rejects Git sources and wildcard requirements, and reports duplicate versions.",
+      "command": "scripts/verify-dependency-policy.sh"
+    },
+    {
+      "name": "bounded-kani",
+      "claim": "Bounded clearing, CT equivalence, capacity, replacement, and protection-report properties hold.",
+      "command": "scripts/verify-kani.sh"
+    },
+    {
+      "name": "platform-independent-miri",
+      "claim": "Core all-feature lifecycle unit tests plus downstream comparison, derive, and companion storage paths pass Miri without executing native assembly.",
+      "command": "scripts/verify-miri.sh"
+    },
+    {
+      "name": "miri-test-backend-gates",
+      "claim": "Miri syscall and CSPRNG simulators remain restricted to debug core unit tests; forged release simulator cfgs are rejected and normal release cfg(miri) retains native protection paths.",
+      "command": "scripts/verify-miri-test-gates.py"
+    },
+    {
+      "name": "address-sanitizer",
+      "claim": "Native x86_64 Linux tests pass AddressSanitizer where supported.",
+      "command": "scripts/verify-sanitizer.sh address"
+    },
+    {
+      "name": "thread-sanitizer",
+      "claim": "Native x86_64 Linux tests pass ThreadSanitizer where supported.",
+      "command": "scripts/verify-sanitizer.sh thread"
+    },
+    {
+      "name": "owned-lifecycle-fuzz",
+      "claim": "Owned growth, replacement, serde limits, and enum transitions receive bounded fuzz smoke coverage.",
+      "command": "cargo +nightly fuzz run owned_lifecycle -- -max_total_time=20"
+    },
+    {
+      "name": "ct-primitives-fuzz",
+      "claim": "CT equality, ordering, copy, swap, and lookup receive bounded fuzz smoke coverage.",
+      "command": "cargo +nightly fuzz run ct_primitives -- -max_total_time=20"
+    },
+    {
+      "name": "linux-core-dump-marker",
+      "claim": "A permitted Linux runner can probe whether a locked marker appears in a generated core dump.",
+      "command": "SANITIZATION_RUN_CORE_DUMP_PROBE=1 scripts/verify-core-dump-probe.sh"
+    },
+    {
+      "name": "multi-seed-native-leakage",
+      "claim": "Default and strict comparison profiles cover every listed CT primitive with at least three distinct seeds per native evidence target; any primary threshold excursion fails closed while exactly two same-seed confirmations remain diagnostic only.",
+      "command": "scripts/collect-leakage-evidence.py --output-dir target/cp20/leakage"
+    },
+    {
+      "name": "relative-performance-baseline",
+      "claim": "Specialized wipe paths remain distinct from per-element generic clearing and large wipes remain within the reviewed scaling threshold.",
+      "command": "cargo run --release --manifest-path tools/performance-baseline/Cargo.toml -- --output target/cp20/performance.json"
+    },
+    {
+      "name": "target-evidence-validation",
+      "claim": "Native, compile-only, WASM, timing, and performance artifacts retain exact target classification and fail closed when malformed.",
+      "command": "scripts/verify-target-evidence.py --manifest target/cp20/manifest.json"
+    },
+    {
+      "name": "verification-negative-fixtures",
+      "claim": "Evidence and codegen validators reject seeded malformed inputs.",
+      "command": "scripts/test-verification-fail-closed.py"
+    },
+    {
+      "name": "leakage-evidence-policy-fixtures",
+      "claim": "Leakage evidence rejects retry-based acceptance after a failed primary and enforces exactly two diagnostic confirmation runs.",
+      "command": "scripts/test-leakage-evidence-policy.py"
+    },
+    {
+      "name": "downstream-2.0-migration",
+      "claim": "Representative external consumers compile derives, storage contracts, CT APIs, serde, crypto helpers, and companion storage without workspace feature unification.",
+      "command": "scripts/verify-downstream-migration.py"
+    },
+    {
+      "name": "migration-inventory",
+      "claim": "Every catalogued removed or behaviorally changed 1.x API maps to a documented 2.0 replacement section.",
+      "command": "scripts/verify-migration-2.0.py"
+    },
+    {
+      "name": "cp21-api-candidate",
+      "claim": "The recorded CP-21 source-level candidate remains byte-for-byte historical under a pinned SHA-256.",
+      "command": "scripts/verify-2.0-api-freeze.py"
+    },
+    {
+      "name": "cp22-api-freeze",
+      "claim": "The current 2.0 source inventory matches the reviewed tree, intentional 1.2.5 breaks map to migration guidance, and optional scope has an explicit disposition.",
+      "command": "scripts/verify-2.0-api-freeze.py"
+    },
+    {
+      "name": "semantic-public-api",
+      "claim": "Rustdoc-derived public API output for every publishable crate matches the current 2.0 candidate when cargo-public-api 0.52.0 is available.",
+      "command": "scripts/capture-2.0-public-api.py"
+    },
+    {
+      "name": "release-package-archives",
+      "claim": "Every generated crate archive contains the reviewed workspace sources, coordinated release versions, no forbidden repository-only material, and no relative README links to unpackaged repository documentation.",
+      "command": "scripts/verify-release-packages.py --version 2.0.4"
+    }
+  ]
+}

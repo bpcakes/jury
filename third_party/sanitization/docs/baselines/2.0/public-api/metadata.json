@@ -1,0 +1,34 @@
+{
+  "checkpoint": "2.0-current",
+  "packages": {
+    "sanitization": {
+      "file": "sanitization.txt",
+      "lines": 2277,
+      "sha256": "e290234f5c061c0c9be5ec9605f37f36b923d0a07f37ece7d79a8d3a03e5c17f"
+    },
+    "sanitization-arrayvec": {
+      "file": "sanitization-arrayvec.txt",
+      "lines": 30,
+      "sha256": "ddc322ded8265745de0f7f9f768e1d0e7d4b8a3a3f14adfdd410d0dd2fd89fdc"
+    },
+    "sanitization-bytes": {
+      "file": "sanitization-bytes.txt",
+      "lines": 30,
+      "sha256": "f6e95aa47cdb1cdf39d7ff2e0b48a3e18e78bc23a21aaefaa9f77b93c7c79381"
+    },
+    "sanitization-crypto-interop": {
+      "file": "sanitization-crypto-interop.txt",
+      "lines": 73,
+      "sha256": "462bd8c6291a6e39574eee94f649a513d7239991fb30c742997b44a4f7b9c539"
+    },
+    "sanitization-derive": {
+      "file": "sanitization-derive.txt",
+      "lines": 5,
+      "sha256": "09a78c69ec6e83e2b2effd9fe0049af29814e7a4925c403cb73ef17fe0b7f0a1"
+    }
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "schema_version": 1,
+  "source_checkpoint": "docs/baselines/2.0/current-source-api.json",
+  "tool": "cargo-public-api 0.52.0"
+}

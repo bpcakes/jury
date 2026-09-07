@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "release": "2.0.0",
+  "implementation_commit": "b41c1cb8e0622eb8637261a1b62b47ba66a03183",
+  "recorded_at": "2026-07-19",
+  "compiler": {
+    "release": "1.97.1",
+    "commit_hash": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+    "commit_date": "2026-07-14",
+    "llvm_version": "22.1.6"
+  },
+  "target_matrix": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "A",
+      "evidence_kind": "native-functional",
+      "features": "all"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "host": "aarch64-unknown-linux-gnu",
+      "tier": "B",
+      "evidence_kind": "native-functional",
+      "features": "all"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "host": "x86_64-pc-windows-msvc",
+      "tier": "B",
+      "evidence_kind": "native-functional",
+      "features": "alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "host": "aarch64-apple-darwin",
+      "tier": "B",
+      "evidence_kind": "native-functional",
+      "features": "alloc,std,derive,serde,subtle-interop,zeroize-interop,memory-lock,wasm-compat,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,strict-canary-check,multi-pass-clear,hardware-secrets,split-secret,profile-hardened-native,profile-guarded-native"
+    },
+    {
+      "target": "x86_64-unknown-freebsd",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "B",
+      "evidence_kind": "compile-only",
+      "features": "memory-lock,guard-pages,multi-pass-clear"
+    },
+    {
+      "target": "aarch64-linux-android",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "B",
+      "evidence_kind": "compile-only",
+      "features": "alloc,std,memory-lock,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,multi-pass-clear"
+    },
+    {
+      "target": "aarch64-apple-ios",
+      "host": "aarch64-apple-darwin",
+      "tier": "B",
+      "evidence_kind": "compile-only",
+      "features": "alloc,std,memory-lock,canary-check,random-canary,asm-compare,strict-compare,cache-flush,register-scrub,guard-pages,page-seal,multi-pass-clear"
+    },
+    {
+      "target": "thumbv7em-none-eabihf",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "B/C",
+      "evidence_kind": "compile-only",
+      "features": "default"
+    },
+    {
+      "target": "riscv32imac-unknown-none-elf",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "B/C",
+      "evidence_kind": "compile-only",
+      "features": "default"
+    },
+    {
+      "target": "wasm32-unknown-unknown",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "C",
+      "evidence_kind": "wasm-compatibility",
+      "features": "alloc,memory-lock,wasm-compat,random-canary,multi-pass-clear"
+    },
+    {
+      "target": "wasm32-wasip1",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "C",
+      "evidence_kind": "wasm-compatibility",
+      "features": "alloc,wasm-compat,random-canary,multi-pass-clear"
+    },
+    {
+      "target": "wasm32-wasip2",
+      "host": "x86_64-unknown-linux-gnu",
+      "tier": "C",
+      "evidence_kind": "wasm-compatibility",
+      "features": "wasm-compat,random-canary"
+    }
+  ],
+  "workflow_runs": [
+    {
+      "name": "CP-20 target evidence",
+      "url": "https://github.com/valkyoth/sanitization/actions/runs/29680521878",
+      "conclusion": "success"
+    },
+    {
+      "name": "Security evidence tooling",
+      "url": "https://github.com/valkyoth/sanitization/actions/runs/29680521868",
+      "conclusion": "success"
+    },
+    {
+      "name": "Miri Verification",
+      "url": "https://github.com/valkyoth/sanitization/actions/runs/29680521870",
+      "conclusion": "success"
+    },
+    {
+      "name": "Kani Verification",
+      "url": "https://github.com/valkyoth/sanitization/actions/runs/29680521861",
+      "conclusion": "success"
+    },
+    {
+      "name": "Rust CI",
+      "url": "https://github.com/valkyoth/sanitization/actions/runs/29680521877",
+      "conclusion": "success"
+    }
+  ],
+  "target_evidence_artifacts": [
+    {
+      "name": "cp20-leakage-aarch64-linux",
+      "id": 8440411295,
+      "size_in_bytes": 12936,
+      "digest": "sha256:ec45440b5e2ea0574f1aeea7ac7d6fae214cafcab327c346a9aeff6c0d780422"
+    },
+    {
+      "name": "cp20-leakage-aarch64-macos",
+      "id": 8440410117,
+      "size_in_bytes": 12864,
+      "digest": "sha256:036d347cf80fcaa04fe445d1303f8765fee32a97af2b156fe9352b00dd85d1cb"
+    },
+    {
+      "name": "cp20-native-x86_64-windows",
+      "id": 8440409988,
+      "size_in_bytes": 1558,
+      "digest": "sha256:ace6890beedc0ca8837ec8b766343bfb5c62fd34108fc6bf1f546e96d85f8a5f"
+    },
+    {
+      "name": "cp20-leakage-x86_64-linux",
+      "id": 8440408459,
+      "size_in_bytes": 13244,
+      "digest": "sha256:debf206821534a65b22ca297a7a6b2b8562ceba79605ec61c71f4359f0cd89b7"
+    },
+    {
+      "name": "cp20-native-aarch64-linux",
+      "id": 8440406425,
+      "size_in_bytes": 1423,
+      "digest": "sha256:41febf019dfb3264dcbe0c98eaa014fc78f58a2f2ccc2b9110acf68924399a41"
+    },
+    {
+      "name": "cp20-native-x86_64-linux",
+      "id": 8440405457,
+      "size_in_bytes": 1420,
+      "digest": "sha256:94838ff6471a166128ac16bfe04b2e3562b29f6658e0e0857af1204c7400402f"
+    },
+    {
+      "name": "cp20-native-aarch64-macos",
+      "id": 8440405409,
+      "size_in_bytes": 1554,
+      "digest": "sha256:723456d7f68c3ddf47605b758e27e8fdca7d3b65b750b79eb7f7cb24b45ddc38"
+    },
+    {
+      "name": "cp20-compile-android-aarch64",
+      "id": 8440404487,
+      "size_in_bytes": 772,
+      "digest": "sha256:bfef3bc0b33401134d934e8955a5c84b998f19f49be42aee884a460a946c28e5"
+    },
+    {
+      "name": "cp20-compile-freebsd-x86_64",
+      "id": 8440403908,
+      "size_in_bytes": 712,
+      "digest": "sha256:c332578305a6efbce2e24656bc83c161c8ec095bd95485fb335e1a50bb8e2fb6"
+    },
+    {
+      "name": "cp20-compile-embedded-thumbv7em",
+      "id": 8440403742,
+      "size_in_bytes": 699,
+      "digest": "sha256:ac8ba19793c911be129173d560fdb13fa086bb1ac50bf2ef6a5b443b10563d02"
+    },
+    {
+      "name": "cp20-compile-wasm-unknown",
+      "id": 8440403713,
+      "size_in_bytes": 723,
+      "digest": "sha256:d43527f27f4795807df85881ce8a0efd6fae56a6aab1e9718c0f34fd27974073"
+    },
+    {
+      "name": "cp20-compile-wasip2",
+      "id": 8440403712,
+      "size_in_bytes": 699,
+      "digest": "sha256:797b576e464a10477cb64c6f861c13054fd14dd8681574f19f31e945fd98ad5c"
+    },
+    {
+      "name": "cp20-compile-embedded-riscv32",
+      "id": 8440403613,
+      "size_in_bytes": 700,
+      "digest": "sha256:01537bc2e0f993eb54dc23a3fb6e8691bb5f0a73ec67c2b327f5b697fdf6b572"
+    },
+    {
+      "name": "cp20-compile-wasip1",
+      "id": 8440403604,
+      "size_in_bytes": 714,
+      "digest": "sha256:915425eb69903170680e6f0dfb46605f7b6b57513f0e02cfb271ba3894fa6e6f"
+    },
+    {
+      "name": "cp20-compile-ios-aarch64",
+      "id": 8440403550,
+      "size_in_bytes": 758,
+      "digest": "sha256:cfe53679895e03c2e460d48b4c982e9ff368713aa5a0670496c10719c91ac603"
+    }
+  ],
+  "notes": [
+    "Artifact digests are the SHA-256 values reported by the GitHub Actions artifact API.",
+    "The recorded implementation commit and artifact digests are historical CP-22 evidence, not the final candidate after the freeze was reopened.",
+    "The final main-branch candidate must replace this draft evidence after all implementation, remediation, documentation, and merge work is complete.",
+    "The final v2.0.0 pentest report is committed separately and names its immediate parent as Reviewed-Commit."
+  ]
+}

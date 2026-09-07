@@ -1,0 +1,23 @@
+[package]
+name = "direct-exposure-codegen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+sanitization = { version = "2.0.4", path = "../../crates/sanitization", features = [
+    "alloc",
+    "derive",
+    "guard-pages",
+    "memory-lock",
+    "page-seal",
+    "strict-compare",
+] }
+sanitization-arrayvec = { version = "2.0.4", path = "../../crates/sanitization-arrayvec" }
+sanitization-crypto-interop = { version = "2.0.4", path = "../../crates/sanitization-crypto-interop", features = [
+    "blake3",
+    "hmac-sha2",
+    "strict-compare",
+] }

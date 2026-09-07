@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "ref": "v1.2.5",
+    "commit": "d41204551c840e086b2a7d53c83514633e604e82"
+  },
+  "candidate": {
+    "checkpoint": "CP-21",
+    "commit": "082d1e19fb5473e565b31c24e1c743f4c88d7470"
+  },
+  "tool": "cargo-semver-checks 0.49.0",
+  "public_api_tool": "cargo-public-api 0.52.0",
+  "public_api_command": "scripts/capture-2.0-public-api.py",
+  "public_api_result": "pass: all five publishable package snapshots match the current reviewed 2.0 API candidate",
+  "major_command": "cargo semver-checks check-release -p sanitization --baseline-rev v1.2.5 --release-type major --all-features --color never",
+  "major_result": "pass: no semver update required under an assumed major release",
+  "minor_command": "cargo semver-checks check-release -p sanitization --baseline-rev v1.2.5 --release-type minor --all-features --color never",
+  "minor_result": "expected failure: 11 major and 0 minor lint classes failed",
+  "breaking_lint_classes": [
+    "derive_trait_impl_removed",
+    "enum_missing",
+    "enum_no_repr_variant_discriminant_changed",
+    "enum_variant_added",
+    "feature_missing",
+    "function_missing",
+    "inherent_method_missing",
+    "module_missing",
+    "struct_missing",
+    "trait_method_return_value_added",
+    "trait_missing"
+  ],
+  "packages": {
+    "sanitization": {
+      "major_command": "cargo semver-checks check-release -p sanitization --baseline-rev v1.2.5 --release-type major --all-features --color never",
+      "major_result": "pass",
+      "minor_command": "cargo semver-checks check-release -p sanitization --baseline-rev v1.2.5 --release-type minor --all-features --color never",
+      "minor_result": "expected failure: 11 major and 0 minor lint classes failed"
+    },
+    "sanitization-arrayvec": {
+      "major_command": "cargo semver-checks check-release -p sanitization-arrayvec --baseline-rev v1.2.5 --release-type major --all-features --color never",
+      "major_result": "pass",
+      "minor_command": "cargo semver-checks check-release -p sanitization-arrayvec --baseline-rev v1.2.5 --release-type minor --all-features --color never",
+      "minor_result": "expected failure: inherent_method_const_removed"
+    },
+    "sanitization-bytes": {
+      "major_command": "cargo semver-checks check-release -p sanitization-bytes --baseline-rev v1.2.5 --release-type major --all-features --color never",
+      "major_result": "pass",
+      "minor_command": "cargo semver-checks check-release -p sanitization-bytes --baseline-rev v1.2.5 --release-type minor --all-features --color never",
+      "minor_result": "pass"
+    },
+    "sanitization-crypto-interop": {
+      "major_command": "cargo semver-checks check-release -p sanitization-crypto-interop --baseline-rev v1.2.5 --release-type major --all-features --color never",
+      "major_result": "pass",
+      "minor_command": "cargo semver-checks check-release -p sanitization-crypto-interop --baseline-rev v1.2.5 --release-type minor --all-features --color never",
+      "minor_result": "pass"
+    },
+    "sanitization-derive": {
+      "major_result": "not applicable: proc-macro-only target",
+      "minor_result": "not applicable: proc-macro-only target"
+    }
+  },
+  "migration_anchors": [
+    "data-oblivious-apis",
+    "wipe-api",
+    "consume-once-secrets",
+    "cache-and-register-operations",
+    "mapped-storage-and-integrity"
+  ]
+}

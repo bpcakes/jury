@@ -1,0 +1,43 @@
+name: Miri Verification
+
+on:
+  push:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  pull_request:
+    branches:
+      - main
+      - temp-dev-2.0.0
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  MIRI_TOOLCHAIN: nightly
+
+jobs:
+  miri:
+    name: Miri interpreter tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install nightly Rust with Miri
+        run: |
+          rustup set profile minimal
+          rustup toolchain install "$MIRI_TOOLCHAIN" --component miri
+          rustup +"$MIRI_TOOLCHAIN" component add rust-src
+
+      - name: Cache Rust build output
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+
+      - name: Run Miri verification
+        run: scripts/verify-miri.sh
