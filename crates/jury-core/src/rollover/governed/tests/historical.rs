@@ -142,6 +142,13 @@ pub(super) fn verify_after_removal(
         &NeverCancelled,
     )?;
     assert!(provider.roles.is_empty());
+    let required = next_source.required_registration_roles(catalog)?;
+    assert_eq!(required.len(), draft.challenges().len());
+    assert!(
+        required
+            .iter()
+            .all(|role| role.principal_id() != Some(removed))
+    );
     assert_eq!(draft.challenges().len(), 1);
     assert_ne!(
         draft.challenges()[0].candidate_descriptor.principal_id,

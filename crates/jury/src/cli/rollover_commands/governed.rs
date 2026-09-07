@@ -150,18 +150,16 @@ pub(super) fn preview(
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
     let catalog = context.catalog.transfer_catalog(&context.vault)?;
-    for proof in &catalog.registration_proofs {
-        source
-            .source_registration_role(&catalog, proof.candidate_principal_id)
-            .map_err(map_rollover_error)?;
-    }
+    let roles = source
+        .required_registration_roles(&catalog)
+        .map_err(map_rollover_error)?;
     let access = access::RolloverAccess::new(context, arguments, protection)?;
     access.preflight_requests()?;
     Ok(CommandOutput::Safe {
         operation: if destination_suite.id() == context.policy.suite() { "vault-rollover" } else { "vault-migrate-suite" }, fields: serde_json::json!({
             "source_suite": context.policy.suite(), "destination_suite": destination_suite.id(),
             "dry_run": true, "published": false, "source_access_validated": false,
-            "role_proofs_required": catalog.registration_proofs.len(), "registration_pending": true,
+            "role_proofs_required": roles.len(), "registration_pending": true,
             "backup_published": false, "transfer_published": false, "local_owner_adopted": false,
             "witness_registration_checked": false, "destination_ready": false,
         }), lines: vec!["Governed public source and Recovery request preflight passed. Source access, fresh role proofs, destination witness registration, backup and publication remain required. No witness request was sent or destination published.".into()],

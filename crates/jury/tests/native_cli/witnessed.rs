@@ -666,3 +666,5 @@ include!("witnessed/rollover_recovery.rs");
 
 include!("witnessed/rollover_binding.rs");
 include!("witnessed/rollover_lock.rs");
+
+include!("witnessed/rollover_history.rs");

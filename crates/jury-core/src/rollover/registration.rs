@@ -2,6 +2,20 @@ use super::*;
 use jury_protocol::vault_v1::{PolicyJournalV1, VaultHeaderV1};
 
 impl RolloverSource<'_> {
+    /// Active roles that need fresh registration in the next lineage, in
+    /// canonical principal order. The catalog is fully authenticated, including
+    /// retained bootstrap evidence for roles that are no longer active.
+    pub fn required_registration_roles<'a>(
+        &self,
+        catalog: &'a crate::transfer::TransferPublicCatalogV1,
+    ) -> Result<Vec<&'a crate::registration::RegistrationRoleDescriptorV1>, RolloverError> {
+        super::governed::roles::validate_source_catalog(self, catalog)?;
+        Ok(super::governed::roles::active_proofs(catalog, &self.policy)
+            .into_iter()
+            .map(|proof| &proof.role_descriptor)
+            .collect())
+    }
+
     /// Return the role admitted by the authenticated source journal, rather
     /// than accepting an unrelated signed descriptor from a supplied catalog.
     pub fn source_registration_role<'a>(
@@ -10,18 +24,9 @@ impl RolloverSource<'_> {
         principal_id: jury_protocol::vault_v1::PrincipalId,
     ) -> Result<&'a crate::registration::RegistrationRoleDescriptorV1, RolloverError> {
         let invalid = || RolloverError::new(RolloverErrorKind::InvalidSource);
-        catalog.to_json_bytes().map_err(|_| invalid())?;
-        catalog
-            .validate_for_policy(self.vault, &self.policy)
-            .map_err(|_| invalid())?;
-        catalog
-            .registration_proofs
-            .iter()
-            .find(|proof| {
-                proof.candidate_principal_id == principal_id
-                    && self.policy.principal(&principal_id).is_some()
-            })
-            .map(|proof| &proof.role_descriptor)
+        self.required_registration_roles(catalog)?
+            .into_iter()
+            .find(|role| role.principal_id() == Some(principal_id))
             .ok_or_else(invalid)
     }
 

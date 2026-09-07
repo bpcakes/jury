@@ -36,7 +36,7 @@ use crate::{
 };
 
 mod prepare;
-mod roles;
+pub(super) mod roles;
 mod templates;
 #[cfg(test)]
 mod tests;

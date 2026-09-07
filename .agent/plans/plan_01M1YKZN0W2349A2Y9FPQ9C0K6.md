@@ -6,7 +6,7 @@ J18 must refuse a source that became stale during preparation, preview valid his
 
 - [x] Research the four findings and protocol/catalog open questions against current code.
 - [x] Implement source publication freshness guard and regressions (focused authenticated-state tests pass; native pre-publication regression is running).
-- [ ] Commit shared active registration-role selection and historical preview regression.
+- [x] Implement shared active registration-role selection and historical preview regression (four governed core tests pass; native preview regression is awaiting its final rerun).
 - [ ] Commit preparation error arbitration and regressions.
 - [ ] Commit reusable authenticated destination validation and regressions.
 - [ ] Run required repository checks and full workspace tests; record actual results and finish J18 if acceptance is satisfied.

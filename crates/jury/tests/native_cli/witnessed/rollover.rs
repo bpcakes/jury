@@ -82,6 +82,7 @@ fn exercise_witnessed_rollover(
     assert!(destination_policy.item(&destination.items[0].item_id).ok_or("missing destination item")?.direct_slots.is_empty());
     read_rollover_value(workflow, &out, &destination_policy)?;
     verify_rollover_backup(&backup, &destination, exported.catalog())?;
+    preview_after_bootstrap_role_removal(context, &out, exported.catalog())?;
     assert_rollover_witness_outputs(&out, endpoints);
     verify_receipts(context.repository, context.data, context.state, &approval_paths.iter().map(|(_,_,receipt)| receipt.as_path()).collect::<Vec<_>>())?;
     assert_protected_value_not_persisted([context.repository, context.data, context.state, workflow.artifacts])?;

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn validate_source_catalog(
+pub(in crate::rollover) fn validate_source_catalog(
     source: &RolloverSource<'_>,
     catalog: &TransferPublicCatalogV1,
 ) -> Result<(), RolloverError> {
@@ -138,7 +138,7 @@ pub(super) fn principal_operations(
     Ok(operations)
 }
 
-pub(super) fn active_proofs<'a>(
+pub(in crate::rollover) fn active_proofs<'a>(
     catalog: &'a TransferPublicCatalogV1,
     source: &PolicyState,
 ) -> Vec<&'a RegistrationProofV1> {
