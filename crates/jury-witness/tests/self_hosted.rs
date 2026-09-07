@@ -1,5 +1,8 @@
 #![cfg(target_os = "linux")]
 
+#[path = "self_hosted/rollover.rs"]
+mod rollover;
+
 use std::{
     error::Error,
     fs,

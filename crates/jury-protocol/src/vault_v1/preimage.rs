@@ -114,7 +114,8 @@ impl DescriptorMetadataV1 {
 impl DirectSlotV1 {
     #[must_use]
     pub fn info_preimage(&self) -> Vec<u8> {
-        let mut output = jce("jury-vault-v1-direct-revision-secret-slot");
+        let mut output =
+            crate::hpke_context::prefix("jury-vault-v1-direct-revision-secret-slot", self.suite);
         output.push(self.slot_schema);
         output.extend_from_slice(self.vault_id.as_bytes());
         output.extend_from_slice(self.item_id.as_bytes());
@@ -128,7 +129,10 @@ impl DirectSlotV1 {
 
     #[must_use]
     pub fn aad_preimage(&self) -> Vec<u8> {
-        let mut output = jce("jury-vault-v1-direct-revision-secret-slot-aad");
+        let mut output = crate::hpke_context::prefix(
+            "jury-vault-v1-direct-revision-secret-slot-aad",
+            self.suite,
+        );
         output.extend_from_slice(&u64be(self.policy_sequence));
         output.extend_from_slice(self.recipient_public_key_fingerprint.as_bytes());
         output.push(self.access_role.tag());
@@ -190,14 +194,24 @@ impl WitnessShareCapsuleV1 {
 
     #[must_use]
     pub fn context_preimage(&self) -> Vec<u8> {
-        let mut output = jce("jury-witness-v1/capsule/context");
+        self.context_preimage_for_suite(crate::hpke_context::VaultSuite::Suite1)
+    }
+
+    #[must_use]
+    pub fn context_preimage_for_suite(&self, suite: crate::hpke_context::VaultSuite) -> Vec<u8> {
+        let mut output = crate::hpke_context::prefix("jury-witness-v1/capsule/context", suite.id());
         self.append_context_fields(&mut output);
         output
     }
 
     #[must_use]
     pub fn info_preimage(&self) -> Vec<u8> {
-        let mut output = jce("jury-witness-v1/capsule/info");
+        self.info_preimage_for_suite(crate::hpke_context::VaultSuite::Suite1)
+    }
+
+    #[must_use]
+    pub fn info_preimage_for_suite(&self, suite: crate::hpke_context::VaultSuite) -> Vec<u8> {
+        let mut output = crate::hpke_context::prefix("jury-witness-v1/capsule/info", suite.id());
         output.extend_from_slice(self.context_digest.as_bytes());
         output.extend_from_slice(self.witness_id.as_bytes());
         output.extend_from_slice(self.contribution_key_fingerprint.as_bytes());
@@ -207,7 +221,12 @@ impl WitnessShareCapsuleV1 {
 
     #[must_use]
     pub fn aad_preimage(&self) -> Vec<u8> {
-        let mut output = jce("jury-witness-v1/capsule/aad");
+        self.aad_preimage_for_suite(crate::hpke_context::VaultSuite::Suite1)
+    }
+
+    #[must_use]
+    pub fn aad_preimage_for_suite(&self, suite: crate::hpke_context::VaultSuite) -> Vec<u8> {
+        let mut output = crate::hpke_context::prefix("jury-witness-v1/capsule/aad", suite.id());
         output.extend_from_slice(self.context_digest.as_bytes());
         output.extend_from_slice(self.share_commitment.as_bytes());
         output.extend_from_slice(self.witness_policy_digest.as_bytes());
@@ -229,6 +248,14 @@ impl WitnessShareCapsuleV1 {
     #[must_use]
     pub fn recomputed_context_digest(&self) -> Digest32 {
         sha256(&self.context_preimage())
+    }
+
+    #[must_use]
+    pub fn recomputed_context_digest_for_suite(
+        &self,
+        suite: crate::hpke_context::VaultSuite,
+    ) -> Digest32 {
+        sha256(&self.context_preimage_for_suite(suite))
     }
 }
 

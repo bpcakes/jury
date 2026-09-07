@@ -79,6 +79,81 @@ fn local_state_error_is_value_free() {
 }
 
 #[test]
+fn local_verification_authenticates_intent_and_rejects_stripped_witness_scope()
+-> Result<(), Box<dyn std::error::Error>> {
+    let context = context();
+    let candidate = candidate(context.scope(), &[(0, 0x12)]);
+    let mut state = context.initialize(&candidate, 1)?;
+    let mut draft = AuditEventDraft {
+        timestamp_ms: 2,
+        operation_id: digest(0x72),
+        policy_sequence: 0,
+        action: AuditAction::Verification,
+        outcome: AuditOutcome::Success,
+        item: None,
+        witness: None,
+    };
+    context.append_event(&mut state, draft.clone())?;
+    let files = context.serialize(&state)?;
+    let verified = context.verify_files(
+        Some(files.audit()),
+        Some(files.checkpoint()),
+        Some(files.receipts()),
+    )?;
+    assert!(verified.contains_operation(&digest(0x72)));
+    assert!(!verified.contains_operation(&digest(0x73)));
+    assert!(!verified.audit().remote_freshness_verified);
+
+    draft.action = AuditAction::WitnessRequest;
+    assert!(context.append_event(&mut state, draft.clone()).is_err());
+    draft.action = AuditAction::Verification;
+    draft.witness = Some(WitnessAuditLink {
+        request_digest: digest(0x74),
+        decision_digest: None,
+        receipt_digest: None,
+        policy_revision_hash: digest(0x12),
+        revision_seal_id: RevisionSealId::from_bytes([0x75; 32])?,
+    });
+    assert!(context.append_event(&mut state, draft.clone()).is_err());
+    draft.item = Some(AuditItemScope {
+        item_id: item_id(0x31),
+        permitted_item_name: None,
+    });
+    let witness = draft.witness.take().ok_or("missing witness fixture")?;
+    assert!(context.append_event(&mut state, draft.clone()).is_err());
+    draft.operation_id = witness.operation_id();
+    draft.witness = Some(witness);
+    context.append_event(&mut state, draft)?;
+    let files = context.serialize(&state)?;
+    let lines = files
+        .audit()
+        .split_inclusive(|byte| *byte == b'\n')
+        .collect::<Vec<_>>();
+    let mut event: Value = serde_json::from_slice(lines[2])?;
+    event["item"] = Value::Null;
+    event["witness"] = Value::Null;
+    let mut stripped = [lines[0], lines[1]].concat();
+    stripped.extend_from_slice(&serde_json::to_vec(&event)?);
+    stripped.push(b'\n');
+    assert!(
+        context
+            .verify_files(
+                Some(&stripped),
+                Some(files.checkpoint()),
+                Some(files.receipts())
+            )
+            .is_err()
+    );
+    let verified = context.verify_files(
+        Some(files.audit()),
+        Some(files.checkpoint()),
+        Some(files.receipts()),
+    )?;
+    assert_eq!(verified.audit().event_count, 3);
+    Ok(())
+}
+
+#[test]
 fn audit_checkpoint_and_receipts_round_trip_without_private_values()
 -> Result<(), Box<dyn std::error::Error>> {
     let context = context();

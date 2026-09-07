@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -44,6 +44,15 @@ const APPROVER_PASSPHRASE: &str = "ApproverPass1234";
 const WITNESS_ONE_PASSPHRASE: &str = "WitnessOnePass1234";
 const WITNESS_TWO_PASSPHRASE: &str = "WitnessTwoPass1234";
 const CLIENT_TOKEN: &str = "ExampleClientCredential_0123456789abcdef";
+const OPERATOR_TOKEN: &str = "ExampleOperatorCredential_0123456789abcdef";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegisterPayload {
+    policy_material: ReceiptPolicyMaterialV1,
+    accepted_registration: RegistrationBytes,
+    checkpoint: VaultPolicyCheckpointV1,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -161,16 +170,32 @@ struct EngineServerState {
     anchor: MemoryAnchor,
     clock: SystemClock,
     random: OsRandom,
+    calls: Arc<EndpointCalls>,
+}
+
+#[derive(Default)]
+struct EndpointCalls {
+    registration: AtomicUsize,
+    reserve: AtomicUsize,
+    registration_pause: std::sync::Mutex<Option<RegistrationPauseServer>>,
 }
 
 struct EngineEndpoint {
     witness_id: PrincipalId,
     address: String,
     stop: Arc<AtomicBool>,
+    calls: Arc<EndpointCalls>,
     worker: Option<thread::JoinHandle<Result<(), String>>>,
 }
 
 impl EngineEndpoint {
+    fn request_counts(&self) -> (usize, usize) {
+        (
+            self.calls.registration.load(Ordering::Acquire),
+            self.calls.reserve.load(Ordering::Acquire),
+        )
+    }
+
     fn specification(&self, credential: &Path) -> TestResult<String> {
         Ok(format!(
             "{},http://{},{}",
@@ -213,6 +238,8 @@ fn spawn_engine_endpoint(
     let address = listener.local_addr()?.to_string();
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = Arc::clone(&stop);
+    let calls = Arc::new(EndpointCalls::default());
+    let worker_calls = Arc::clone(&calls);
     let worker = thread::spawn(move || {
         let mut server = EngineServerState {
             identity,
@@ -223,6 +250,7 @@ fn spawn_engine_endpoint(
             anchor: MemoryAnchor::default(),
             clock: SystemClock,
             random: OsRandom,
+            calls: worker_calls,
         };
         WitnessEngine::new(
             &server.identity,
@@ -255,6 +283,7 @@ fn spawn_engine_endpoint(
         witness_id,
         address,
         stop,
+        calls,
         worker: Some(worker),
     })
 }
@@ -267,6 +296,24 @@ fn handle_engine_request(
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|error| error.to_string())?;
     let (path, body, authorized) = read_http_request(stream)?;
+    match path.as_str() {
+        "/v1/operator/register" => {
+            server.calls.registration.fetch_add(1, Ordering::Release);
+            let pause = server
+                .calls
+                .registration_pause
+                .lock()
+                .map_err(|_| "registration pause poisoned")?
+                .take();
+            if let Some(pause) = pause {
+                pause.wait()?;
+            }
+        }
+        "/v1/requests/reserve" => {
+            server.calls.reserve.fetch_add(1, Ordering::Release);
+        }
+        _ => {}
+    }
     if !authorized {
         return write_http_json(
             stream,
@@ -282,6 +329,35 @@ fn handle_engine_request(
         &mut server.random,
     );
     let response = match path.as_str() {
+        "/v1/operator/register" => {
+            let payload: RegisterPayload =
+                serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+            let policy = payload
+                .policy_material
+                .replay()
+                .map_err(|error| error.to_string())?;
+            match engine.register_vault(
+                &policy,
+                payload.accepted_registration,
+                payload.checkpoint,
+                payload
+                    .policy_material
+                    .encode()
+                    .map_err(|error| error.to_string())?,
+            ) {
+                Ok(acknowledgement) => {
+                    server.policy = policy;
+                    // Adapter fixture: real engine/signatures with in-memory
+                    // storage and anchor. This exercises wire semantics, not
+                    // deployed service or filesystem durability evidence.
+                    (
+                        200,
+                        json!({"status":"accepted", "durability":"witness-database-and-external-anchor-readback", "global_freshness_claimed":false, "acknowledgement":acknowledgement}),
+                    )
+                }
+                Err(error) => refusal_json(error.reason()),
+            }
+        }
         "/v1/requests/reserve" => {
             let payload: ReservePayload =
                 serde_json::from_slice(&body).map_err(|error| error.to_string())?;
@@ -385,9 +461,14 @@ fn read_http_request(stream: &mut TcpStream) -> Result<(String, Vec<u8>, bool), 
         }
         bytes.extend_from_slice(&scratch[..read]);
     }
+    let token = if path == "/v1/operator/register" {
+        OPERATOR_TOKEN
+    } else {
+        CLIENT_TOKEN
+    };
     let authorized = headers
         .lines()
-        .any(|line| line.eq_ignore_ascii_case(&format!("authorization: Bearer {CLIENT_TOKEN}")));
+        .any(|line| line.eq_ignore_ascii_case(&format!("authorization: Bearer {token}")));
     Ok((
         path,
         bytes[header_end..header_end + content_length].to_vec(),
@@ -579,3 +660,9 @@ fn assert_tree_omits(path: &Path, forbidden: &[u8]) -> TestResult {
 }
 
 include!("witnessed/workflow.rs");
+include!("witnessed/rollover.rs");
+
+include!("witnessed/rollover_recovery.rs");
+
+include!("witnessed/rollover_binding.rs");
+include!("witnessed/rollover_lock.rs");

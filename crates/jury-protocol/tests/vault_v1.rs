@@ -15,6 +15,9 @@ use jury_protocol::vault_v1::{
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
+#[path = "vault_v1/suite2.rs"]
+mod suite2;
+
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 fn failure(message: &'static str) -> io::Error {

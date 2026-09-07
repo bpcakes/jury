@@ -97,15 +97,16 @@ impl RecoveredIdentity {
     }
 
     pub(crate) fn verify_direct_slot(&self, slot: &DirectSlotV1) -> Result<(), IdentityError> {
+        let suite = VaultSuite::from_id(slot.suite)
+            .ok_or_else(|| IdentityError::new(IdentityErrorKind::Format))?;
         if !matches!(
             self.header.principal_kind,
             PrincipalKind::Human | PrincipalKind::Machine
         ) || slot.slot_schema != 1
             || slot.slot_algorithm != 1
-            || slot.suite != 1
             || slot.kem != 0x647a
             || slot.kdf != 1
-            || slot.aead != 3
+            || slot.aead != suite.hpke_aead()
             || slot.revision == 0
             || !matches!(
                 slot.item_access_mode,
@@ -118,7 +119,8 @@ impl RecoveredIdentity {
             return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
         }
         let private_seed = payload_component(&self.payload, RECIPIENT_SEED_RANGE)?;
-        let _secret = crypto::open_hpke(
+        let _secret = crypto::open_hpke_for_suite(
+            suite,
             &private_seed,
             &slot.encapsulation,
             slot.ciphertext.as_bytes(),

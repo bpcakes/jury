@@ -144,17 +144,18 @@ pub(super) struct SealedContent {
     pub(super) ciphertext: Vec<u8>,
 }
 
-struct ResolvedDirect {
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct ResolvedDirect {
     principal_id: PrincipalId,
     public_key: RecipientPublicKey1216,
     role: AccessRole,
 }
 
 pub(super) struct ResolvedAccess<'a> {
-    direct: Vec<ResolvedDirect>,
+    pub(super) direct: Vec<ResolvedDirect>,
     pub(super) direct_roles: BTreeMap<PrincipalId, AccessRole>,
-    witness_policy: Option<&'a WitnessPolicy>,
-    mode: ItemAccessMode,
+    pub(super) witness_policy: Option<&'a WitnessPolicy>,
+    pub(super) mode: ItemAccessMode,
 }
 
 pub(super) struct BuiltSlots {
@@ -296,7 +297,8 @@ pub(super) fn resolve_access<'a>(
             witness
                 .validate()
                 .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))?;
-            if witness.vault_id != policy.vault_id()
+            if witness.suite != policy.suite()
+                || witness.vault_id != policy.vault_id()
                 || witness.genesis_fingerprint != *policy.genesis_fingerprint()
                 || witness.vault_policy_sequence != sequence
                 || witness.digest().ok().as_ref() != Some(digest)
@@ -336,10 +338,12 @@ fn build_direct_slot(
     let mut slot = DirectSlotV1 {
         slot_schema: 1,
         slot_algorithm: 1,
-        suite: SUITE,
+        suite: policy.suite(),
         kem: 0x647a,
         kdf: 1,
-        aead: 3,
+        aead: VaultSuite::from_id(policy.suite())
+            .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?
+            .hpke_aead(),
         vault_id: policy.vault_id(),
         item_id,
         key_epoch: epoch,
@@ -354,7 +358,9 @@ fn build_direct_slot(
         encapsulation: Encapsulation1120::new([0; 1_120]),
         ciphertext: DirectCiphertext48::new([0; 48]),
     };
-    let (encapsulation, ciphertext) = crypto::seal_hpke(
+    let (encapsulation, ciphertext) = crypto::seal_hpke_for_suite(
+        VaultSuite::from_id(policy.suite())
+            .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?,
         &recipient.public_key,
         content.secret.memory(),
         &slot.info_preimage(),
@@ -382,6 +388,36 @@ fn build_witnessed_slot(
     content: &SealedContent,
     reserved: &mut ItemArtifactInventory,
 ) -> Result<WitnessedSlotV1, ItemError> {
+    let slot_id = draw_slot_id(source, &mut reserved.slot_ids)?;
+    build_witnessed_slot_with_id(
+        source,
+        protection,
+        policy,
+        witness_policy,
+        item_id,
+        epoch,
+        sequence,
+        mode,
+        role,
+        content,
+        slot_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_witnessed_slot_with_id(
+    source: &mut impl RandomSource,
+    protection: ProtectionPolicy,
+    policy: &PolicyState,
+    witness_policy: &WitnessPolicy,
+    item_id: ItemId,
+    epoch: u64,
+    sequence: u64,
+    mode: ItemAccessMode,
+    role: ContentRole,
+    content: &SealedContent,
+    slot_id: jury_protocol::vault_v1::SlotId,
+) -> Result<WitnessedSlotV1, ItemError> {
     let members = witness_policy
         .witness_descriptors
         .iter()
@@ -396,7 +432,6 @@ fn build_witnessed_slot(
     }
     let member_count = u8::try_from(members.len())
         .map_err(|_| ItemError::new(ItemErrorKind::CapacityExhausted))?;
-    let slot_id = draw_slot_id(source, &mut reserved.slot_ids)?;
     let policy_digest = witness_policy
         .digest()
         .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))?;
@@ -456,13 +491,24 @@ fn build_witnessed_slot(
             encapsulation: Encapsulation1120::new([0; 1_120]),
             ciphertext: ShareCiphertext49::new([0; 49]),
         };
-        capsule.context_digest = capsule.recomputed_context_digest();
+        capsule.context_digest = capsule.recomputed_context_digest_for_suite(
+            VaultSuite::from_id(policy.suite())
+                .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?,
+        );
         capsule.share_commitment = share_commitment(&capsule.context_digest, &share)?;
-        let (encapsulation, ciphertext) = crypto::seal_hpke(
+        let (encapsulation, ciphertext) = crypto::seal_hpke_for_suite(
+            VaultSuite::from_id(policy.suite())
+                .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?,
             &descriptor.contribution_public_key,
             &share,
-            &capsule.info_preimage(),
-            &capsule.aad_preimage(),
+            &capsule.info_preimage_for_suite(
+                VaultSuite::from_id(policy.suite())
+                    .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?,
+            ),
+            &capsule.aad_preimage_for_suite(
+                VaultSuite::from_id(policy.suite())
+                    .ok_or_else(|| ItemError::new(ItemErrorKind::InvalidInput))?,
+            ),
             source,
         )
         .map_err(map_crypto_error)?;
@@ -475,7 +521,7 @@ fn build_witnessed_slot(
     let mut slot = WitnessedSlotV1 {
         slot_schema: 1,
         slot_algorithm: 2,
-        suite: SUITE,
+        suite: policy.suite(),
         protocol: 1,
         construction: 1,
         vault_id: policy.vault_id(),

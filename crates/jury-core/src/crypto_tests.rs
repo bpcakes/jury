@@ -131,6 +131,103 @@ fn frozen_hpke_vector_opens_only_through_protected_output() -> Result<(), Box<dy
 }
 
 #[test]
+fn suite_two_protected_hpke_consumes_cross_provider_contexts() -> Result<(), Box<dyn Error>> {
+    use jury_protocol::hpke_context::VaultSuite;
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../conformance/suite-2/context-vectors.json"
+    ))?;
+    let vectors = corpus["vectors"].as_array().ok_or("missing vectors")?;
+    assert_eq!(vectors.len(), 7);
+    for vector in vectors {
+        let private = protected(&decode(&vector["private_seed"])?)?;
+        let encapsulation = Encapsulation1120::from_slice(&decode(&vector["encapsulation"])?)?;
+        let ciphertext = decode(&vector["ciphertext"])?;
+        let info = decode(&vector["info"])?;
+        let aad = decode(&vector["aad"])?;
+        let expected = decode(&vector["plaintext"])?;
+        let opened = open_hpke_for_suite(
+            VaultSuite::Suite2,
+            &private,
+            &encapsulation,
+            &ciphertext,
+            &info,
+            &aad,
+            expected.len(),
+        )?;
+        assert!(opened.expose(|bytes| bytes == expected)?);
+        assert_eq!(
+            open_hpke(
+                &private,
+                &encapsulation,
+                &ciphertext,
+                &info,
+                &aad,
+                expected.len()
+            )
+            .map(|_| ()),
+            Err(CryptoError::AuthenticationFailed)
+        );
+        for length in [0, ciphertext.len() - 1, ciphertext.len() + 1] {
+            let mut malformed = ciphertext.clone();
+            malformed.resize(length, 0);
+            assert_eq!(
+                open_hpke_for_suite(
+                    VaultSuite::Suite2,
+                    &private,
+                    &encapsulation,
+                    &malformed,
+                    &info,
+                    &aad,
+                    expected.len()
+                )
+                .map(|_| ()),
+                Err(CryptoError::AuthenticationFailed)
+            );
+        }
+        let mut changed = ciphertext.clone();
+        changed[0] ^= 1;
+        assert_eq!(
+            open_hpke_for_suite(
+                VaultSuite::Suite2,
+                &private,
+                &encapsulation,
+                &changed,
+                &info,
+                &aad,
+                expected.len()
+            )
+            .map(|_| ()),
+            Err(CryptoError::AuthenticationFailed)
+        );
+        let public = private.expose(recipient_public_key_bytes)??;
+        let (fresh_encapsulation, fresh_ciphertext) = seal_hpke_for_suite(
+            VaultSuite::Suite2,
+            &public,
+            &opened,
+            &info,
+            &aad,
+            &mut jury_protected::OsRandom,
+        )?;
+        // Separately use the provider's allocating consumer as an interoperability
+        // oracle for the runtime in-place seal. All fixture values are public.
+        let key = <XWing as Kem>::PrivateKey::from_bytes(&decode(&vector["private_seed"])?)?;
+        let enc = <XWing as Kem>::EncappedKey::from_bytes(fresh_encapsulation.as_bytes())?;
+        let actual =
+            ::hpke::single_shot_open::<::hpke::aead::AesGcm256, ::hpke::kdf::HkdfSha256, XWing>(
+                &::hpke::OpModeR::Base,
+                &key,
+                &enc,
+                &info,
+                &fresh_ciphertext,
+                &aad,
+            )?;
+        assert!(actual == expected);
+        assert_ne!(fresh_encapsulation, encapsulation);
+    }
+    Ok(())
+}
+
+#[test]
 fn stored_aead_nonce_reuse_matches_the_declared_misuse_resistance() -> Result<(), Box<dyn Error>> {
     let key = protected(&[0x31; 32])?;
     let nonce = Nonce12::new([0x32; 12]);

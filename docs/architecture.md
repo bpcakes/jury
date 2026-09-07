@@ -217,6 +217,28 @@ quorum or distributed-authority claim for that item. Direct and witnessed paths
 share the same guarded use-case interface and cannot expose raw identity keys,
 epoch roots, reusable witness contributions, or revision secrets to adapters.
 
+J18's new-lineage bootstrap uses the exact two-phase construction in
+[rollover-v1.md](security/rollover-v1.md), with explicit source-policy revisions
+and inactive-scope preservation in [rollover-v2.md](security/rollover-v2.md).
+Version-1 artifacts retain their accepted encoding. Before its runtime consumes these
+inputs, `scripts/check-rollover-inputs` binds and checks the bootstrap encoding,
+witness-policy projection and conformance vectors together with the existing
+direct and witnessed gates. The source-owner bridge commits the pre-genesis
+manifest; the first destination policy revision binds the complete resulting
+state, including genesis-bound witness capsules. This supplement accepts suite
+1 only. It does not establish source freshness, witness readiness, independent
+review or acceptance of a second suite.
+
+J18's distinct suite 2 is specified in [jury-v2-suite.md](security/jury-v2-suite.md).
+The supplemental `scripts/check-suite2-inputs` gate binds its changed HPKE AEAD,
+seven canonical context prefixes, provider graph and cross-provider vectors,
+while checking the unchanged suite-1 inputs. That gate passed before runtime
+adoption. Runtime selection comes from authenticated vault/slot state; identity
+registration keeps profile 1. A 1-to-2 migration requires both the bootstrap
+bridge and a genesis-owner-signed migration record. Same-suite rollover preserves
+the selected suite. Runtime/native validation and review remain separate from
+input acceptance; neither control establishes independent security review.
+
 ## Non-negotiable seams
 
 - Algorithm-tagged, versioned direct and witnessed recipient slots frozen in

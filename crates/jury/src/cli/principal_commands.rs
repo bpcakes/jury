@@ -8,9 +8,7 @@ pub(super) fn principal_list(
     let home = selected_home(cli, environment, current)?;
     let bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&bytes).map_err(|_| invalid_vault())?;
-    let catalog = load_policy_catalog_for_vault(environment, &home, &vault)?;
-    let policy = replay_policy_with_witness_policies(&vault.policy, &catalog.witness_policies)
-        .map_err(|_| invalid_vault())?;
+    let (_, policy) = load_policy_and_catalog_for_vault(environment, &home, &vault)?;
     CheckpointCandidate::from_validated(&policy, &vault.policy, &vault.items)
         .map_err(|_| invalid_vault())?;
     let mut lines = vec![format!("Active principals: {}", policy.principal_count())];

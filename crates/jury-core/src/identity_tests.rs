@@ -400,7 +400,8 @@ fn assert_witness_contribution(
     identity: &WitnessIdentity,
 ) -> Result<(), Box<dyn Error>> {
     let (capsule, expected_share) = witness_capsule(descriptor)?;
-    let share = identity.open_contribution_share(&capsule)?;
+    let share = identity
+        .open_contribution_share(jury_protocol::hpke_context::VaultSuite::Suite1, &capsule)?;
     assert!(
         share
             .bytes
@@ -411,7 +412,10 @@ fn assert_witness_contribution(
     wrong_commitment.share_commitment = Digest32::new([0x99; 32]);
     assert_eq!(
         identity
-            .open_contribution_share(&wrong_commitment)
+            .open_contribution_share(
+                jury_protocol::hpke_context::VaultSuite::Suite1,
+                &wrong_commitment
+            )
             .map(|_| ())
             .map_err(|error| error.kind()),
         Err(IdentityErrorKind::AuthenticationFailed)

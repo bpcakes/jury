@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""J18 suite-2 pre-implementation input and provider drift control.
+
+Consumer: explicit suite migration and suite-2 item/witness use. Defect: mixed
+algorithms, changed contexts/providers and overstated interoperability. Retire
+with the suite. This is not independent review or release certification.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+GATE = "docs/security/jury-v2-crypto-gate.toml"
+HPKE_REVISION = "57b14d8f156da78be61b23203b962b0985561831"
+BORINGSSL_REVISION = "a074f282d026a0ebbed7c9efef5a0cf63f72338d"
+PATHS = {
+    "docs/security/jury-v2-suite.md", "docs/security/jury-v2-provider-evidence.md",
+    "docs/security/jury-rollover-v1-gate.toml",
+    "conformance/suite-2/Cargo.toml", "conformance/suite-2/Cargo.lock",
+    "conformance/suite-2/src/bin/primitives.rs", "conformance/suite-2/src/bin/contexts.rs",
+    "conformance/suite-2/primitive-vectors.json", "conformance/suite-2/primitive-alternate.json",
+    "conformance/suite-2/context-vectors.json", "conformance/suite-2/contexts.py",
+    "conformance/suite-2/verify-primitives.py", "conformance/suite-2/alternate/boringssl_runner.cc",
+    "crates/jury-protocol/src/hpke_context.rs", "crates/jury-protocol/src/vault_v1/preimage.rs",
+    "crates/jury-protocol/tests/vault_v1.rs", "crates/jury-protocol/tests/vault_v1/suite2.rs",
+    "scripts/check-suite2-inputs", "scripts/test-suite2-inputs.py",
+}
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def command(arguments, cwd=ROOT):
+    return subprocess.run(arguments, cwd=cwd, stdout=subprocess.PIPE, check=True).stdout
+
+
+def verify_bindings(root, gate):
+    require(gate["schema"] == "jury-suite2-inputs-v1"
+            and gate["status"] == "accepted-for-implementation"
+            and gate["consumer"] == "J18" and gate["pre_alpha"] is True
+            and gate["independently_reviewed"] is False, "suite-2 input gate is not accepted")
+    require(gate["suite"] == {"id": 2, "hpke_mode": 0, "kem": 25722, "kdf": 1,
+                               "hpke_aead": 2, "storage_aead": 31}, "suite-2 algorithms differ")
+    require(gate["hpke_revision"] == HPKE_REVISION
+            and gate["boringssl_revision"] == BORINGSSL_REVISION, "provider revision differs")
+    bindings = gate["bindings"]
+    require(len(bindings) == len(PATHS) and {value["path"] for value in bindings} == PATHS,
+            "suite-2 input inventory differs")
+    for value in bindings:
+        require(digest((root / value["path"]).read_bytes()) == value["sha256"],
+                "suite-2 input hash differs: " + value["path"])
+
+
+def provider_graph(root):
+    metadata = json.loads(command(["cargo", "metadata", "--format-version", "1", "--locked",
+                                   "--manifest-path", str(root / "conformance/suite-2/Cargo.toml")], root))
+    packages = {package["id"]: package for package in metadata["packages"]}
+    graph = []
+    for node in metadata["resolve"]["nodes"]:
+        package = packages[node["id"]]
+        graph.append(dict(name=package["name"], version=package["version"],
+                          source=package["source"], features=sorted(node["features"])))
+    graph.sort(key=lambda value: (value["name"], value["version"], value["source"] or ""))
+    return metadata, graph
+
+
+def verify_providers(root, gate):
+    metadata, graph = provider_graph(root)
+    encoded = json.dumps(graph, sort_keys=True, separators=(",", ":")).encode()
+    require(digest(encoded) == gate["provider_graph_sha256"], "resolved provider graph differs")
+    for name, feature in (("aes", "zeroize"), ("aes-gcm", "zeroize"), ("ghash", "zeroize"),
+                          ("polyval", "zeroize"), ("hpke", "aes"), ("hpke", "chacha")):
+        require(any(node["name"] == name and feature in node["features"] for node in graph),
+                "required provider feature absent: " + name + "/" + feature)
+    require(all("getrandom" not in node["features"] for node in graph), "OS-RNG convenience feature enabled")
+    with (root / "conformance/suite-2/Cargo.lock").open("rb") as source:
+        lock = tomllib.load(source)
+    checksums = {(package["name"], package["version"]): package.get("checksum") for package in lock["package"]}
+    for package in metadata["packages"]:
+        location = Path(package["manifest_path"]).parent
+        source = package["source"] or ""
+        if source.startswith("registry+"):
+            archive = location.parents[2] / "cache" / location.parent.name / (location.name + ".crate")
+            require(digest(archive.read_bytes()) == checksums[(package["name"], package["version"])],
+                    "registry archive differs: " + package["name"])
+            with tarfile.open(archive, "r:gz") as members:
+                for member in members:
+                    if not member.isfile():
+                        continue
+                    relative = Path(member.name).relative_to(location.name)
+                    require(not relative.is_absolute() and ".." not in relative.parts, "registry path escapes package")
+                    content = members.extractfile(member)
+                    require(content is not None and (location / relative).read_bytes() == content.read(),
+                            "registry source differs: " + package["name"] + "/" + str(relative))
+        elif source.startswith("git+"):
+            require(package["name"] == "hpke" and source.endswith("#" + HPKE_REVISION), "unexpected Git provider")
+            require(command(["git", "-C", str(location), "rev-parse", "HEAD"]).decode().strip() == HPKE_REVISION,
+                    "HPKE checkout differs")
+            subprocess.run(["git", "-C", str(location), "diff", "--exit-code", "--quiet", "HEAD"], check=True)
+    return len(graph)
+
+
+def verify_runtime_graph(metadata):
+    packages = {package["id"]: package for package in metadata["packages"]}
+    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
+    core = next(node for node in nodes.values() if packages[node["id"]]["name"] == "jury-core")
+    hpke = [dep["pkg"] for dep in core["deps"] if dep["name"] == "hpke"]
+    require(len(hpke) == 1, "runtime HPKE dependency is absent or ambiguous")
+    pending = hpke[:]
+    reached = set()
+    while pending:
+        current = pending.pop()
+        if current in reached:
+            continue
+        reached.add(current)
+        pending.extend(dep["pkg"] for dep in nodes[current]["deps"])
+    for name, version, features in (
+        ("hpke", "0.14.0", {"aes", "chacha", "mlkem", "x25519"}),
+        ("aes", "0.9.3", {"zeroize"}), ("aes-gcm", "0.11.0", {"zeroize"}),
+        ("ghash", "0.6.0", {"zeroize"}), ("polyval", "0.7.3", {"zeroize"}),
+    ):
+        matches = [identifier for identifier in reached if packages[identifier]["name"] == name]
+        require(len(matches) == 1, "runtime provider is absent or ambiguous: " + name)
+        identifier = matches[0]
+        require(packages[identifier]["version"] == version
+                and features <= set(nodes[identifier]["features"]),
+                "runtime provider version/features differ: " + name)
+    require(packages[hpke[0]]["source"].endswith("#" + HPKE_REVISION), "runtime HPKE revision differs")
+    require(all("getrandom" not in nodes[identifier]["features"] for identifier in reached),
+            "runtime HPKE OS-RNG convenience feature enabled")
+
+
+def verify_runtime_providers(root):
+    metadata = json.loads(command(["cargo", "metadata", "--format-version", "1", "--locked",
+                                   "--manifest-path", str(root / "crates/jury-core/Cargo.toml")], root))
+    verify_runtime_graph(metadata)
+
+
+def verify_alternate(root, gate, boringssl):
+    require(command(["git", "-C", str(boringssl), "rev-parse", "HEAD"]).decode().strip() == BORINGSSL_REVISION,
+            "BoringSSL checkout differs")
+    subprocess.run(["git", "-C", str(boringssl), "diff", "--exit-code", "--quiet", "HEAD", "--", "crypto", "include"], check=True)
+    for path, expected in gate["boringssl_sources"].items():
+        require(digest((boringssl / path).read_bytes()) == expected, "BoringSSL source differs: " + path)
+    require(digest((boringssl / "build/libcrypto.a").read_bytes()) == gate["boringssl_library_sha256"],
+            "selected alternate-provider library differs; rebind only after a fresh provider build check")
+    with tempfile.TemporaryDirectory(prefix="jury-suite2-alternate-") as directory:
+        runner = Path(directory) / "consumer"
+        subprocess.run(["c++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
+                        "-I" + str(boringssl / "include"),
+                        str(root / "conformance/suite-2/alternate/boringssl_runner.cc"),
+                        str(boringssl / "build/libcrypto.a"), "-lpthread", "-ldl", "-o", str(runner)], check=True)
+        for script in ("verify-primitives.py", "contexts.py"):
+            subprocess.run(["python3", str(root / "conformance/suite-2" / script), "--runner", str(runner)], check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--boringssl-root", type=Path,
+                        help="exact pinned alternate-provider checkout with its selected build")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--bindings-only", action="store_true",
+                        help="check retained input hashes only; does not run provider conformance")
+    mode.add_argument("--providers-only", action="store_true",
+                      help="check input bindings, isolated provider sources and runtime features; no alternate-provider conformance")
+    args = parser.parse_args()
+    if not (args.bindings_only or args.providers_only) and args.boringssl_root is None:
+        parser.error("the complete input check requires --boringssl-root")
+    with (ROOT / GATE).open("rb") as source:
+        gate = tomllib.load(source)
+    verify_bindings(ROOT, gate)
+    if args.bindings_only:
+        print("suite-2 input bindings match; provider conformance was not run")
+        return
+    count = verify_providers(ROOT, gate)
+    verify_runtime_providers(ROOT)
+    if args.providers_only:
+        print("suite-2 bindings, isolated provider sources and runtime features pass; alternate-provider conformance was not run")
+        return
+    for invocation in (["python3", "scripts/check-rollover-inputs"],
+                       ["python3", "scripts/test-suite2-inputs.py"],
+                       ["cargo", "test", "-p", "jury-protocol", "--locked"],
+                       ["cargo", "+1.90.0", "run", "--manifest-path", "conformance/suite-2/Cargo.toml", "--locked",
+                        "--bin", "contexts", "--", "conformance/suite-2/context-vectors.json"]):
+        subprocess.run(invocation, cwd=ROOT, check=True)
+    verify_alternate(ROOT, gate, args.boringssl_root.resolve())
+    verify_bindings(ROOT, gate)
+    require(count == verify_providers(ROOT, gate), "provider count changed during check")
+    verify_runtime_providers(ROOT)
+    print("suite-2 inputs: exact contexts/providers and preserved suite-1 inputs pass; externally unreviewed pre-alpha")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError) as error:
+        print("suite-2 inputs: " + str(error), file=sys.stderr)
+        raise SystemExit(1) from error

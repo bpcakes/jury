@@ -81,6 +81,35 @@ fn help_preserves_active_scope_and_warning() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn suite_migration_requires_an_explicit_supported_destination() {
+    let arguments = [
+        "jury",
+        "vault",
+        "migrate-suite",
+        "--out",
+        "/tmp/ExampleVault",
+        "--backup-out",
+        "/tmp/ExampleOffline/Example.backup",
+        "--transfer-out",
+        "/tmp/ExampleTransfer",
+        "--dry-run",
+    ];
+    assert!(Cli::try_parse_from(arguments).is_err());
+    for suite in ["0", "1", "3", "65535"] {
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["--to", suite])).is_err());
+    }
+    assert!(matches!(
+        Cli::try_parse_from(arguments.into_iter().chain(["--to", "2"])),
+        Ok(Cli {
+            command: Command::Vault {
+                command: VaultCommand::MigrateSuite(VaultMigrateSuiteArgs { to: 2, .. })
+            },
+            ..
+        })
+    ));
+}
+
+#[test]
 fn execution_help_states_plaintext_and_platform_limits() -> Result<(), Box<dyn std::error::Error>> {
     for command in ["exec", "run"] {
         let error = match Cli::try_parse_from(["jury", command, "--help"]) {
@@ -369,6 +398,46 @@ fn receipt_and_witness_operations_require_explicit_public_artifacts() {
 #[test]
 fn grouped_fingerprint_is_stable() {
     assert_eq!(grouped("0011223344556677"), "00112233-44556677");
+}
+
+#[test]
+fn rollover_registration_requires_both_draft_and_expected_genesis() {
+    let base = [
+        "jury",
+        "identity",
+        "prove",
+        "--challenge",
+        "/tmp/ExampleChallenge.json",
+        "--out",
+        "/tmp/ExampleProof.json",
+    ];
+    assert!(Cli::try_parse_from(base).is_ok());
+    for extra in [
+        vec!["--rollover-draft", "/tmp/ExampleDraft.json"],
+        vec!["--expected-rollover-genesis", "11"],
+    ] {
+        assert!(Cli::try_parse_from(base.into_iter().chain(extra)).is_err());
+    }
+    let fingerprint = "11".repeat(32);
+    let parsed = Cli::try_parse_from(base.into_iter().chain([
+        "--rollover-draft",
+        "/tmp/ExampleDraft.json",
+        "--expected-rollover-genesis",
+        &fingerprint,
+    ]));
+    assert!(matches!(
+        parsed,
+        Ok(Cli {
+            command: Command::Identity {
+                command: IdentityCommand::Prove(IdentityProveArgs {
+                    rollover_draft: Some(_),
+                    expected_rollover_genesis: Some(_),
+                    ..
+                })
+            },
+            ..
+        })
+    ));
 }
 
 #[test]

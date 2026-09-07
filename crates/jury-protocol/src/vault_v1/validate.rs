@@ -1,3 +1,6 @@
+mod journal;
+use journal::{validate_header, validate_policy};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -21,7 +24,7 @@ pub const MAX_ITEM_REVISION_PROOFS: usize = 65_536;
 pub const MAX_CURRENT_SLOTS: usize = 16_384;
 pub const MAX_PUBLIC_LABEL_BYTES: usize = 256;
 
-const SUITE: u16 = 1;
+use crate::hpke_context::VaultSuite;
 const DESCRIPTOR_CIPHERTEXT_BYTES: u32 = 272;
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
@@ -119,107 +122,12 @@ fn validate_header_discriminants(header: &HeaderProbeFields) -> Result<(), Forma
         return Err(FormatError::Invalid("unknown magic"));
     }
     if header.version != 1
-        || header.suite != SUITE
+        || VaultSuite::from_id(header.suite).is_none()
         || header.policy_schema != 1
         || header.item_schema != 1
         || header.identity_schema != 1
     {
         return Err(FormatError::Invalid("unknown version or suite"));
-    }
-    Ok(())
-}
-
-fn validate_header(vault: &VaultFileV1) -> Result<(), FormatError> {
-    validate_header_discriminants(&HeaderProbeFields {
-        magic: vault.header.magic.clone(),
-        version: vault.header.version,
-        suite: vault.header.suite,
-        policy_schema: vault.header.policy_schema,
-        item_schema: vault.header.item_schema,
-        identity_schema: vault.header.identity_schema,
-    })?;
-    if vault.header.vault_id != vault.policy.genesis.vault_id {
-        return Err(FormatError::Invalid("header and genesis vault differ"));
-    }
-    if vault.header.created_at_ms != vault.policy.genesis.created_at_ms {
-        return Err(FormatError::Invalid("header and genesis time differ"));
-    }
-    if vault.policy.genesis.suite != SUITE {
-        return Err(FormatError::Invalid("genesis suite differs"));
-    }
-    if vault.policy.genesis.recomputed_fingerprint()? != vault.header.genesis_fingerprint {
-        return Err(FormatError::Invalid("genesis fingerprint differs"));
-    }
-    Ok(())
-}
-
-fn validate_policy(vault: &VaultFileV1) -> Result<(), FormatError> {
-    let genesis = &vault.policy.genesis;
-    if genesis.policy_sequence != 0 || genesis.previous_policy_hash.as_bytes() != &ZERO_DIGEST {
-        return Err(FormatError::Invalid("genesis sequence is not zero"));
-    }
-    if genesis.owner.descriptor_version != 1
-        || genesis.owner.principal_kind != super::types::PrincipalKind::Human
-    {
-        return Err(FormatError::Invalid("genesis owner is not one v1 human"));
-    }
-    if !genesis.item_inventory.is_empty() || !genesis.direct_grants.is_empty() {
-        return Err(FormatError::Invalid("genesis state is not empty"));
-    }
-    validate_source_attestation(vault)?;
-    if vault.policy.revisions.len() > MAX_POLICY_REVISIONS {
-        return Err(FormatError::CapacityExhausted("policy revisions"));
-    }
-
-    let mut previous_hash = vault.header.genesis_fingerprint.clone();
-    for (index, revision) in vault.policy.revisions.iter().enumerate() {
-        let expected_sequence = u64::try_from(index)
-            .map_err(|_| FormatError::CapacityExhausted("policy revisions"))?
-            + 1;
-        if revision.vault_id != vault.header.vault_id
-            || revision.sequence != expected_sequence
-            || revision.previous_revision_hash != previous_hash
-        {
-            return Err(FormatError::Invalid("policy ancestry differs"));
-        }
-        if revision.operations.is_empty() {
-            return Err(FormatError::Invalid("policy revision has no operation"));
-        }
-        for operation in &revision.operations {
-            validate_operation(
-                operation,
-                revision.sequence,
-                &vault.header.vault_id,
-                &vault.header.genesis_fingerprint,
-            )?;
-        }
-        previous_hash = revision.recomputed_hash()?;
-    }
-    Ok(())
-}
-
-fn validate_source_attestation(vault: &VaultFileV1) -> Result<(), FormatError> {
-    let Some(attestation) = &vault.policy.genesis.source_attestation else {
-        return Ok(());
-    };
-    match attestation {
-        SourceAttestationV1::LegacyMigration { source_format, .. } => {
-            if !matches!(source_format, 1 | 2) {
-                return Err(FormatError::Invalid("legacy source version differs"));
-            }
-        }
-        SourceAttestationV1::Rollover { statement } => {
-            if statement.rollover_format != 1
-                || statement.destination_vault_id != vault.header.vault_id
-                || statement.destination_suite != vault.header.suite
-                || statement.source_vault_id == statement.destination_vault_id
-                || statement.source_genesis_fingerprint == vault.header.genesis_fingerprint
-            {
-                return Err(FormatError::Invalid(
-                    "rollover does not create one new lineage",
-                ));
-            }
-        }
     }
     Ok(())
 }
@@ -451,10 +359,10 @@ fn validate_direct_slots(
     for slot in slots {
         if slot.slot_schema != 1
             || slot.slot_algorithm != 1
-            || slot.suite != SUITE
+            || VaultSuite::from_id(slot.suite).is_none()
             || slot.kem != 0x647a
             || slot.kdf != 1
-            || slot.aead != 3
+            || VaultSuite::from_id(slot.suite).map(VaultSuite::hpke_aead) != Some(slot.aead)
             || slot.vault_id != *vault_id
             || slot.item_id != *item_id
             || slot.key_epoch != key_epoch
@@ -565,7 +473,7 @@ fn validate_witnessed_slot(
 ) -> Result<(), FormatError> {
     if slot.slot_schema != 1
         || slot.slot_algorithm != 2
-        || slot.suite != SUITE
+        || VaultSuite::from_id(slot.suite).is_none()
         || slot.protocol != 1
         || slot.construction != 1
         || slot.vault_id != *vault_id
@@ -624,7 +532,9 @@ fn validate_capsule(
         || capsule.member_count != slot.member_count
         || capsule.share_index == 0
         || capsule.share_index > 32
-        || capsule.recomputed_context_digest() != capsule.context_digest
+        || capsule.recomputed_context_digest_for_suite(
+            VaultSuite::from_id(slot.suite).ok_or(FormatError::Invalid("unknown capsule suite"))?,
+        ) != capsule.context_digest
     {
         return Err(FormatError::Invalid("witness capsule context differs"));
     }
@@ -799,6 +709,9 @@ fn validate_slot_inventory(vault: &VaultFileV1) -> Result<(), FormatError> {
                 return Err(FormatError::CapacityExhausted("current key slots"));
             }
             for slot in direct {
+                if slot.suite != vault.header.suite {
+                    return Err(FormatError::Invalid("direct slot suite differs from vault"));
+                }
                 register_scope(
                     &mut seal_scopes,
                     slot.revision_seal_id,
@@ -809,6 +722,11 @@ fn validate_slot_inventory(vault: &VaultFileV1) -> Result<(), FormatError> {
             }
             if let Some(state) = witnessed {
                 for slot in &state.slots {
+                    if slot.suite != vault.header.suite {
+                        return Err(FormatError::Invalid(
+                            "witnessed slot suite differs from vault",
+                        ));
+                    }
                     register_scope(
                         &mut seal_scopes,
                         slot.revision_seal_id,
@@ -851,10 +769,34 @@ fn register_scope(
 }
 
 fn validate_migration(vault: &VaultFileV1) -> Result<(), FormatError> {
-    let Some(migration) = &vault.suite_migration else {
-        return Ok(());
+    let statement = match &vault.policy.genesis.source_attestation {
+        Some(super::types::SourceAttestationV1::Rollover { statement }) => Some(statement),
+        _ => None,
     };
-    if migration.migration_format != 1
+    let source_suite = statement
+        .and_then(|statement| statement.bootstrap_manifest.as_ref())
+        .and_then(|manifest| manifest.source_suite);
+    let required = source_suite.is_some_and(|suite| suite != vault.header.suite);
+    let Some(migration) = &vault.suite_migration else {
+        // A sequence-zero registration draft has no published items yet. The
+        // runtime complete-artifact verifier always requires the signed record.
+        return if required && !vault.policy.revisions.is_empty() {
+            Err(FormatError::Invalid("suite migration record is missing"))
+        } else {
+            Ok(())
+        };
+    };
+    let statement = statement.ok_or(FormatError::Invalid("migration has no rollover bridge"))?;
+    if !required
+        || source_suite != Some(1)
+        || vault.header.suite != 2
+        || migration.old_suite != 1
+        || migration.new_suite != 2
+        || migration.old_vault_id != statement.source_vault_id
+        || migration.old_genesis_fingerprint != statement.source_genesis_fingerprint
+        || migration.old_terminal_revision_hash != statement.terminal_source_revision_hash
+        || migration.migrated_item_manifest_digest != statement.bootstrap_manifest_digest
+        || migration.migration_format != 1
         || migration.new_vault_id != vault.header.vault_id
         || migration.new_genesis_fingerprint != vault.header.genesis_fingerprint
         || migration.new_suite != vault.header.suite

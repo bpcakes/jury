@@ -8,3 +8,4 @@ include!("witness_engine_tests/receipts.rs");
 include!("witness_engine_tests/checkpoint_validation.rs");
 include!("witness_engine_tests/replay_model.rs");
 include!("witness_engine_tests/owner_changes.rs");
+include!("witness_engine_tests/rollover.rs");

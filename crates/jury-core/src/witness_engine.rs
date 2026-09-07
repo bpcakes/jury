@@ -11,6 +11,7 @@ mod requests;
 mod state;
 mod validation;
 
+use jury_protocol::hpke_context::VaultSuite;
 use validation::*;
 pub use validation::{
     validate_approval_decision, validate_receipt_material, validate_request_cancellation,
@@ -90,6 +91,7 @@ pub trait WitnessEngineIdentity: Send {
 
     fn seal_witness_contribution(
         &self,
+        suite: VaultSuite,
         capsule: &WitnessShareCapsuleV1,
         target: &WitnessContributionTarget,
         random: &mut dyn RandomSource,
@@ -115,11 +117,12 @@ impl WitnessEngineIdentity for WitnessIdentity {
 
     fn seal_witness_contribution(
         &self,
+        suite: VaultSuite,
         capsule: &WitnessShareCapsuleV1,
         target: &WitnessContributionTarget,
         random: &mut dyn RandomSource,
     ) -> Result<WitnessContributionEnvelopeV1, WitnessIdentityOperationError> {
-        self.open_contribution_share(capsule)
+        self.open_contribution_share(suite, capsule)
             .and_then(|share| share.seal_for_request_with_source(target, random))
             .map(|contribution| contribution.into_protocol())
             .map_err(|_| WitnessIdentityOperationError)
@@ -491,6 +494,7 @@ struct ApprovalTally {
 
 #[derive(Clone)]
 struct ValidatedRequest {
+    suite: VaultSuite,
     rule: WitnessAccessRule,
     policy: WitnessPolicy,
     capsule: jury_protocol::vault_v1::WitnessShareCapsuleV1,

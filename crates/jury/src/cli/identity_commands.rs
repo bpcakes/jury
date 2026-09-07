@@ -1,5 +1,7 @@
 use super::*;
 
+mod rollover;
+
 pub(super) fn identity_init(
     cli: &Cli,
     arguments: &IdentityInitArgs,
@@ -322,13 +324,22 @@ pub(super) fn identity_prove(
     let unlocked = unlock_selected_identity(cli, environment, current, protection)?;
     let vault_bytes = read_vault(&unlocked.home)?;
     let vault = VaultFileV1::parse(&vault_bytes).map_err(|_| invalid_vault())?;
-    let catalog = load_policy_catalog_for_vault(environment, &unlocked.home, &vault)?;
-    let policy = replay_policy_with_witness_policies(&vault.policy, &catalog.witness_policies)
-        .map_err(|_| invalid_vault())?;
+    let (catalog, policy) = load_policy_and_catalog_for_vault(environment, &unlocked.home, &vault)?;
     CheckpointCandidate::from_validated(&policy, &vault.policy, &vault.items)
         .map_err(|_| invalid_vault())?;
-    let proof = answer_challenge(&policy, &unlocked.identity, &challenge, timestamp_ms()?)
-        .map_err(|error| map_registration_error(error.kind()))?;
+    let proof = if arguments.rollover_draft.is_some() {
+        rollover::answer_rollover_proof(
+            arguments,
+            &vault,
+            &catalog,
+            &unlocked.identity,
+            &challenge,
+            timestamp_ms()?,
+        )?
+    } else {
+        answer_challenge(&policy, &unlocked.identity, &challenge, timestamp_ms()?)
+            .map_err(|error| map_registration_error(error.kind()))?
+    };
     let proof_bytes = proof
         .to_json_bytes()
         .map_err(|error| map_registration_error(error.kind()))?;
@@ -347,6 +358,7 @@ pub(super) fn identity_prove(
             "sink": "hardened-private-file",
             "durability": durability(publication),
             "recovered_response_disclosed": false,
+            "rollover_draft": arguments.rollover_draft.is_some(),
             "protection_degraded": unlocked.protection_degraded,
         }),
         lines: vec![

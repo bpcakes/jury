@@ -16,6 +16,12 @@ pub struct ItemArtifactInventory {
 }
 
 impl ItemArtifactInventory {
+    pub(crate) fn is_disjoint(&self, other: &Self) -> bool {
+        self.revision_seal_ids.is_disjoint(&other.revision_seal_ids)
+            && self.slot_ids.is_disjoint(&other.slot_ids)
+            && self.nonces.is_disjoint(&other.nonces)
+    }
+
     pub fn from_vault(vault: &VaultFileV1) -> Result<Self, ItemError> {
         vault
             .validate()

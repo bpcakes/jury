@@ -6,6 +6,8 @@ use zeroize::Zeroizing;
 
 use super::*;
 
+mod registration;
+
 const MAX_CREDENTIAL_BYTES: usize = 256;
 const MAX_WITNESS_HTTP_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -72,6 +74,7 @@ pub(super) struct WitnessEndpointClient {
     reserve_url: Url,
     decide_url: Url,
     cancel_url: Url,
+    register_url: Url,
     authorization: HeaderValue,
 }
 
@@ -143,6 +146,9 @@ impl WitnessEndpointClient {
         let cancel_url = base
             .join("v1/requests/cancel")
             .map_err(|_| invalid_witness_endpoint())?;
+        let register_url = base
+            .join("v1/operator/register")
+            .map_err(|_| invalid_witness_endpoint())?;
         let mut builder = Client::builder()
             .connect_timeout(REQUEST_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -188,6 +194,7 @@ impl WitnessEndpointClient {
             reserve_url,
             decide_url,
             cancel_url,
+            register_url,
             authorization,
         })
     }
@@ -238,6 +245,16 @@ impl WitnessEndpointClient {
         url: Url,
         payload: &impl Serialize,
     ) -> Result<TransportProgress, WitnessTransportError> {
+        let response = self.post_response(url, payload)?;
+        let response: OperationResponse = bounded_json(response)?;
+        self.operation_progress(response)
+    }
+
+    fn post_response(
+        &self,
+        url: Url,
+        payload: &impl Serialize,
+    ) -> Result<reqwest::blocking::Response, WitnessTransportError> {
         let response = self
             .client
             .post(url)
@@ -259,7 +276,13 @@ impl WitnessEndpointClient {
             }
             return Err(map_refusal(refusal.reason));
         }
-        let response: OperationResponse = bounded_json(response)?;
+        Ok(response)
+    }
+
+    fn operation_progress(
+        &self,
+        response: OperationResponse,
+    ) -> Result<TransportProgress, WitnessTransportError> {
         let kind = match response.status.as_str() {
             "reserved" => TransportProgressKind::Reserved,
             "pending" => TransportProgressKind::Pending,

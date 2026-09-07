@@ -28,7 +28,7 @@ use crate::witness_client::RequestSessionIdentity;
 use crate::witness_engine::{validate_public_request, validate_witness_response};
 use crate::witness_validation::operation_capability;
 
-const SUITE: u16 = 1;
+use jury_protocol::hpke_context::{ContributionHpkeContext, VaultSuite};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AccessProviderErrorKind {
@@ -226,7 +226,7 @@ impl RevisionAccessTarget {
             ),
         };
         Ok(Self {
-            suite: SUITE,
+            suite: policy.suite(),
             vault_id: policy.vault_id(),
             item_id: envelope.item_id,
             key_epoch: item.key_epoch,
@@ -396,7 +396,7 @@ fn preflight_direct<'a>(
     request: &'a RevisionAccessRequest<'_>,
 ) -> Result<&'a jury_protocol::vault_v1::DirectSlotV1, AccessProviderError> {
     let target = &request.target;
-    if target.suite != SUITE
+    if target.suite != request.policy.suite()
         || target.vault_id != request.policy.vault_id()
         || target.item_id != request.envelope.item_id
         || target.principal_id != principal_id
@@ -492,10 +492,10 @@ fn preflight_direct<'a>(
         || slot.policy_sequence > target.policy_sequence
         || slot.slot_schema != 1
         || slot.slot_algorithm != 1
-        || slot.suite != SUITE
+        || slot.suite != target.suite
         || slot.kem != 0x647a
         || slot.kdf != 1
-        || slot.aead != 3
+        || VaultSuite::from_id(slot.suite).map(VaultSuite::hpke_aead) != Some(slot.aead)
     {
         return Err(AccessProviderError::new(
             AccessProviderErrorKind::InvalidSlot,

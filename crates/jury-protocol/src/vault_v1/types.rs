@@ -154,7 +154,7 @@ pub enum SourceAttestationV1 {
         terminal_legacy_audit_mac: Digest32,
     },
     Rollover {
-        statement: SignedRolloverV1,
+        statement: Box<SignedRolloverV1>,
     },
 }
 
@@ -169,6 +169,10 @@ pub struct SignedRolloverV1 {
     pub destination_vault_id: VaultId,
     pub destination_suite: u16,
     pub bootstrap_manifest_digest: Digest32,
+    /// Public opening of the signed manifest commitment. Absent only in the
+    /// pre-runtime reserved-format corpus; a completed rollover requires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_manifest: Option<crate::rollover_v1::BootstrapManifestV1>,
     pub acting_owner_principal_id: PrincipalId,
     pub signature: Signature64,
 }

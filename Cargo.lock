@@ -21,6 +21,22 @@ dependencies = [
  "cipher",
  "cpubits",
  "cpufeatures",
+ "zeroize",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdf011db2e21ce0d575593d749db5554b47fed37aff429e4dc50bc91ac93a028"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ghash",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -951,6 +967,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghash"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
+dependencies = [
+ "polyval",
+ "zeroize",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1068,6 +1094,7 @@ version = "0.14.0"
 source = "git+https://github.com/rozbb/rust-hpke?rev=57b14d8f156da78be61b23203b962b0985561831#57b14d8f156da78be61b23203b962b0985561831"
 dependencies = [
  "aead",
+ "aes-gcm",
  "chacha20poly1305",
  "hkdf",
  "hybrid-array",
@@ -1468,10 +1495,13 @@ dependencies = [
 name = "jury-core"
 version = "0.0.1"
 dependencies = [
+ "aes",
+ "aes-gcm",
  "aes-gcm-siv",
  "argon2",
  "chacha20",
  "ed25519-dalek",
+ "ghash",
  "hex",
  "hkdf",
  "hmac",
@@ -1851,6 +1881,7 @@ dependencies = [
  "cpubits",
  "cpufeatures",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]

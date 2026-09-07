@@ -281,9 +281,7 @@ fn load_public_request_context(
     let home = selected_home(cli, environment, current)?;
     let vault_bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&vault_bytes).map_err(|_| invalid_vault())?;
-    let catalog = load_policy_catalog_for_vault(environment, &home, &vault)?;
-    let policy = replay_policy_with_witness_policies(&vault.policy, &catalog.witness_policies)
-        .map_err(|_| invalid_vault())?;
+    let (_, policy) = load_policy_and_catalog_for_vault(environment, &home, &vault)?;
     Ok(PublicRequestContext { policy })
 }
 
@@ -325,7 +323,7 @@ fn publish_request_artifact(
     .map_err(map_filesystem_error)
 }
 
-fn validate_endpoint_set(
+pub(super) fn validate_endpoint_set(
     endpoints: &[WitnessEndpointClient],
     request: &jury_protocol::witness_v1::WitnessRequestV1,
 ) -> Result<(), CliError> {
@@ -439,7 +437,7 @@ const fn request_policy_operation(
     }
 }
 
-const fn map_witnessed_status(status: WitnessedAccessStatus) -> CliError {
+pub(super) const fn map_witnessed_status(status: WitnessedAccessStatus) -> CliError {
     match status {
         WitnessedAccessStatus::Pending => approval_pending(),
         WitnessedAccessStatus::Denied => CliError::new(
@@ -476,7 +474,7 @@ const fn map_witnessed_status(status: WitnessedAccessStatus) -> CliError {
     }
 }
 
-const fn map_witness_provider(kind: AccessProviderErrorKind) -> CliError {
+pub(super) const fn map_witness_provider(kind: AccessProviderErrorKind) -> CliError {
     match kind {
         AccessProviderErrorKind::StalePolicy => map_witnessed_status(WitnessedAccessStatus::Stale),
         AccessProviderErrorKind::Cancelled => {

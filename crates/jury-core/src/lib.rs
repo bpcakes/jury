@@ -22,6 +22,7 @@ pub mod policy;
 pub mod registration;
 #[cfg(test)]
 mod registration_tests;
+pub mod rollover;
 pub mod session;
 pub mod transfer;
 pub mod witness_approval;

@@ -214,6 +214,19 @@ pub(super) fn read_vault(home: &VaultHomeLocation) -> Result<Vec<u8>, CliError> 
         VaultHomeLocation::Detached { path, .. } => {
             let root = HardenedStateRoot::open_existing(path, &[])
                 .map_err(map_detached_vault_home_error)?;
+            for pending in [
+                rollover_commands::PENDING_ROLLOVER,
+                rollover_commands::PENDING_ROLLOVER_CLEANUP,
+                rollover_commands::PENDING_OUTPUTS,
+                rollover_commands::PENDING_OUTPUTS_CLEANUP,
+            ] {
+                if root
+                    .private_child_exists(Path::new(pending))
+                    .map_err(map_filesystem_error)?
+                {
+                    return Err(rollover_commands::incomplete_rollover());
+                }
+            }
             root.read_private_file(Path::new("vault.json"), MAX_VAULT_BYTES)
                 .map_err(map_detached_vault_file_error)
         }
@@ -244,11 +257,11 @@ fn map_detached_vault_file_error(error: FilesystemError) -> CliError {
     }
 }
 
-pub(super) fn load_policy_catalog_for_vault(
+pub(super) fn load_policy_and_catalog_for_vault(
     environment: &Environment,
     home: &VaultHomeLocation,
     vault: &VaultFileV1,
-) -> Result<PolicyCatalogV1, CliError> {
+) -> Result<(PolicyCatalogV1, PolicyState), CliError> {
     let state_root = resolve_linux_state_root(
         environment.jury_state_home.as_deref(),
         environment.xdg_state_home.as_deref(),
@@ -256,7 +269,7 @@ pub(super) fn load_policy_catalog_for_vault(
     )
     .map_err(|_| filesystem_error())?;
     validate_detached_separation(&state_root, home)?;
-    match VaultStateDirectory::open_existing(
+    let catalog = match VaultStateDirectory::open_existing(
         &state_root,
         vault.header.vault_id.as_bytes(),
         vault.header.genesis_fingerprint.as_bytes(),
@@ -265,7 +278,9 @@ pub(super) fn load_policy_catalog_for_vault(
         Ok(state) => read_policy_catalog(&state),
         Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(PolicyCatalogV1::empty()),
         Err(error) => Err(map_filesystem_error(error)),
-    }
+    }?;
+    let policy = catalog.replay_for_vault(vault)?;
+    Ok((catalog, policy))
 }
 
 pub(super) fn protect(bytes: &[u8], policy: ProtectionPolicy) -> Result<ProtectedMemory, CliError> {

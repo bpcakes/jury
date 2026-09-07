@@ -25,6 +25,8 @@ pub enum AuditAction {
     Restore,
     ExecuteOrInject,
     WitnessRequest,
+    /// Local verification may be unscoped; witnessed verification requires
+    /// both the item scope and its authenticated witness link.
     Verification,
     PrivacyCover,
 }
@@ -362,6 +364,7 @@ impl AuditEvent {
                     return Err(LocalStateError::new(LocalStateErrorKind::InvalidFormat));
                 }
             }
+            AuditAction::Verification if self.item.is_none() && self.witness.is_none() => {}
             AuditAction::WitnessRequest | AuditAction::Verification => {
                 if self.witness.is_none()
                     || self.item.is_none()

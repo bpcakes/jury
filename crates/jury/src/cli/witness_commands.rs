@@ -99,13 +99,12 @@ pub(super) fn witness_policy_material(
     let home = selected_home(cli, environment, current)?;
     let vault_bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&vault_bytes).map_err(|_| invalid_vault())?;
-    let catalog = load_policy_catalog_for_vault(environment, &home, &vault)?;
+    let (catalog, policy) = load_policy_and_catalog_for_vault(environment, &home, &vault)?;
     let material = ReceiptPolicyMaterialV1 {
         schema: 1,
         journal: vault.policy.clone(),
         witness_policies: catalog.witness_policies,
     };
-    let policy = material.replay().map_err(|_| invalid_policy_material())?;
     let encoded = material.encode().map_err(|_| {
         CliError::new(
             CliErrorKind::Conflict,

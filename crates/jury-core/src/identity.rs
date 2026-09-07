@@ -6,6 +6,7 @@
 use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, RandomSource};
+use jury_protocol::hpke_context::{ContributionHpkeContext, VaultSuite};
 use jury_protocol::witness_v1::WitnessContributionEnvelopeV1;
 use jury_protocol::{
     identity_v1::{
@@ -239,6 +240,7 @@ pub(crate) struct ProtectedRevisionSecret {
 
 /// One revision-scoped witness share which has no byte-export API.
 pub(crate) struct ProtectedWitnessShare {
+    suite: VaultSuite,
     pub(crate) bytes: ProtectedMemory,
     witness_id: WirePrincipalId,
     witness_policy_digest: Digest32,
@@ -303,24 +305,30 @@ impl ProtectedWitnessShare {
         {
             return Err(IdentityError::new(IdentityErrorKind::Format));
         }
-        let mut info = identity_jce("jury-witness-v1/contribution/info");
-        info.extend_from_slice(target.request_digest.as_bytes());
-        info.extend_from_slice(target.action_manifest_digest.as_bytes());
-        info.extend_from_slice(target.response_id.as_bytes());
-        info.extend_from_slice(self.witness_id.as_bytes());
-        info.extend_from_slice(self.witness_policy_digest.as_bytes());
-        info.extend_from_slice(target.checkpoint_digest.as_bytes());
-        info.extend_from_slice(self.share_commitment.as_bytes());
-        info.push(self.share_index);
-
-        let mut aad = identity_jce("jury-witness-v1/contribution/aad");
-        aad.extend_from_slice(target.capsule_set_digest.as_bytes());
-        aad.extend_from_slice(self.context_digest.as_bytes());
-        aad.extend_from_slice(target.session_fingerprint.as_bytes());
-        aad.extend_from_slice(&target.expires_at_ms.to_be_bytes());
-        let (encapsulation, ciphertext) =
-            crypto::seal_hpke(&target.session_public_key, &self.bytes, &info, &aad, source)
-                .map_err(map_crypto_error)?;
+        let context = ContributionHpkeContext {
+            suite: self.suite,
+            request_digest: target.request_digest.clone(),
+            action_manifest_digest: target.action_manifest_digest.clone(),
+            response_id: target.response_id,
+            witness_id: self.witness_id,
+            witness_policy_digest: self.witness_policy_digest.clone(),
+            checkpoint_digest: target.checkpoint_digest.clone(),
+            share_commitment: self.share_commitment.clone(),
+            share_index: self.share_index,
+            capsule_set_digest: target.capsule_set_digest.clone(),
+            capsule_context_digest: self.context_digest.clone(),
+            session_fingerprint: target.session_fingerprint.clone(),
+            expires_at_ms: target.expires_at_ms,
+        };
+        let (encapsulation, ciphertext) = crypto::seal_hpke_for_suite(
+            self.suite,
+            &target.session_public_key,
+            &self.bytes,
+            &context.info_preimage(),
+            &context.aad_preimage(),
+            source,
+        )
+        .map_err(map_crypto_error)?;
         Ok(EncryptedWitnessContribution {
             response_id: target.response_id,
             share_index: self.share_index,
@@ -510,17 +518,18 @@ impl VaultPrincipalIdentity {
         open_registration_capsule(&self.0, encapsulation, ciphertext, info, aad)
     }
 
-    /// Opens one suite-1 direct slot bound to this exact identity.
+    /// Opens one authenticated direct slot bound to this exact identity.
     pub(crate) fn open_direct_slot(
         &self,
         slot: &DirectSlotV1,
     ) -> Result<ProtectedRevisionSecret, IdentityError> {
+        let suite = VaultSuite::from_id(slot.suite)
+            .ok_or_else(|| IdentityError::new(IdentityErrorKind::Format))?;
         if slot.slot_schema != 1
             || slot.slot_algorithm != 1
-            || slot.suite != 1
             || slot.kem != 0x647a
             || slot.kdf != 1
-            || slot.aead != 3
+            || slot.aead != suite.hpke_aead()
             || slot.revision == 0
             || !matches!(
                 slot.item_access_mode,
@@ -536,7 +545,8 @@ impl VaultPrincipalIdentity {
             return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
         }
         let private_seed = payload_component(&self.0.payload, RECIPIENT_SEED_RANGE)?;
-        let bytes = crypto::open_hpke(
+        let bytes = crypto::open_hpke_for_suite(
+            suite,
             &private_seed,
             &slot.encapsulation,
             slot.ciphertext.as_bytes(),
@@ -572,6 +582,7 @@ impl WitnessIdentity {
     /// Opens one exact J19 revision-scoped share without exporting its bytes.
     pub(crate) fn open_contribution_share(
         &self,
+        suite: VaultSuite,
         capsule: &WitnessShareCapsuleV1,
     ) -> Result<ProtectedWitnessShare, IdentityError> {
         if capsule.capsule_schema != 1
@@ -586,7 +597,7 @@ impl WitnessIdentity {
                 capsule.item_access_mode,
                 ItemAccessMode::WitnessedOnly | ItemAccessMode::Mixed
             )
-            || capsule.recomputed_context_digest() != capsule.context_digest
+            || capsule.recomputed_context_digest_for_suite(suite) != capsule.context_digest
         {
             return Err(IdentityError::new(IdentityErrorKind::Format));
         }
@@ -597,12 +608,13 @@ impl WitnessIdentity {
             return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
         }
         let private_seed = payload_component(&self.0.payload, RECIPIENT_SEED_RANGE)?;
-        let share = crypto::open_hpke(
+        let share = crypto::open_hpke_for_suite(
+            suite,
             &private_seed,
             &capsule.encapsulation,
             capsule.ciphertext.as_bytes(),
-            &capsule.info_preimage(),
-            &capsule.aad_preimage(),
+            &capsule.info_preimage_for_suite(suite),
+            &capsule.aad_preimage_for_suite(suite),
             33,
         )
         .map_err(map_crypto_error)?;
@@ -619,6 +631,7 @@ impl WitnessIdentity {
             return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
         }
         Ok(ProtectedWitnessShare {
+            suite,
             bytes: share,
             witness_id: capsule.witness_id,
             witness_policy_digest: capsule.witness_policy_digest.clone(),

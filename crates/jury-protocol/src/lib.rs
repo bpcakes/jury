@@ -5,7 +5,9 @@
 mod artifact;
 pub mod backup_v1;
 mod canonical;
+pub mod hpke_context;
 pub mod identity_v1;
+pub mod rollover_v1;
 pub mod transfer_v1;
 pub mod vault_v1;
 pub mod witness_v1;

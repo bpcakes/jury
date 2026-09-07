@@ -1,10 +1,12 @@
 //! Revision-scoped item encryption and atomic policy/envelope mutations.
 
+mod bootstrap;
 mod inventory;
 mod opening;
 mod random;
 mod sealing;
 
+pub(crate) use bootstrap::StagedItemCreation;
 pub use inventory::ItemArtifactInventory;
 pub(crate) use opening::{open_body, open_descriptor, verify_item_ancestry};
 use random::{draw_nonce, draw_seal_id, draw_slot_id};
@@ -36,7 +38,7 @@ use crate::policy::{
     DescriptorStatus, PolicyErrorKind, PolicyState, PreparedPolicyRevision, WitnessPolicy,
 };
 
-const SUITE: u16 = 1;
+use jury_protocol::hpke_context::VaultSuite;
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,100 +207,31 @@ impl<R: RandomSource> ItemCreator<R> {
         input: NewItem,
         inventory: &ItemArtifactInventory,
     ) -> Result<PreparedItemMutation, ItemError> {
-        let item_id = {
-            let mut generator = NativeIdGenerator::from_source(&mut self.source);
-            let generated = generator
-                .generate_item_id(|candidate| {
-                    ItemId::from_bytes(*candidate.as_bytes())
-                        .map_or(true, |wire| policy.item_id_was_used(&wire))
-                })
-                .map_err(map_identifier_error)?;
-            ItemId::from_bytes(*generated.as_bytes())
-                .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))?
-        };
-        let sequence = next(policy.sequence())?;
-        let resolved = resolve_access(policy, sequence, &input.access, None, None, None)?;
-        let mut reserved = inventory.clone();
-        let descriptor = self.seal_content(
-            policy,
-            item_id,
-            1,
-            ContentRole::Descriptor,
-            1,
-            input.bucket_id,
-            &input.descriptor,
-            &input.state,
-            &mut reserved,
-        )?;
-        let body = self.seal_content(
-            policy,
-            item_id,
-            1,
-            ContentRole::Body,
-            1,
-            input.bucket_id,
-            &input.descriptor,
-            &input.state,
-            &mut reserved,
-        )?;
-        let slots = self.build_slots(
-            policy,
-            item_id,
-            1,
-            sequence,
-            &resolved,
-            &descriptor,
-            &body,
-            &mut reserved,
-        )?;
-        let current_revision = sign_item_revision(
-            author,
-            policy,
-            item_id,
-            1,
-            FixedBytes::new(ZERO_DIGEST),
-            1,
-            sequence,
-            timestamp_ms,
-            input.bucket_id,
-            &body,
-        )?;
-        let current_hash = current_revision
-            .recomputed_hash()
-            .map_err(|_| ItemError::new(ItemErrorKind::InvalidInput))?;
-        let descriptor_metadata = descriptor_metadata(1, 1, &descriptor)?;
-        let envelope = ItemEnvelopeV1 {
-            item_id,
-            descriptor: descriptor_metadata.clone(),
-            descriptor_ciphertext: DescriptorCiphertext272::from_slice(&descriptor.ciphertext)
-                .map_err(|_| ItemError::new(ItemErrorKind::ProviderFailure))?,
-            prior_revisions: Vec::new(),
-            current_revision,
-            body_ciphertext: jury_protocol::vault_v1::ItemCiphertext::new(body.ciphertext.clone())
-                .map_err(|_| ItemError::new(ItemErrorKind::CapacityExhausted))?,
-        };
-        let mut operations = vec![PolicyOperationV1::ItemCreate {
-            item_id,
-            item_kind: input.kind,
-            key_epoch: 1,
-            descriptor: descriptor_metadata,
-            current_item_revision_hash: current_hash,
-            direct_slots: slots.direct,
-            witnessed_state: slots.witnessed,
-        }];
-        append_creation_grants(
-            &mut operations,
-            &input.access,
-            &resolved.direct_roles,
-            item_id,
-        );
+        let component =
+            self.prepare_create_batch_component(policy, author, timestamp_ms, input, inventory)?;
         let prepared = policy
-            .prepare_revision(author, timestamp_ms, operations)
+            .prepare_revision(author, timestamp_ms, component.operations)
             .map_err(map_policy_error)?;
         Ok(PreparedItemMutation {
             policy: prepared,
-            envelope,
+            envelope: component.envelope,
         })
+    }
+
+    /// Seals one creation for a caller that validates and signs the complete
+    /// batch. No standalone policy revision is emitted here.
+    pub(crate) fn prepare_create_batch_component(
+        &mut self,
+        policy: &PolicyState,
+        author: &VaultPrincipalIdentity,
+        timestamp_ms: u64,
+        input: NewItem,
+        inventory: &ItemArtifactInventory,
+    ) -> Result<PreparedItemBatchComponent, ItemError> {
+        let access = input.access.clone();
+        let staged =
+            self.stage_create(policy, author, timestamp_ms, input, &mut inventory.clone())?;
+        self.finish_create(policy, staged, access)
     }
 
     /// Generates a nonzero field identifier distinct from every identifier in
@@ -711,3 +644,6 @@ fn map_policy_error(error: crate::policy::PolicyError) -> ItemError {
 #[cfg(test)]
 #[path = "item_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::reconstruct_slot_secret;

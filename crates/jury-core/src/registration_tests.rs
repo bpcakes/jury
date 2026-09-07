@@ -7,7 +7,7 @@ use crate::identity::{IdentityCreator, UnlockedIdentity, unlock};
 use crate::policy::{PolicyCreator, replay_policy};
 use crate::registration::{
     RegistrationCreator, RegistrationErrorKind, RegistrationProofV1, RegistrationRoleDescriptorV1,
-    answer_challenge, verify_proof,
+    answer_challenge, verify_proof, verify_proof_signatures,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -90,6 +90,10 @@ fn registration_binds_both_candidate_keys_role_and_vault() -> TestResult {
     let parsed = RegistrationProofV1::parse(&proof.to_json_bytes()?)?;
     assert_eq!(parsed, proof);
     assert_eq!(
+        verify_proof_signatures(&policy, &challenge, &parsed, 1_788_000_000_400)?,
+        proof.digest()?
+    );
+    assert_eq!(
         verify_proof(
             &policy,
             owner_identity,
@@ -104,6 +108,7 @@ fn registration_binds_both_candidate_keys_role_and_vault() -> TestResult {
     let mut response_mac = *tampered.response_mac.as_bytes();
     response_mac[0] ^= 1;
     tampered.response_mac = jury_protocol::vault_v1::Digest32::new(response_mac);
+    assert!(verify_proof_signatures(&policy, &challenge, &tampered, 1_788_000_000_400).is_err());
     assert_eq!(
         verify_proof(
             &policy,
@@ -127,6 +132,124 @@ fn registration_binds_both_candidate_keys_role_and_vault() -> TestResult {
         .map(|_| ())
         .map_err(|error| error.kind()),
         Err(RegistrationErrorKind::Expired)
+    );
+    verify_rollover_registration(owner_identity, &candidate_unlocked, &proof)?;
+    Ok(())
+}
+
+fn verify_rollover_registration(
+    owner: &crate::identity::VaultPrincipalIdentity,
+    candidate: &UnlockedIdentity,
+    source_proof: &RegistrationProofV1,
+) -> TestResult {
+    use crate::registration::answer_rollover_challenge;
+    use jury_protocol::vault_v1::Signature64;
+
+    let mut prior_role = source_proof.role_descriptor.clone();
+    let RegistrationRoleDescriptorV1::Witness { descriptor } = &mut prior_role else {
+        return Err("missing witness descriptor".into());
+    };
+    descriptor.signing_key_epoch = 7;
+    descriptor.contribution_key_epoch = 9;
+    descriptor.signing_key_fingerprint = crate::policy::signing_key_fingerprint(
+        3,
+        &descriptor.witness_id,
+        7,
+        &descriptor.signing_public_key,
+    );
+    descriptor.self_signature =
+        candidate.sign_registration_statement(&descriptor.self_signature_preimage()?)?;
+    descriptor.validate()?;
+    let created = PolicyCreator::new().create(owner, 1_788_000_000_500, |id| {
+        *id == source_proof.challenge.vault_id
+    })?;
+    let challenge = RegistrationCreator::new(ProtectionPolicy::Strict).create_challenge(
+        &created.state,
+        owner,
+        source_proof.challenge.candidate_descriptor.clone(),
+        1_788_000_000_700,
+        60_000,
+        Some(7),
+    )?;
+    let proof = answer_rollover_challenge(
+        &created.state,
+        candidate,
+        &challenge,
+        &prior_role,
+        1_788_000_000_800,
+    )?;
+    verify_proof(&created.state, owner, &challenge, &proof, 1_788_000_000_900)?;
+    assert_eq!(
+        verify_proof_signatures(&created.state, &challenge, &proof, 1_788_000_000_900)?,
+        proof.digest()?
+    );
+    assert!(
+        verify_proof_signatures(
+            &created.state,
+            &source_proof.challenge,
+            source_proof,
+            source_proof.created_at_ms,
+        )
+        .is_err()
+    );
+    let RegistrationRoleDescriptorV1::Witness { descriptor: copied } = &proof.role_descriptor
+    else {
+        return Err("missing fresh witness descriptor".into());
+    };
+    let RegistrationRoleDescriptorV1::Witness { descriptor: prior } = &prior_role else {
+        return Err("missing prior witness descriptor".into());
+    };
+    assert_ne!(copied.self_signature, prior.self_signature);
+    let mut expected = prior.clone();
+    expected.created_at_ms = challenge.issued_at_ms;
+    expected.self_signature = copied.self_signature.clone();
+    assert_eq!(*copied, expected);
+    assert!(
+        verify_proof(
+            &created.state,
+            owner,
+            &challenge,
+            source_proof,
+            1_788_000_000_900
+        )
+        .is_err()
+    );
+    let mut corrupt = prior_role.clone();
+    let RegistrationRoleDescriptorV1::Witness { descriptor } = &mut corrupt else {
+        return Err("missing witness descriptor".into());
+    };
+    descriptor.self_signature = Signature64::new([0; 64]);
+    assert!(
+        answer_rollover_challenge(
+            &created.state,
+            candidate,
+            &challenge,
+            &corrupt,
+            1_788_000_000_800
+        )
+        .is_err()
+    );
+    let mut forged = challenge.clone();
+    forged.owner_signature = Signature64::new([0; 64]);
+    assert!(
+        answer_rollover_challenge(
+            &created.state,
+            candidate,
+            &forged,
+            &prior_role,
+            1_788_000_000_800
+        )
+        .is_err()
+    );
+    assert!(
+        answer_rollover_challenge(
+            &created.state,
+            candidate,
+            &challenge,
+            &prior_role,
+            challenge.expires_at_ms + 1
+        )
+        .is_err()
     );
     Ok(())
 }

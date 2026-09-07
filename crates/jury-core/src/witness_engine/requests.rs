@@ -74,6 +74,8 @@ where
             return Err(refused(WitnessReasonV1::PolicyDenied));
         }
         Ok(ValidatedRequest {
+            suite: VaultSuite::from_id(validated.slot.suite)
+                .ok_or_else(|| refused(WitnessReasonV1::Invalid))?,
             rule: validated.rule,
             policy: validated.policy,
             capsule,
@@ -183,6 +185,7 @@ where
         let contribution = self
             .identity
             .seal_witness_contribution(
+                validated.suite,
                 &validated.capsule,
                 &WitnessContributionTarget {
                     request_digest: request_digest.clone(),

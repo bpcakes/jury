@@ -22,12 +22,15 @@ use crate::policy::{PolicyState, WitnessPolicy, replay_policy_with_witness_polic
 use crate::registration::{RegistrationProofV1, RegistrationRoleDescriptorV1};
 use crate::{crypto, identity::IdentityErrorKind};
 
+mod catalog;
+
 const MAX_TRANSFER_ID_ATTEMPTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransferErrorKind {
     InvalidFormat,
     InvalidCatalog,
+    MissingRegistrationProof,
     InvalidVault,
     UnauthorizedExporter,
     AuthenticationFailed,
@@ -66,6 +69,7 @@ impl fmt::Display for TransferError {
         formatter.write_str(match self.kind {
             TransferErrorKind::InvalidFormat => "transfer format is invalid",
             TransferErrorKind::InvalidCatalog => "transfer public policy catalog is invalid",
+            TransferErrorKind::MissingRegistrationProof => "portable registration proof is missing",
             TransferErrorKind::InvalidVault => "transfer vault state is invalid",
             TransferErrorKind::UnauthorizedExporter => "transfer exporter is not active",
             TransferErrorKind::AuthenticationFailed => "transfer signature is invalid",
@@ -267,74 +271,6 @@ impl TransferPublicCatalogV1 {
             if !policy_digests.insert(digest) {
                 return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
             }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn validate_for_policy(
-        &self,
-        vault: &VaultFileV1,
-        policy: &PolicyState,
-    ) -> Result<(), TransferError> {
-        let mut expected = BTreeMap::new();
-        for revision in &vault.policy.revisions {
-            for operation in &revision.operations {
-                match operation {
-                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalAdd {
-                        descriptor,
-                        registration_proof_digest,
-                        ..
-                    } => {
-                        expected.insert(descriptor.principal_id, registration_proof_digest.clone());
-                    }
-                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalRemove {
-                        principal_id,
-                        ..
-                    } => {
-                        expected.remove(principal_id);
-                    }
-                    jury_protocol::vault_v1::PolicyOperationV1::PrincipalReplace {
-                        prior_principal_id,
-                        next_descriptor,
-                        registration_proof_digest,
-                    } => {
-                        expected.remove(prior_principal_id);
-                        expected.insert(
-                            next_descriptor.principal_id,
-                            registration_proof_digest.clone(),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let mut supplied = BTreeSet::new();
-        for proof in &self.registration_proofs {
-            let principal_id = proof.candidate_principal_id;
-            let principal = policy
-                .principal(&principal_id)
-                .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-            let expected_digest = expected
-                .get(&principal_id)
-                .ok_or_else(|| TransferError::new(TransferErrorKind::InvalidCatalog))?;
-            if proof.challenge.candidate_descriptor != principal.descriptor
-                || proof
-                    .digest()
-                    .map_err(|_| TransferError::new(TransferErrorKind::InvalidCatalog))?
-                    != *expected_digest
-                || !supplied.insert(principal_id)
-            {
-                return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
-            }
-        }
-        if policy.principals().any(|(principal_id, principal)| {
-            matches!(
-                principal.descriptor.principal_kind,
-                PrincipalKind::Approver | PrincipalKind::Witness
-            ) && !supplied.contains(principal_id)
-        }) {
-            return Err(TransferError::new(TransferErrorKind::InvalidCatalog));
         }
         Ok(())
     }

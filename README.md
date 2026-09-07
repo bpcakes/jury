@@ -371,9 +371,19 @@ integration remains separate in
 The first `0.x` release targets Linux through the `jury` CLI and a self-hosted
 `juryd`. The active scope defers macOS, Windows, the `jury-tui`,
 hardware-backed identity protectors, managed-service topology, semantic Git
-merge, and runtime lineage rollover or suite migration. Capacity exhaustion
-fails closed before mutation. Divergent Git artifacts require explicit
-operator recovery.
+merge, and runtime lineage rollover or suite migration. J18 rollover and suite
+migration are follow-up capabilities for a release after 0.0.1. The development
+checkout has direct and governed `jury vault rollover` flows with fresh backup,
+transfer, explicit local adoption and exact-candidate recovery. Historical
+bootstrap validation retains the original role proofs, policies and labels.
+The checkout also implements explicit `jury vault migrate-suite --to 2`, using
+AES-256-GCM HPKE under the accepted supplemental input gate. It re-encrypts
+active items into a new lineage and preserves the original copies. Core direct
+and governed migration tests pass, including native backup restore and witnessed
+destination reads. These paths remain externally unreviewed pre-alpha software.
+Capacity exhaustion
+fails closed before mutation. Divergent Git artifacts
+require explicit operator recovery.
 
 | Package | Responsibility |
 | --- | --- |

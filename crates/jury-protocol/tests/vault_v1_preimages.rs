@@ -328,6 +328,7 @@ fn parse_rollover(preimage: &[u8], signature: Signature64) -> TestResult<SignedR
         destination_vault_id: VaultId::from_bytes(cursor.take()?)?,
         destination_suite: cursor.u16()?,
         bootstrap_manifest_digest: FixedBytes::new(cursor.take()?),
+        bootstrap_manifest: None,
         acting_owner_principal_id: PrincipalId::from_bytes(cursor.take()?)?,
         signature,
     };
@@ -348,7 +349,7 @@ fn parse_source(bytes: &[u8]) -> TestResult<SourceAttestationV1> {
             let preimage = cursor.bytes_field()?;
             let signature = Signature64::new(cursor.take()?);
             SourceAttestationV1::Rollover {
-                statement: parse_rollover(preimage, signature)?,
+                statement: Box::new(parse_rollover(preimage, signature)?),
             }
         }
         _ => return Err(failure("unknown source attestation").into()),
