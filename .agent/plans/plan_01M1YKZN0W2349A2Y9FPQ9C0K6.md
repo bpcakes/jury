@@ -6,10 +6,10 @@ J18 must refuse a source that became stale during preparation, preview valid his
 
 - [x] Research the four findings and protocol/catalog open questions against current code.
 - [x] Implement source publication freshness guard and regressions (focused authenticated-state tests pass; native pre-publication regression passed in the captured native rerun).
-- [x] Implement shared active registration-role selection and historical preview regression (four governed core tests pass; native preview fixture now uses a private output parent that does not contain the selected source; full rerun pending).
+- [x] Implement shared active registration-role selection and historical preview regression (four governed core tests and the corrected native preview scenarios pass in the full workspace suite).
 - [x] Implement preparation error arbitration and regressions. Five CLI rollover tests pass, including actual signed witnessed preparation with a valid two-entry Recovery plan, specific label error and zero HTTP connections.
 - [x] Implement reusable authenticated destination validation and regressions. Nineteen core rollover tests pass; expanded historical-current-artifact/signature rejection passes separately.
-- [ ] Run required repository checks and full workspace tests; record actual results and finish J18 if acceptance is satisfied.
+- [x] Complete required verification: two full workspace suite runs pass, all six required Jig gates are fresh and passed, and final acceptance is recorded below.
 
 ## Surprises & Discoveries
 
@@ -27,7 +27,11 @@ Return authenticated bootstrap state from existing validation instead of supplyi
 
 ## Outcomes & Retrospective
 
-First slice implements the common source guard. Authenticated-state tests pass for current/stale/divergent source, lock retention, audit tail and corrupted local files. The native race fixture initially used an invalid backup/output boundary; corrected fixture rerun is pending. Active-role selection, error arbitration and reusable destination validation are implemented. CLI regression fixture permissions were corrected to satisfy the real file reader. The native freshness fixture now uses the approval helper's reviewed ExampleRollover destination name. The native race passed. The first full test run failed in the new historical-preview fixture: its output parent contained the detached source home and was correctly rejected as private-state-overlap. Corrected the fixture with a separate ExampleNextHomes parent, preserving containment checks. The redundant verify-profile run was stopped after that failure. The temporary native log is a minimal recovery control for the observed Jig receipt truncation of failure details; consumer is this J18 verification, deletion condition is completed diagnosis and acceptance. Final full verification remains pending. Baseline is 373fef9 (exact HEAD captured by Jig). J18 remains in progress until the fixes and checks actually pass.
+All four fixes are implemented in separate commits: b2bdc2f (publication freshness), 742c6d1 (active registration requirements), a516f8a (preparation error arbitration), and 1705dff (authenticated destination state reuse). Authenticated-state tests cover current/stale/divergent sources, lock retention, audit tails and corrupted local files. The actual native CLI checkpoint race passes. Historical preview reports the same active role count as preparation after removal. The signed witnessed preparation regression preserves the specific label error with a valid two-entry Recovery plan and zero HTTP connections. Historical current-envelope and later-policy signature tampering remain rejected.
+
+Fixture corrections preserved production boundaries and assertions: a2abf39 uses the approval helper's reviewed ExampleRollover name; fd6af76 gives historical preview a separate ExampleNextHomes output parent, because a parent containing the detached source home is correctly rejected as private-state-overlap. Earlier failing runs remain recorded. The redundant verify-profile run was stopped after the first full-suite failure. A temporary native log recovered failure details omitted by Jig's truncated receipt; its consumer was this verification. Diagnosis and acceptance are complete, satisfying its deletion condition.
+
+The corrected full workspace suite passed twice: receipt_01M1YQVMAGERJ2AJ06GTTX5P7Q (1147.637 seconds) and receipt_01M1YRXN5XFVBHDWG1K27TJTH9 (1104.113 seconds). The required verify profile completed successfully in run_01M1YQVVTZQ3RXPP3FFPA4R7EE. Work evidence and gates confirm all six required gates are fresh and passed, with no failed, missing, stale or unknown required gates. Baseline is 373fef9 (exact HEAD captured by Jig). The four postcommit findings are remediated and J18 is accepted for closure. No independent security review or measured speedup is claimed.
 
 ## Context and work
 
