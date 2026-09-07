@@ -28,6 +28,22 @@ This document, not the snapshot, is Jury's normative plan.
 
 ## 0. How to use this plan
 
+### Current implementation status, 2026-09-07
+
+The Linux CLI and witness implementation through the active J25 checks is
+committed in `16ab899`. The ten packaged end-user QA journeys and final
+repository verification passed; the retained result is described in
+`docs/qa-linux-0.0.1.md`. J26 publication remains open for the reporting channel,
+signing identity, and a candidate bound to the intended release source.
+
+This document is the normative design and task sequence, including deferred
+work and protocol capabilities that do not have CLI commands. Use the
+[Linux release guide](linux-release.md) and
+[operator walkthrough](witness-operator-walkthrough.md) for executable procedures.
+In particular, the [operator limits](self-hosting-juryd.md#witness-key-rotation-retirement-and-recovery)
+separate same-identity service restore from protocol-defined witness replacement.
+Historical planning audits below do not supersede those current interface limits.
+
 ### 0.0 Witnessed-first release scope
 
 This section supersedes conflicting direct-only or deferred-witness language
@@ -5778,11 +5794,12 @@ Every task-local `Unblocks` list below names immediate blocking-edge consumers,
 not merely transitive downstream outcomes. Tracker metadata is the executable
 source for those edges and must remain identical to the task-local list.
 
-J01A and J12 have completed their task-local acceptance checks. J01A unblocks
-J01B, J03, and J05; J12 supplies the process boundary consumed later by J14.
-J19A remains blocked by J01B and J03. J19C feeds the exact-artifact J19 gate
-that blocks the format and witnessed path. Deferred branches have no edge back
-into the active release path.
+The active implementation tasks through J25 have completed their task-local
+acceptance checks. J01A/J01B and J19 are accepted construction-input gates;
+J19A is no longer blocked on primitive work. The dependency edges above explain
+the implementation order and remain relevant if an input must be reopened.
+Deferred branches have no edge back into the active release path. J26 retains
+the final source/build binding and publication work.
 
 J26 is the active release join and is not allowed to hide incomplete active
 children. J19-J23 and J25 remain mandatory release dependencies. J15, J18, J24,

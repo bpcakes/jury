@@ -15,6 +15,10 @@ data. Their parent directories must already exist and satisfy Jury's private
 ownership and mode checks (use `0700` directories and `0600` private files).
 Identity parent directories must be separate from the vault, backup input and
 state paths; choosing different leaf names under a shared parent is insufficient.
+For initial vault setup, use the repository README. For role registration and
+fresh remote imports, follow the [operator walkthrough](witness-operator-walkthrough.md).
+Service databases and external anchors have their own
+[backup and restore procedure](self-hosting-juryd.md#backup-restore-and-rollback-behavior).
 
 ## Create and verify a backup
 
@@ -81,9 +85,9 @@ selected role before creating a multi-role backup:
 ```sh
 jury transfer export --out ./ExampleVault.transfer.json
 jury --identity ExampleApprover --expected-genesis "$GENESIS" \
-  transfer import --in ./ExampleVault.transfer.json
+  transfer import --in ./ExampleVault.transfer.json --allow-no-access
 jury --identity ExampleWitnessOne --expected-genesis "$GENESIS" \
-  transfer import --in ./ExampleVault.transfer.json
+  transfer import --in ./ExampleVault.transfer.json --allow-no-access
 jury --identity ExampleApprover vault audit verify
 jury --identity ExampleWitnessOne vault audit verify
 ```

@@ -31,6 +31,13 @@ $ docker run --read-only --user 10001:10001 \
     -p 8443:8443 juryd:local serve --config /etc/juryd/witness.json
 ```
 
+Before the first start, run the anchor command with `anchor init` in place of
+`anchor serve`, using the same mounts and user. Run the witness command with
+`database init` in place of `serve`. Each initialization creates an absent
+database and exits; do not repeat it against an existing database. Start the
+anchor before the witness. Actor registration and policy delivery are separate
+steps in the [operator walkthrough](../../docs/witness-operator-walkthrough.md).
+
 All mounted private files and state directories must be owned by numeric UID
 10001 and must not grant group/world permissions. Initialize databases with
 the same image before serving. Do not use a shared Docker socket, host, volume,

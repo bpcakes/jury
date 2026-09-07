@@ -64,5 +64,6 @@ with the first experimental `0.x` release.
 Include `LICENSE.md`, `NOTICE.md`, and applicable third-party licenses and
 notices with source and binary distributions. The `juryd` container installs
 Jury's license and notice under `/usr/share/licenses/jury/` and declares
-`Elastic-2.0` in its OCI metadata. J26 must also assemble the third-party notices
-for the exact release dependencies.
+`Elastic-2.0` in its OCI metadata. The [Linux packaging recipe](linux-release.md) assembles third-party notices
+for the exact locked release dependencies and verifies the supplemental
+upstream license files. Publication still requires the final release checks.

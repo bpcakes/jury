@@ -84,8 +84,10 @@ and next vault policy sequence. Public labels and policy terms are retained;
 successful changes issue fresh owner-signed labels and successor witness
 policies bound to the new revision. Label expiry is preserved. An expired active
 label stops the command before requests are published; a label expiring during
-collection also prevents the mutation. Replace expired policies and labels
-before retrying.
+collection also prevents the mutation. The current CLI creates labels without
+expiry, but imported policies can contain expiring labels. There is no general
+CLI renewal command for a witnessed-only item; an expired imported label is an
+operational limit, not a reason to reset witnesses or add direct access.
 
 All required content must open successfully before any vault mutation commits.
 Denied, expired, or incomplete authorization leaves the vault unchanged.

@@ -142,8 +142,9 @@ serves that outcome and never becomes the product.
 
 ## Marketing site
 
-The public site lives in `web/`. It is allowed to describe the intended product
-and required to repeat the pre-alpha warning. It must not claim that Jury
+No marketing site is present in this checkout. A future public site under
+`web/` is allowed to describe the intended product and is required to repeat
+the pre-alpha warning. It must not claim that Jury
 protects secrets, is open source, has independent review, or already ships
 witnessed or distributed authority. Commands shown there are design targets
 until the CLI implements them.

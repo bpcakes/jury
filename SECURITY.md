@@ -4,6 +4,10 @@ Jury is pre-alpha software. It contains experimental cryptographic and
 witnessed-access implementations, but does not yet protect secrets and must
 not be used to store, authorize, inject, or transfer real secrets.
 
+Version 0.0.1 is the current development candidate. No version has been
+published or declared suitable for production. The completed CLI QA does not
+change that status; see [release preparation](docs/linux-release.md).
+
 No private vulnerability-reporting channel is documented yet. Do not submit
 credentials, private data, or sensitive vulnerability details to public issues.
 Public issues may be used for non-sensitive bugs with synthetic reproductions.

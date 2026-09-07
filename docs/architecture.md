@@ -1,6 +1,9 @@
-# Initial architecture
+# Architecture
 
-This document records repository boundaries, not a finished security protocol.
+This document records the implementation boundaries and required invariants.
+Use the [Linux release guide](linux-release.md) for current packaging status and
+the [operator walkthrough](witness-operator-walkthrough.md) for runnable setup.
+The master plan also contains future and deferred work; it is not a CLI manual.
 Jury `0.x` is a pre-alpha witnessed-access experiment. It has no completed
 independent professional security review and must not be used for real secrets.
 
@@ -44,8 +47,8 @@ versioned contracts; HTTP and database adapters do not enter the witness engine.
 
 ## Child-process containment boundary
 
-`jury-process` owns the neutral child-process boundary used by later guarded
-execution work. The active `0.x` contract supports Linux only. A provisional
+`jury-process` owns the child-process boundary used by `jury exec` and `jury run`.
+The active `0.x` contract supports Linux only. A provisional
 macOS backend remains in source for deferred post-`0.x` work; it is not a
 supported release surface, required CI evidence, or a shipped artifact. Targets
 without an implemented containment guarantee reject the operation before
@@ -105,12 +108,13 @@ running Jury image through Linux `/proc/self/exe`, then marks every inherited
 descriptor close-on-exec except the pinned executable and explicitly selected
 anonymous files before replacing itself with that executable.
 
-Transparent `jury exec` inherits ordinary stdin and environment, removes every
-`JURY_*` variable, streams post-redaction stdout/stderr without a capture or
-overall-runtime limit, and mirrors the exact
-child status. Brokered `jury run` starts from a small allowlist, supplies EOF
-unless stdin is mapped, and applies an explicit timeout and separate output
-retention bounds. Both modes suppress ordinary core dumps before credential
+Direct transparent `jury exec --direct` inherits ordinary stdin and environment,
+removes every `JURY_*` variable, streams post-redaction stdout/stderr without a
+capture or overall-runtime limit, and mirrors the exact child status. Witnessed
+`exec` uses a timeout bounded by the signed policy. Brokered `jury run` starts
+from a small allowlist, supplies EOF unless stdin is mapped, and applies an
+explicit timeout and separate output retention bounds. Both modes suppress
+ordinary core dumps before credential
 capture and use the same complete process-group owner. Direct J14 records a
 secret-free digest over the pinned executable's path and metadata, exact
 argument bytes, working directory, typed destinations, and field references.

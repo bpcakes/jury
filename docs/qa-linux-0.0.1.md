@@ -2,18 +2,22 @@
 
 ## Repair and renewed QA, 2026-09-06
 
-QA-14 through QA-19 are repaired in the working tree. The fresh real-process
-checks described here found no remaining functional or UX blocker in their
-covered paths. Publication remains held for the security-reporting channel,
-release-signing identity, and the final candidate verification described in
-[Linux release preparation](linux-release.md). Jury remains externally
-unreviewed pre-alpha software, unsuitable for real secrets.
+**Final result: the repaired native implementation passed all ten packaged
+Linux CLI journeys.** QA-14 through QA-19 are closed. The implementation and
+records were committed as `16ab8991422114ca7047ab0ccf55ab40e8e0fc08` after the
+2026-09-06 QA run. No remaining functional or UX blocker was reproduced in
+those covered paths. Jury remains externally unreviewed pre-alpha software,
+unsuitable for real secrets.
 
-This section serves the maintainer's requested repair-and-retest cycle. It
-supersedes the findings below once the candidate and final checks pass; retain
-the history to explain the observed wrong-field, input-source and terminal-echo
-defects. Retire this repair record when a successor release replaces its source
-and artifact binding.
+Publication remains held for a security-reporting channel, a signing identity,
+and a final candidate built from the intended release source. Subsequent
+source or documentation changes require a new artifact binding; this historical
+pass does not authenticate a later package. See [Linux release preparation](linux-release.md).
+
+This section supersedes the earlier failure recommendations below. It serves
+the maintainer's repair-and-retest request; retain the history to explain the
+observed wrong-field, input-source, terminal-echo and packaging defects. Retire
+this record when a successor release replaces its source and artifact binding.
 
 The shared CLI parser now uses `ITEM/FIELD` (and `{{ITEM/FIELD}}` in templates).
 It retains unambiguous `ITEM.FIELD` shorthand and rejects multi-dot shorthand
@@ -112,25 +116,54 @@ child bytes, and offline receipt verification. It covers spaces, Unicode,
 quotes, closing braces, dots, slashes and equals signs, an exact 256-byte item
 label, two distinct fields, all delivery channels through exec and run, and
 malformed-reference refusal before a child starts. The existing input/terminal
-suite and unchanged construction gate passed again. A replacement package and
-final gates are required because the parser implementation changed.
+suite and unchanged construction gate passed again. The replacement package and
+final gates subsequently passed as recorded below.
 
-Final candidate target: `target/linux-release/0.0.1-candidate-public-labels`.
-Its source archive and provenance bind the repaired native source, locked
-providers, verifier and reproduced binaries; its SHA256SUMS and package must
-be checked after preparation. The eight broader journeys, input suite and public-label suite
-must run again as an unprivileged Debian 12 user on those packaged binaries.
-Final check/build results belong in the finish record for
-`plan_01M1W5EPXVEDDTYWFGYKJ8M6TC`, after source edits settle, so recording the
-result does not change the source whose bytes were just verified. The prior
-candidate and hashes below are historical and do not identify the repaired
-binary. No candidate is signed or published by this work.
+### Final verified candidate and results
+
+The completed result is retained in the close event for
+`plan_01M1W5EPXVEDDTYWFGYKJ8M6TC` in `.agent/state/plans.jsonl`, with supporting
+receipts and runs in `.agent/state/`. Both clean offline builds reproduced:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `jury` | `31f65eb8675ba83ccec6b642ed8574298e595efa54a9c76a578ddc32ebe10c35` |
+| `juryd` | `26a6cb7b3e841a6a4f535543611251d92782a16bc5f93a78254fe1c196f3b26c` |
+| `SHA256SUMS` | `532bcf01ce6c245599131ca853cc94b3babb00ff43d85ea50ef1f50bc007c4a4` |
+
+These identify the **unsigned historical candidate**, built from the earlier
+Git baseline plus the repaired working source. They are not signing credentials
+or checksums for every build of version 0.0.1. The local candidate directory was
+`target/linux-release/0.0.1-candidate-public-labels`; ignored local artifacts and
+raw logs may be removed and are not distributed through Git.
+
+The recorded final checks passed:
+
+- Ten journeys as an unprivileged Debian 12 user: witness lifecycle, approval
+  review, descriptor access, role onboarding/recovery, shared witness policies,
+  disjoint witness policies, diagnostics, owner changes, input surfaces, and
+  public-label references.
+- Packaged installation, PATH lookup, version/help and removal; exact deployment
+  files and shipped guide links; HTTPS on the client/witness and witness/anchor
+  links, including untrusted-certificate refusal, receipts, restart and cancellation.
+- All six required Jig gates: verification profile, contract, Rust LOC,
+  formatting, Clippy and workspace tests, with fresh passing evidence at closure.
+- Unchanged construction inputs, 46 current-source J25 measurement cases,
+  four bounded fuzz targets, alternate-provider conformance, and a scoped leak
+  scan whose seeded control was detected and whose actual exact-needle hits were zero.
+- Advisory review of 348 dependencies with no vulnerabilities or warnings,
+  using database commit `5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5`.
+
+These checks establish the stated local behavior and consistency. They are
+neither exhaustive defect discovery nor independent security review. A fresh
+release candidate must repeat the applicable checks; no signed publication is
+claimed by this record.
 
 ## End-user audit before these repairs, 2026-09-06
 
-**Recommendation: hold Linux 0.0.1.** Fresh native command execution found
-QA-14, QA-15 and QA-17 below. They now block J26 in the local tracker. QA-16 is a
-smaller help/UX repair. The previously repaired journeys still pass; their
+**Historical recommendation before the repairs: hold Linux 0.0.1.**
+Fresh native command execution found QA-14, QA-15 and QA-17 below. At that point
+they blocked J26 in the local tracker. QA-16 is a smaller help/UX repair. The previously repaired journeys still pass; their
 success does not cover the newly reproduced cases. No application code or
 repository tests were changed in this audit.
 
