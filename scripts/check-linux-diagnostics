@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Check actionable Linux CLI refusals against real binaries and witnesses."""
+import argparse
+import copy
+import json
+import os
+import time
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import traceback
+
+ROOT = Path(__file__).resolve().parents[1]
+a = runpy.run_path(str(ROOT/'scripts/check-linux-descriptor-access'), run_name='fixture')
+s = a['shared']; Fixture, require = s['Fixture'], s['require']
+
+
+def exercise(f):
+    f.cli(['identity', 'init'], s['PASSPHRASE']+b'\n')
+    f.cli(['vault', 'init'])
+    item = f.cli(['item', 'create', 'ExampleItem', '--allow-direct'])
+    f.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleField', '--value-stdin'], s['VALUE'])
+    directory = f.root/'private'; directory.mkdir(mode=0o700)
+    template, output = directory/'template', directory/'rendered'
+    s['write'](template, b'Example={{ExampleItem.ExampleField}}'); template.chmod(0o664)
+    error = f.cli(['inject', '--direct', '--template', template, '--out', output], expected=1)
+    require(error['error']['code'] == 'unsafe-filesystem-permissions' and 'group/world-writable' in error['error']['message'],
+            'template refusal omitted permission constraint')
+    require(not output.exists(), 'unsafe template published output')
+    template.chmod(0o600)
+    f.cli(['inject', '--direct', '--template', template, '--out', output])
+    require(output.read_bytes() == b'Example='+s['VALUE'], 'safe template produced wrong bytes')
+
+    shared_parent = f.root/'restore-shared'; shared_parent.mkdir(mode=0o700)
+    missing_backup = f.root/'ExampleMissingBackup'
+    result = f.cli(['--home', shared_parent/'vault.json', 'backup', 'restore', '--in', missing_backup,
+                    '--identity-out', shared_parent/'Example.identity.json', '--state-out', shared_parent/'state'], expected=2)
+    require(result['error']['code'] == 'invalid-restore-target' and 'parent' in result['error']['message'],
+            'restore overlap omitted parent-directory constraint')
+    require(not any(shared_parent.iterdir()), 'invalid restore layout created artifacts')
+    for name in ('restore-vault', 'restore-identity', 'restore-state'):
+        (f.root/name).mkdir(mode=0o700)
+    result = f.cli(['--home', f.root/'restore-vault/vault.json', 'backup', 'restore', '--in', missing_backup,
+                    '--identity-out', f.root/'restore-identity/Example.identity.json', '--state-out', f.root/'restore-state'], expected=3)
+    require(result['error']['code'] == 'not-found', 'separate restore parents failed before input lookup')
+
+    forbidden = f.root/'repo/forbidden-drill-vault'
+    result = f.cli(['backup', 'drill', '--in', missing_backup, '--vault-out', forbidden,
+                    '--identity-out', f.root/'restore-identity/ExampleDrill.identity',
+                    '--state-out', f.root/'absent-drill-state'], expected=2)
+    require(result['error']['code'] == 'invalid-restore-target' and 'source vault home or worktree' in result['error']['message'],
+            'drill source boundary omitted from diagnostic')
+    require(not forbidden.exists(), 'invalid drill created output')
+
+    config = json.loads((ROOT/'deploy/juryd/witness.example.json').read_bytes())
+    config['database']['path'] = str(directory/'Example.sqlite3')
+    for name, change, expected in [
+        ('schema', lambda c: c.update(schema=99), 'schema must be 1'),
+        ('path', lambda c: c['database'].update(path='ExampleRelative.sqlite3'), 'database path must be absolute'),
+        ('label', lambda c: c['database']['authority'].update(backup_authority=c['database']['authority']['administration_authority']), 'authority labels must be distinct'),
+        ('document', lambda c: c.update(ExampleUnknownField='ExamplePrivateConfiguration'), 'required JSON fields and types'),
+    ]:
+        candidate = copy.deepcopy(config); change(candidate)
+        path = directory/f'{name}.json'; s['document'](path, candidate)
+        result = subprocess.run([str(f.juryd), 'database', 'init', '--config', str(path)], capture_output=True, timeout=10)
+        require(result.returncode != 0 and expected.encode() in result.stderr,
+                'configuration category missing: '+s['safe_diagnostics'](result.stdout+result.stderr))
+        require(b'ExamplePrivateConfiguration' not in result.stdout+result.stderr and not (directory/'Example.sqlite3').exists(),
+                'invalid configuration leaked contents or created database')
+    valid = directory/'valid.json'; s['document'](valid, config)
+    f.daemon_command(['database', 'init', '--config', valid])
+    require((directory/'Example.sqlite3').exists(), 'valid database configuration failed')
+
+    approver = a['register_approver'](f)
+    actors = [f.register_witness(name, index) for index, name in enumerate(('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    f.cli(['policy', 'require', 'witnessed', '--item', 'ExampleItem',
+           *[v for actor in actors for v in ('--witness', actor['id'])],
+           '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+           '--operation', 'child-environment', '--review-label', 'ExampleItem',
+           '--field-review-label', 'ExampleField=ExampleField', '--request-lifetime', '300'])
+    checkpoint, material = [f.root/'public'/name for name in ('checkpoint.json', 'policy.json')]
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    f.cli(['witness', 'policy-material', '--output', material])
+    endpoints = []
+    for actor in actors:
+        endpoints += ['--witness', f.serve_witness(actor)]
+        status, ack = s['http'](actor['port'], '/v1/operator/register', dict(
+            policy_material=json.loads(material.read_bytes()), checkpoint=json.loads(checkpoint.read_bytes()),
+            accepted_registration=s['base64'].b64encode(actor['proof'].read_bytes()).decode()), 'Operator')
+        require(status == 200 and ack['durability'] == 'witness-database-and-external-anchor-readback', 'registration lacked durability')
+    marker = directory/'unapproved-child'
+    before = (f.root/'repo/.jury/vault.json').read_bytes()
+    for name, timeout, expected in [('excessive', ['--timeout', '31'], 2), ('default', [], 4)]:
+        request, receipt = [f.root/'public'/f'{name}.{suffix}.json' for suffix in ('request', 'receipt')]
+        result = f.cli(['run', '--env', 'EXAMPLE_VALUE=ExampleItem.ExampleField',
+                       '--checkpoint', checkpoint, '--request-out', request, '--receipt', receipt,
+                       '--wait-seconds', '0', '--allow-insecure-loopback', *endpoints, *timeout,
+                       '--', '/usr/bin/touch', marker], expected=expected)
+        if name == 'excessive':
+            require(result['error']['code'] == 'witnessed-timeout-exceeds-policy' and 'omit --timeout' in result['error']['message'], 'timeout refusal omitted next action')
+            require(not request.exists(), 'excessive timeout published request')
+        else:
+            require(result['error']['code'] == 'approval-pending', 'default timeout did not reach approval')
+            artifact = json.loads(request.read_bytes())
+            require(artifact['action_manifest']['timeout_ms'] == 30000, 'default did not use short policy timeout')
+        require(not marker.exists() and not receipt.exists(), 'unapproved run executed child or published success receipt')
+        require((f.root/'repo/.jury/vault.json').read_bytes() == before, 'refused run changed vault')
+    envfile = directory/'exec.env'; s['write'](envfile, b'EXAMPLE_VALUE={{ExampleItem.ExampleField}}\n')
+    for mode in ('run', 'exec'):
+        request, approval, receipt = [f.root/'public'/f'approved-default-{mode}.{suffix}.json' for suffix in ('request', 'approval', 'receipt')]
+        child_pid = directory/f'approved-{mode}-child.pid'
+        command = [str(f.jury), *(['--json'] if mode == 'run' else []), '--passphrase-stdin', mode, *( ['--env', 'EXAMPLE_VALUE=ExampleItem.ExampleField'] if mode == 'run' else ['--env-file', envfile] ),
+                   '--checkpoint', checkpoint, '--request-out', request, '--approval', approval,
+                   '--receipt', receipt, '--allow-insecure-loopback', *endpoints,
+                   '--', '/bin/sh', '-c', 'echo $$ > "$1"; exec sleep 90', 'ExampleChild', child_pid]
+        child = subprocess.Popen(list(map(str, command)), cwd=f.root/'repo', env=f.environment,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            child.stdin.write(s['PASSPHRASE']+b'\n'); child.stdin.close(); child.stdin = None
+            deadline = time.monotonic()+60
+            while not request.exists() and child.poll() is None and time.monotonic()<deadline: time.sleep(.05)
+            require(request.exists(), 'approved default request was not published')
+            a['approve'](f, request, approval, expected_role='BODY')
+            started = time.monotonic()
+            stdout, stderr = child.communicate(timeout=50)
+            require(child.returncode == 1 and not stdout and b'process-timeout' in stderr,
+                    'approved default did not enforce timeout: '+s['safe_diagnostics'](stdout+stderr))
+            require(time.monotonic()-started < 45 and child_pid.exists(), 'approved child did not start or exceeded policy timeout')
+            require(not Path('/proc', child_pid.read_text().strip()).exists(), 'timed-out child survived')
+            require(json.loads(request.read_bytes())['action_manifest']['timeout_ms'] == 30000, 'approved timeout differs from policy default')
+            f.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+        finally:
+            if child.poll() is None: child.kill(); child.wait()
+
+    # Missing operation and excessive output are policy diagnostics, before publication.
+    for name, inputs, options, code, expected in [
+        ('operation', ['--stdin', 'ExampleItem.ExampleField'], [], 'witnessed-operation-not-in-policy', 6),
+        ('output', ['--env', 'EXAMPLE_VALUE=ExampleItem.ExampleField'], ['--output-limit', '9000000'], 'invalid-output-limit', 2),
+    ]:
+        request, receipt = [f.root/'public'/f'{name}.{suffix}.json' for suffix in ('request', 'receipt')]
+        result = f.cli(['run', *inputs, '--checkpoint', checkpoint, '--request-out', request,
+                        '--receipt', receipt, '--wait-seconds', '0', '--allow-insecure-loopback',
+                        *endpoints, *options, '--', '/bin/true'], expected=expected)
+        require(result['error']['code'] == code and not request.exists() and not receipt.exists(),
+                'policy workload diagnostic or publication boundary incorrect: '+name+' '+result['error']['code'])
+
+    # Validate the actual service-start surface, including private-file mistakes.
+    service = actors[0]['directory']
+    current_config = json.loads((service/'witness.json').read_bytes())
+    candidate = directory/'invalid-service.json'
+    for mode in ('permissions', 'missing', 'symlink', 'hardlink', 'bytes'):
+        config = copy.deepcopy(current_config)
+        credential = directory/'ExampleCredential'
+        if credential.exists() or credential.is_symlink(): credential.unlink()
+        if mode == 'symlink': credential.symlink_to(service/'Client.token')
+        elif mode == 'hardlink': os.link(service/'Client.token', credential)
+        elif mode != 'missing':
+            s['write'](credential, b'ExampleInvalidCredential' if mode == 'bytes' else s['TOKENS']['Client'].encode())
+            if mode == 'permissions': credential.chmod(0o644)
+        config['client_credential_file'] = str(credential)
+        s['document'](candidate, config)
+        try:
+            result = subprocess.run([str(f.juryd), 'serve', '--config', str(candidate)], capture_output=True, timeout=10)
+            expected = b'32..=256' if mode == 'bytes' else b'mode 0600'
+            require(result.returncode != 0 and expected in result.stderr,
+                    'service private-file diagnostic missing: '+s['safe_diagnostics'](result.stderr))
+            require(b'ExampleInvalidCredential' not in result.stdout+result.stderr, 'credential bytes leaked')
+        finally:
+            if credential.exists() or credential.is_symlink(): credential.unlink()
+
+    print('Linux diagnostics passed: approved run and exec defaults terminated at the signed policy timeout, service credential refusals, drill boundary,  unsafe/safe template controls, safe configuration categories and valid init, policy-default timeout, excessive timeout before publication, and no unapproved child.')
+
+
+def main():
+    require(sys.platform == 'linux', 'this check requires Linux')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT/'target/release/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT/'target/release/juryd')
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='jury-diagnostics-') as directory:
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try: exercise(fixture)
+        finally: fixture.close()
+
+
+if __name__ == '__main__':
+    try: main()
+    except Exception:
+        print(s['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

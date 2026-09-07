@@ -55,6 +55,23 @@ clients translate their own reference syntax into separate validated item and
 field inputs. Combined URIs, filesystem paths, repository identity, and source
 control authorship are never native names or identifiers.
 
+The CLI's combined reference syntax is `ITEM/FIELD`, including
+`{{ITEM/FIELD}}` in templates and dotenv files. Slash cannot occur in either
+native name, so dotted names remain exact and unambiguous. Legacy `ITEM.FIELD`
+shorthand is accepted only when neither name contains a dot. For example,
+`Example.Group/ExampleField` and `Example/Group.ExampleField` name different
+fields; `Example.Group.ExampleField` is rejected. Commands with separate item
+and field arguments keep those names unchanged.
+
+Owner-authenticated public review labels have their own profile: nonempty
+UTF-8, at most 256 bytes, without ASCII control bytes. Combined CLI references
+can address them using an exact JSON pair, for example
+`["Example Item/Group","Example Field.Token"]`. Templates and dotenv values
+wrap that pair in braces: `{{["Example Item/Group","Example Field.Token"]}}`.
+Quote command-line pairs for the shell. This syntax also represents embedded
+quotes, braces and equals signs without interpreting them as separators; it
+does not normalize labels or change stored names or signed label contents.
+
 The current Serde representations are bounded semantic transport forms, not
 canonical signed encodings. J05 owns the versioned binary preimages used for
 signatures. Item and field names may be serialized only inside encrypted

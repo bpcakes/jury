@@ -26,7 +26,7 @@ use jury_core::{
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy};
 use jury_protocol::{
     identity_v1::IdentityFileV1,
-    vault_v1::{Digest32, PrincipalId, VaultFileV1},
+    vault_v1::{Digest32, PrincipalId},
     witness_v1::{
         ActionManifestV1, ApprovalDecisionKindV1, ApprovalDecisionV1, ApprovalPresentationV1,
         OwnerReviewLabelV1, PolicyMaterialBytes, RegistrationBytes, RequestCancellationV1,

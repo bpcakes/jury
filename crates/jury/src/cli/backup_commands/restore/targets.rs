@@ -51,7 +51,10 @@ pub(super) fn validate_restore_path_layout(layout: RestorePathLayout<'_>) -> Res
         boundaries.extend(source_home.detached_path().map(Path::to_path_buf));
     }
     let boundaries = boundaries.iter().map(PathBuf::as_path).collect::<Vec<_>>();
-    validate_path_separation(&boundaries).map_err(map_filesystem_error)
+    validate_path_separation(&boundaries).map_err(|error| match error.kind() {
+        FilesystemErrorKind::Containment | FilesystemErrorKind::Alias => invalid_restore_target(),
+        _ => map_filesystem_error(error),
+    })
 }
 
 pub(super) fn restore_repository_refs<'a>(

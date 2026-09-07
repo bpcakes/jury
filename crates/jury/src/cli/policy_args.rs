@@ -47,7 +47,7 @@ pub struct PolicyRequireWitnessedArgs {
     /// Active witness principal ID; provide at least two unique values.
     #[arg(long = "witness", value_name = "PRINCIPAL", required = true)]
     pub witnesses: Vec<String>,
-    /// Required approver signatures: 1..=approver count and --review-label, or 0 only for automatic read-stdout with --automatic-read and no approvers or review labels.
+    /// Required approver signatures: 1..=approver count and --review-label, or 0 only for explicitly selected automatic reads with no approvers or review labels.
     #[arg(long, value_name = "COUNT")]
     pub approvals: u16,
     /// Required witness acknowledgements: 2..=the number of --witness values.
@@ -62,9 +62,12 @@ pub struct PolicyRequireWitnessedArgs {
     /// Non-secret FIELD=PUBLIC_LABEL mapping required for governed field-touching operations.
     #[arg(long = "field-review-label", value_name = "FIELD=PUBLIC_LABEL")]
     pub field_review_labels: Vec<String>,
-    /// Permit automatic read-stdout only for this exact private field; may be repeated.
+    /// Permit automatic reads of this exact field plus the item descriptor (name and field metadata); may be repeated. Other body fields remain unauthorized.
     #[arg(long = "automatic-read", value_name = "FIELD")]
     pub automatic_read_fields: Vec<String>,
+    /// Permit automatic reads of the item descriptor only (name and field metadata), without body contents. Also included by --automatic-read FIELD.
+    #[arg(long)]
+    pub automatic_descriptor: bool,
     /// Request lifetime in seconds (1..=900); each operation timeout is limited to this lifetime and never exceeds 30 seconds.
     #[arg(long, value_name = "SECONDS")]
     pub request_lifetime: u64,

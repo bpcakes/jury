@@ -392,49 +392,30 @@ fn validate_checkpoint(
     request: &WitnessRequestV1,
     checkpoint: &VaultPolicyCheckpointV1,
 ) -> Result<(), ReceiptVerificationError> {
+    use crate::checkpoint_validation::{CheckpointPolicyError, validate_checkpoint_policy};
+    let policies = validate_checkpoint_policy(policy, checkpoint).map_err(|error| {
+        invalid(match error {
+            CheckpointPolicyError::Invalid => ReceiptVerificationErrorKind::InvalidFormat,
+            CheckpointPolicyError::ScopeMismatch => ReceiptVerificationErrorKind::InvalidScope,
+            CheckpointPolicyError::MissingOwner => ReceiptVerificationErrorKind::InvalidPolicy,
+            CheckpointPolicyError::InvalidSignature => {
+                ReceiptVerificationErrorKind::InvalidSignature
+            }
+        })
+    })?;
     let checkpoint_digest = checkpoint
         .digest()
         .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidDigest))?;
-    let (approver_set_digest, witness_set_digest) = witness_policy
-        .active_descriptor_set_digests()
-        .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
     if checkpoint_digest != request.policy_checkpoint_digest
         || checkpoint.vault_id != request.vault_id
         || checkpoint.genesis_fingerprint != request.genesis_fingerprint
         || checkpoint.vault_policy_sequence != request.vault_policy_sequence
         || checkpoint.vault_policy_hash != request.vault_policy_hash
-        || checkpoint.witness_policy_id != request.witness_policy_id
-        || checkpoint.witness_policy_revision != request.witness_policy_revision
-        || checkpoint.witness_policy_digest != request.witness_policy_digest
-        || checkpoint.witness_set_digest != witness_set_digest
-        || checkpoint.approver_set_digest != approver_set_digest
-        || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
+        || !policies.contains(&witness_policy)
     {
         return Err(invalid(ReceiptVerificationErrorKind::InvalidScope));
     }
-    let owner = policy
-        .principal(&checkpoint.issuer_owner_id)
-        .filter(|_| policy.is_owner(&checkpoint.issuer_owner_id))
-        .ok_or_else(|| invalid(ReceiptVerificationErrorKind::InvalidPolicy))?;
-    if checkpoint.issuer_key_epoch != 1
-        || checkpoint.issuer_key_fingerprint
-            != signing_key_fingerprint(
-                1,
-                &checkpoint.issuer_owner_id,
-                1,
-                &owner.descriptor.verification_public_key,
-            )
-    {
-        return Err(invalid(ReceiptVerificationErrorKind::InvalidSignature));
-    }
-    crypto::verify_bytes(
-        &owner.descriptor.verification_public_key,
-        &checkpoint
-            .signature_preimage()
-            .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidFormat))?,
-        &checkpoint.signature,
-    )
-    .map_err(|_| invalid(ReceiptVerificationErrorKind::InvalidSignature))
+    Ok(())
 }
 
 fn validate_approvals(

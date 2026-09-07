@@ -334,7 +334,7 @@ pub(super) fn backup_status(
         .backup
         .as_ref()
         .map(|receipt| now.saturating_sub(receipt.timestamp_ms()));
-    let coverage = receipts.backup.as_ref().and_then(BackupReceipt::coverage);
+    let coverage = receipts.backup.as_ref().map(BackupReceipt::coverage);
     let role_names = coverage.map(|coverage| role_names_from_mask(coverage.identity_role_mask));
     let direct_items = coverage.map(|coverage| {
         coverage
@@ -372,19 +372,18 @@ pub(super) fn backup_status(
         create_command.push_str(" --witness-identity-file FILE");
         drill_command.push_str(" --witness-identity-out ABSENT_PATH");
     }
-    let next_command =
-        if receipts.backup.is_none() || creation_state == "stale" || coverage.is_none() {
-            create_command
-        } else if !verified {
-            "jury backup verify --in ABSOLUTE_FILE".to_owned()
-        } else if !drilled {
-            drill_command
-        } else if external_required == Some(true) {
-            "complete the separate J23 witness-service recovery path before witnessed private use"
-                .to_owned()
-        } else {
-            "none".to_owned()
-        };
+    let next_command = if receipts.backup.is_none() || creation_state == "stale" {
+        create_command
+    } else if !verified {
+        "jury backup verify --in ABSOLUTE_FILE".to_owned()
+    } else if !drilled {
+        drill_command
+    } else if external_required == Some(true) {
+        "complete the separate J23 witness-service recovery path before witnessed private use"
+            .to_owned()
+    } else {
+        "none".to_owned()
+    };
     Ok(CommandOutput::Safe {
         operation: "backup-status",
         fields: serde_json::json!({
@@ -570,7 +569,7 @@ fn invalid_restore_target() -> CliError {
     CliError::new(
         CliErrorKind::InvalidArguments,
         "invalid-restore-target",
-        "restore targets must be absolute direct paths in separate custody roots",
+        "use absolute direct restore paths; keep identity parent directories separate from the vault, backup input and local state (different file names are insufficient); drill outputs must also be outside the source vault home or worktree",
     )
 }
 

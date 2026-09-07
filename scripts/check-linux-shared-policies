@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Check shared witness pairs, global checkpoints and strict advances with real Linux CLIs."""
+import argparse
+import base64
+import json
+from pathlib import Path
+import runpy
+import sys
+import tempfile
+import traceback
+import urllib.error
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[1]
+shared = runpy.run_path(str(ROOT / 'scripts/check-linux-witness-lifecycle'), run_name='fixture')
+Fixture, require, document = shared['Fixture'], shared['require'], shared['document']
+PASSPHRASE, VALUE = shared['PASSPHRASE'], shared['VALUE']
+
+
+def refused(actor, route, payload, reason, role='Operator'):
+    request = urllib.request.Request(f"http://127.0.0.1:{actor['port']}{route}",
+        data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + shared['TOKENS'][role]})
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=20):
+            raise RuntimeError('invalid checkpoint/request was accepted')
+    except urllib.error.HTTPError as error:
+        body = json.loads(error.read(8192))
+        require(error.code == 422 and body == {'status': 'refused', 'reason': {'protocol': reason}},
+                'unexpected refusal: ' + shared['safe_diagnostics'](json.dumps(body).encode()))
+
+
+def exercise(f, artifacts, disjoint=False):
+    f.cli(['identity', 'init'], PASSPHRASE + b'\n')
+    f.cli(['vault', 'init'])
+    names = ('ExampleWitnessOne', 'ExampleWitnessTwo', 'ExampleWitnessThree', 'ExampleWitnessFour', 'ExampleWitnessFive', 'ExampleWitnessSix')
+    initial_count = 4 if disjoint else 2
+    all_actors = [f.register_witness(name, index) for index, name in enumerate(names[:initial_count + 2], 1)]
+    actors, joining = all_actors[:initial_count], all_actors[initial_count:]
+    values, item_actors = {}, {}
+    for index, name in enumerate(('ExampleFirst', 'ExampleSecond', 'ExampleThird')):
+        item = f.cli(['item', 'create', name, '--allow-direct'])
+        value = VALUE + name.encode()
+        values[item['item_id']] = value
+        item_actors[item['item_id']] = joining if index == 2 else (actors[index*2:index*2+2] if disjoint else actors)
+        f.cli(['vault', 'field', 'set', name, 'ExampleField', '--value-stdin'], value)
+    empty_checkpoint, empty_material_path = [f.root / 'public' / name for name in ('empty-checkpoint.json', 'empty-policy.json')]
+    empty_result = f.cli(['witness', 'checkpoint', '--output', empty_checkpoint])
+    require(empty_result['active_witness_policy_count'] == 0, 'empty active set was not reported')
+    f.cli(['witness', 'policy-material', '--output', empty_material_path])
+    empty_material = json.loads(empty_material_path.read_bytes())
+    for index, name in enumerate(('ExampleFirst', 'ExampleSecond')):
+        selected = actors[index*2:index*2+2] if disjoint else actors
+        membership = [arg for actor in selected for arg in ('--witness', actor['id'])]
+        f.cli(['policy', 'require', 'witnessed', '--item', name, *membership,
+               '--approvals', '0', '--witness-quorum', '2', '--operation', 'read-stdout',
+               '--automatic-read', 'ExampleField', '--request-lifetime', '300'])
+    checkpoint, material_path = [f.root / 'public' / name for name in ('checkpoint.json', 'policy.json')]
+    checkpoint_result = f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    f.cli(['witness', 'policy-material', '--output', material_path])
+    material = json.loads(material_path.read_bytes())
+    require(checkpoint_result['active_witness_policy_count'] == 2, 'checkpoint policy count is not exact')
+    require(len(material['witness_policies']) == 2, 'fixture did not create two independent policies')
+    targets = [next(target for target in policy['operation_rules'][0]['automatic_read_targets']
+                    if target['field_id'] is not None) for policy in material['witness_policies']]
+    endpoints, ack_paths = {}, []
+    for actor in actors:
+        endpoints[actor['id']] = f.serve_witness(actor)
+        refused(actor, '/v1/operator/register', {'policy_material': empty_material,
+                'checkpoint': json.loads(empty_checkpoint.read_bytes()),
+                'accepted_registration': base64.b64encode(actor['proof'].read_bytes()).decode()}, 'policy-denied')
+        payload = {'policy_material': material, 'checkpoint': json.loads(checkpoint.read_bytes()),
+                   'accepted_registration': base64.b64encode(actor['proof'].read_bytes()).decode()}
+        status, response = shared['http'](actor['port'], '/v1/operator/register', payload, 'Operator')
+        require(status == 200 and response['durability'] == 'witness-database-and-external-anchor-readback',
+                'shared-pair registration was not durable')
+        ack_path = f.root / 'public' / f"{actor['name']}.ack.json"
+        document(ack_path, response['acknowledgement'])
+        ack_paths.append(ack_path)
+    status_args = ['witness', 'policy-status', '--policy-material', material_path, '--checkpoint', checkpoint]
+    for count, phase in ((0, 'proposed'), (1, 'partially-propagated'), (len(actors), 'durably-accepted')):
+        result = f.cli([*status_args, *[arg for path in ack_paths[:count] for arg in ('--acknowledgement', path)]])
+        require(result['phase'] == phase and result['expected_witness_count'] == len(actors)
+                and result['acknowledged_witness_count'] == count, 'shared witnesses were double-counted')
+    initial_artifacts = {path.name: path.read_bytes() for path in (checkpoint, material_path, *ack_paths)}
+    def routed(target):
+        return [arg for actor in item_actors[target['item_id']] for arg in ('--witness', endpoints[actor['id']])]
+
+    stale_request = f.root / 'public/ExampleStale.request.json'
+    for index, target in enumerate(targets):
+        args = ['--item-id', target['item_id'], '--field-id', target['field_id'], '--checkpoint', checkpoint]
+        request, receipt = [f.root / 'public' / f'Example{index}.{kind}.json' for kind in ('request', 'receipt')]
+        result = f.cli(['read', *args, '--request-out', request, '--receipt', receipt,
+                       *routed(target), '--allow-insecure-loopback', '--reveal'], json_output=False)
+        require(result.stdout == values[target['item_id']] and VALUE not in result.stderr,
+                'shared-pair read returned wrong item bytes or leaked its value in diagnostics')
+        f.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+        if index == 0:
+            f.cli(['request', 'create', *args, '--out', stale_request])
+            if disjoint:
+                wrong_actor = next(actor for actor in actors if actor not in item_actors[target['item_id']])
+                status_before = shared['http'](wrong_actor['port'], '/v1/operator/status', role='Operator')
+                wrong = json.loads(stale_request.read_bytes())
+                refused(wrong_actor, '/v1/requests/reserve', {'request': wrong['request'],
+                        'manifest': wrong['action_manifest']}, 'policy-denied', 'Client')
+                require(shared['http'](wrong_actor['port'], '/v1/operator/status', role='Operator') == status_before,
+                        'other-policy request changed the witness state')
+    sibling = f.root / 'public/ExampleSibling.checkpoint.json'
+    f.cli(['witness', 'checkpoint', '--output', sibling])
+    for actor in actors:
+        refused(actor, '/v1/operator/checkpoint', {'policy_material': material,
+                'checkpoint': json.loads(sibling.read_bytes())}, 'checkpoint-fork')
+    # Activate the previously direct third item in one signed revision.
+    # Existing policies and the new policy must all use the next checkpoint.
+    membership = [arg for actor in joining for arg in ('--witness', actor['id'])]
+    f.cli(['policy', 'require', 'witnessed', '--item', 'ExampleThird', *membership,
+           '--approvals', '0', '--witness-quorum', '2', '--operation', 'read-stdout',
+           '--automatic-read', 'ExampleField', '--request-lifetime', '300'])
+    following, next_material_path = [f.root / 'public' / name for name in ('next-checkpoint.json', 'next-policy.json')]
+    next_result = f.cli(['witness', 'checkpoint', '--predecessor', checkpoint, '--output', following])
+    require(next_result['policy_sequence'] == checkpoint_result['policy_sequence'] + 1, 'mutation skipped a revision')
+    require(next_result['active_witness_policy_set_digest'] != checkpoint_result['active_witness_policy_set_digest'],
+            'newly active item policy did not change the committed set')
+    f.cli(['witness', 'policy-material', '--output', next_material_path])
+    next_material = json.loads(next_material_path.read_bytes())
+    require(len(next_material['witness_policies']) == 3, 'new item policy was not included')
+    targets = [next(target for target in policy['operation_rules'][0]['automatic_read_targets']
+                    if target['field_id'] is not None) for policy in next_material['witness_policies']]
+    next_acks = []
+    for actor in actors:
+        payload = {'policy_material': next_material, 'checkpoint': json.loads(following.read_bytes())}
+        status, first = shared['http'](actor['port'], '/v1/operator/checkpoint', payload, 'Operator')
+        status_again, again = shared['http'](actor['port'], '/v1/operator/checkpoint', payload, 'Operator')
+        require(status == status_again == 200 and first == again, 'checkpoint advance retry was not exact/idempotent')
+        next_acks.append(first['acknowledgement'])
+        refused(actor, '/v1/operator/checkpoint', {'policy_material': material,
+                'checkpoint': json.loads(checkpoint.read_bytes())}, 'stale-policy')
+        stale = json.loads(stale_request.read_bytes())
+        refused(actor, '/v1/requests/reserve', {'request': stale['request'], 'manifest': stale['action_manifest']},
+                'stale-policy', 'Client')
+        f.stop(actor['process'])
+        actor['process'] = f.start(['serve', '--config', actor['directory'] / 'witness.json'], actor['port'])
+    for actor in joining:
+        endpoints[actor['id']] = f.serve_witness(actor)
+        proof = base64.b64encode(actor['proof'].read_bytes()).decode()
+        refused(actor, '/v1/operator/register', {'policy_material': material,
+                'checkpoint': json.loads(checkpoint.read_bytes()), 'accepted_registration': proof}, 'policy-denied')
+        payload = {'policy_material': next_material, 'checkpoint': json.loads(following.read_bytes()),
+                   'accepted_registration': proof}
+        status, first = shared['http'](actor['port'], '/v1/operator/register', payload, 'Operator')
+        status_again, again = shared['http'](actor['port'], '/v1/operator/register', payload, 'Operator')
+        require(status == status_again == 200 and first == again,
+                'new witness could not durably join the existing checkpoint chain with exact retry')
+        next_acks.append(first['acknowledgement'])
+        replacement = dict(payload, checkpoint=json.loads(sibling.read_bytes()), policy_material=material)
+        refused(actor, '/v1/operator/register', replacement, 'policy-denied')
+        f.stop(actor['process'])
+        actor['process'] = f.start(['serve', '--config', actor['directory'] / 'witness.json'], actor['port'])
+    joined_sibling = f.root / 'public/ExampleJoinedSibling.checkpoint.json'
+    f.cli(['witness', 'checkpoint', '--predecessor', checkpoint, '--output', joined_sibling])
+    for actor in all_actors:
+        before = shared['http'](actor['port'], '/v1/operator/status', role='Operator')
+        refused(actor, '/v1/operator/register', {'policy_material': next_material,
+                'checkpoint': json.loads(joined_sibling.read_bytes()),
+                'accepted_registration': base64.b64encode(actor['proof'].read_bytes()).decode()}, 'checkpoint-fork')
+        refused(actor, '/v1/operator/checkpoint', {'policy_material': material,
+                'checkpoint': json.loads(checkpoint.read_bytes())}, 'stale-policy')
+        require(shared['http'](actor['port'], '/v1/operator/status', role='Operator') == before,
+                're-registration fork or rollback changed durable state')
+    next_ack_args = []
+    for index, ack in enumerate(next_acks):
+        path = f.root / 'public' / f'ExampleNext{index}.ack.json'
+        document(path, ack)
+        next_ack_args.extend(['--acknowledgement', path])
+    propagation = f.cli(['witness', 'policy-status', '--policy-material', next_material_path,
+                         '--checkpoint', following, *next_ack_args])
+    require(propagation['phase'] == 'durably-accepted'
+            and propagation['expected_witness_count'] == len(all_actors)
+            and propagation['acknowledged_witness_count'] == len(all_actors),
+            'joined witness union did not verify exactly')
+    for index, target in enumerate(targets):
+        request, receipt = [f.root / 'public' / f'ExampleNext{index}.{kind}.json' for kind in ('request', 'receipt')]
+        result = f.cli(['read', '--item-id', target['item_id'], '--field-id', target['field_id'],
+                       '--checkpoint', following, '--request-out', request, '--receipt', receipt,
+                       *routed(target), '--allow-insecure-loopback', '--reveal'], json_output=False)
+        require(result.stdout == values[target['item_id']] and VALUE not in result.stderr,
+                'advanced shared-pair read returned wrong item bytes or leaked its value in diagnostics')
+        f.cli(['receipt', 'verify', receipt, '--checkpoint', following])
+    if artifacts is not None:
+        artifacts.mkdir(mode=0o700)
+        for name, contents in initial_artifacts.items():
+            shared['write'](artifacts / name, contents)
+    print('Real Linux multi-policy checks passed:', 'disjoint pairs;' if disjoint else 'shared pair;', 'two policies then a third with a new witness pair, one vault checkpoint, exact reads/receipts, unique propagation counts, signed sibling and rollback refusal, strict advance/idempotency, stale request refusal and restart.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT / 'target/release/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT / 'target/release/juryd')
+    parser.add_argument('--disjoint', action='store_true', help='Use a separate witness pair for each policy')
+    parser.add_argument('--public-artifacts', type=Path, help='Optional absent directory for verified public fixture inputs')
+    args = parser.parse_args()
+    require(sys.platform == 'linux', 'requires Linux')
+    with tempfile.TemporaryDirectory(prefix='jury-shared-policies-') as directory:
+        f = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try:
+            exercise(f, args.public_artifacts, args.disjoint)
+        finally:
+            f.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print(shared['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

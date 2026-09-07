@@ -38,13 +38,22 @@ pub(super) fn request_create(
 ) -> Result<CommandOutput, CliError> {
     let context = load_vault_principal(cli, environment, current, protection)?;
     let checkpoint = read_checkpoint(&arguments.checkpoint)?;
-    let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
+    let review_labels = if arguments.item_id.is_some() && arguments.field_id.is_some() {
+        Vec::new()
+    } else {
+        active_review_labels(&context)?
+    };
     let (item_id, field_id) = resolve_request_target(
         &review_labels,
         arguments.item.as_deref(),
         arguments.item_id.as_deref(),
         arguments.field.as_deref(),
         arguments.field_id.as_deref(),
+    )?;
+    let review_labels = review_labels_for_item(
+        &context,
+        &item_id,
+        jury_protocol::vault_v1::ContentRole::Body,
     )?;
     let now_ms = timestamp_ms()?;
     let prepared = WitnessRequestCreator::new(protection)
@@ -58,7 +67,14 @@ pub(super) fn request_create(
             },
             read_action(item_id, field_id, None)?,
         )
-        .map_err(|_| invalid_request_artifact())?;
+        .map_err(|error| match error.kind() {
+            jury_core::witness_client::WitnessRequestErrorKind::WrongIdentity => CliError::new(
+                CliErrorKind::AccessDenied,
+                "request-not-authorized",
+                "the current principal does not have authority to request this item",
+            ),
+            _ => invalid_request_artifact(),
+        })?;
     let request_digest = prepared
         .request
         .digest()
@@ -200,7 +216,11 @@ pub(super) fn request_execute(
     let receipt_destination = prepare_witness_receipt_destination(&arguments.receipt)?;
     let context = load_vault_principal(cli, environment, current, protection)?;
     let checkpoint = read_checkpoint(&arguments.checkpoint)?;
-    let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
+    let review_labels = if arguments.item_id.is_some() && arguments.field_id.is_some() {
+        Vec::new()
+    } else {
+        active_review_labels(&context)?
+    };
     let (item_id, field_id) = resolve_request_target(
         &review_labels,
         arguments.item.as_deref(),
@@ -258,6 +278,7 @@ pub(super) fn request_execute(
             ],
         })
     } else {
+        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: witnessed-approved");
         eprintln!("Receipt: {}", arguments.receipt.display());
         eprintln!("{}", VerifiedWitnessReceipt::NONCLAIM);
@@ -346,7 +367,11 @@ fn collect_witness_authorization_with_checkpoint(
             "approval wait must not exceed 900 seconds",
         ));
     }
-    let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
+    let review_labels = review_labels_for_item(
+        context,
+        &action.item_id,
+        jury_protocol::vault_v1::ContentRole::Body,
+    )?;
     let prepared = WitnessRequestCreator::new(protection)
         .create_action(
             WitnessRequestContext {
@@ -359,6 +384,25 @@ fn collect_witness_authorization_with_checkpoint(
             action,
         )
         .map_err(|_| invalid_request_artifact())?;
+    collect_prepared_witness_authorization(context, prepared, endpoints, files, checkpoint, None)
+}
+
+pub(super) fn collect_prepared_witness_authorization(
+    context: &VaultPrincipalContext,
+    prepared: jury_core::witness_client::PreparedWitnessRequest,
+    endpoints: &[WitnessEndpointClient],
+    files: &WitnessActionFiles<'_>,
+    checkpoint: VaultPolicyCheckpointV1,
+    deadline: Option<std::time::Instant>,
+) -> Result<CollectedWitnessAuthorization, CliError> {
+    if files.wait_seconds > 900 {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "invalid-approval-wait",
+            "approval wait must not exceed 900 seconds",
+        ));
+    }
+    check_authorization_deadline(deadline)?;
     validate_endpoint_set(endpoints, &prepared.request)?;
     let artifact = WitnessRequestArtifactV1 {
         schema: 1,
@@ -372,6 +416,7 @@ fn collect_witness_authorization_with_checkpoint(
     let mut responses = Vec::new();
     let mut failure_status = None;
     for endpoint in endpoints {
+        check_authorization_deadline(deadline)?;
         match endpoint.reserve(&prepared.request, &prepared.manifest) {
             Ok(progress) => {
                 if let Some(response) = progress.response {
@@ -386,8 +431,10 @@ fn collect_witness_authorization_with_checkpoint(
         &artifact,
         files.approvals,
         files.wait_seconds,
+        deadline,
     )?;
     for endpoint in endpoints {
+        check_authorization_deadline(deadline)?;
         match endpoint.decide(&prepared.request, &prepared.manifest, &approvals) {
             Ok(progress) => {
                 if let Some(response) = progress.response {
@@ -413,6 +460,42 @@ pub(super) fn open_witnessed_body(
     item_id: ItemId,
     authorization: &mut CollectedWitnessAuthorization,
 ) -> Result<jury_protocol::vault_v1::ItemStateV1, CliError> {
+    open_witnessed_content(
+        context,
+        item_id,
+        authorization,
+        ContentRole::Body,
+        |access| access.open_body().map_err(|_| invalid_request_artifact()),
+    )
+}
+
+pub(super) fn open_witnessed_descriptor(
+    context: &VaultPrincipalContext,
+    item_id: ItemId,
+    authorization: &mut CollectedWitnessAuthorization,
+) -> Result<ItemDescriptorV1, CliError> {
+    open_witnessed_content(
+        context,
+        item_id,
+        authorization,
+        ContentRole::Descriptor,
+        |access| {
+            access
+                .open_descriptor()
+                .map_err(|_| invalid_request_artifact())
+        },
+    )
+}
+
+fn open_witnessed_content<T>(
+    context: &VaultPrincipalContext,
+    item_id: ItemId,
+    authorization: &mut CollectedWitnessAuthorization,
+    content_role: ContentRole,
+    consume: impl FnOnce(
+        &mut jury_core::access_provider::ScopedRevisionAccess<'_>,
+    ) -> Result<T, CliError>,
+) -> Result<T, CliError> {
     let envelope = context
         .vault
         .items
@@ -424,7 +507,7 @@ pub(super) fn open_witnessed_body(
         &context.policy,
         envelope,
         context.identity.principal_id(),
-        ContentRole::Body,
+        content_role,
         capability,
     )
     .map_err(|_| invalid_request_artifact())?;
@@ -443,9 +526,7 @@ pub(super) fn open_witnessed_body(
         &authorization.prepared.session,
         timestamp_ms()?,
     );
-    let outcome = provider.access_revision(access_request, |access| {
-        access.open_body().map_err(|_| invalid_request_artifact())
-    });
+    let outcome = provider.access_revision(access_request, consume);
     let counted_responses = provider.counted_responses();
     match outcome {
         Ok(ItemAccessOutcome::Complete {
@@ -535,3 +616,4 @@ pub(super) fn prepare_witness_receipt_destination(
 }
 
 include!("request_commands/support.rs");
+mod approval_summary;

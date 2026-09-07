@@ -15,6 +15,7 @@ const MAX_PASSPHRASE_BYTES: usize = 1_024;
 pub enum SecretInputError {
     NonInteractiveRequiresOptIn,
     InputUnavailable,
+    InputExhausted,
     InputTooLong,
     ProtectionUnavailable,
     ConfirmationMismatch,
@@ -25,9 +26,10 @@ impl fmt::Display for SecretInputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NonInteractiveRequiresOptIn => {
-                "non-terminal passphrase input requires --passphrase-stdin"
+                "supply every passphrase and confirmation on stdin in prompt order with --passphrase-stdin; this overrides all inherited passphrase variables"
             }
             Self::InputUnavailable => "passphrase input is unavailable",
+            Self::InputExhausted => "stdin ended before every required passphrase and confirmation was supplied",
             Self::InputTooLong => "passphrase input exceeds its byte bound",
             Self::ProtectionUnavailable => "protected passphrase memory is unavailable",
             Self::ConfirmationMismatch => "passphrase confirmation differs",
@@ -82,14 +84,6 @@ impl CapturedPassphrase {
     }
 }
 
-pub fn capture(
-    policy: ProtectionPolicy,
-    passphrase_stdin: bool,
-    confirmation: bool,
-) -> Result<CapturedPassphrase, SecretInputError> {
-    capture_named(policy, passphrase_stdin, confirmation, "Passphrase")
-}
-
 pub fn capture_named(
     policy: ProtectionPolicy,
     passphrase_stdin: bool,
@@ -108,6 +102,7 @@ pub fn capture_named_or_environment(
 ) -> Result<CapturedPassphrase, SecretInputError> {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
+    // Refuse a known-missing source before establishing process protections.
     if source.is_none() && !terminal && !passphrase_stdin {
         return Err(SecretInputError::NonInteractiveRequiresOptIn);
     }
@@ -116,7 +111,10 @@ pub fn capture_named_or_environment(
     // first secret byte is accepted from the terminal or pipe.
     let process_status = establish_process_protection(policy)?;
 
-    if let Some(source) = source {
+    // Explicit stdin selection owns the complete passphrase/value stream.
+    // Consuming an environment value here would leave the passphrase line
+    // behind for a later field, backup, or identity input consumer.
+    if !passphrase_stdin && let Some(source) = source {
         if let Some(value) = source.provided {
             return capture_provided(policy, value, process_status);
         }
@@ -223,12 +221,40 @@ fn read_one(
             .flush()
             .map_err(|_| SecretInputError::InputUnavailable)?;
     }
-    let result = read_secret_line(&mut stdin.lock(), policy);
+    // Never put a passphrase (or bytes belonging to a later exec child) in
+    // std's process-global stdin buffer. Read exactly through this newline.
+    let result = read_secret_line(&mut RawStdin, policy);
     drop(echo);
     if terminal {
         eprintln!();
     }
     result
+}
+
+struct RawStdin;
+
+impl io::Read for RawStdin {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        rustix::io::read(io::stdin(), bytes).map_err(Into::into)
+    }
+}
+
+/// Public approval/genesis input must also avoid buffering a later passphrase.
+pub(crate) fn read_confirmation_line() -> Result<Zeroizing<String>, SecretInputError> {
+    use io::{BufRead as _, Read as _};
+    let mut line = Zeroizing::new(String::new());
+    let mut reader = io::BufReader::with_capacity(1, RawStdin.take(1_025));
+    if reader
+        .read_line(&mut line)
+        .map_err(|_| SecretInputError::InputUnavailable)?
+        == 0
+    {
+        return Err(SecretInputError::InputUnavailable);
+    }
+    if line.len() > 1_024 {
+        return Err(SecretInputError::InputTooLong);
+    }
+    Ok(line)
 }
 
 fn read_secret_line(
@@ -238,9 +264,9 @@ fn read_secret_line(
     let mut input = StackSecret::new();
     let mut overflow = false;
     loop {
-        let mut byte = [0_u8; 1];
-        match reader.read(&mut byte) {
-            Ok(0) if input.len == 0 => return Err(SecretInputError::InputUnavailable),
+        let mut byte = Zeroizing::new([0_u8; 1]);
+        match reader.read(byte.as_mut_slice()) {
+            Ok(0) if input.len == 0 => return Err(SecretInputError::InputExhausted),
             Ok(0) => break,
             Ok(_) if byte[0] == b'\n' => break,
             Ok(_) if input.len < MAX_PASSPHRASE_BYTES => {

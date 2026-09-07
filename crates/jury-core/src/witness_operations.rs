@@ -127,14 +127,22 @@ pub fn verify_checkpoint_propagation(
     acknowledgements: &[WitnessCheckpointAcknowledgementV1],
 ) -> Result<CheckpointPropagationStatus, CheckpointStatusError> {
     let checkpoint_digest = validate_checkpoint(policy, checkpoint)?;
-    let witness_policy = policy
-        .witness_policy(&checkpoint.witness_policy_digest)
-        .ok_or_else(|| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
-    let expected = witness_policy
-        .witness_descriptors
+    let policies = policy
+        .active_witness_policies()
+        .map_err(|_| invalid(CheckpointStatusErrorKind::InvalidCheckpoint))?;
+    let mut by_id = std::collections::BTreeMap::new();
+    for descriptor in policies
         .iter()
+        .flat_map(|policy| &policy.witness_descriptors)
         .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
-        .collect::<Vec<_>>();
+    {
+        if let Some(prior) = by_id.insert(descriptor.witness_id, descriptor)
+            && prior != descriptor
+        {
+            return Err(invalid(CheckpointStatusErrorKind::InvalidCheckpoint));
+        }
+    }
+    let expected = by_id.into_values().collect::<Vec<_>>();
     let mut observed = BTreeSet::new();
     let mut verified = Vec::with_capacity(acknowledgements.len());
     for acknowledgement in acknowledgements {
@@ -144,7 +152,8 @@ pub fn verify_checkpoint_propagation(
         if acknowledgement.vault_id != checkpoint.vault_id
             || acknowledgement.checkpoint_digest != checkpoint_digest
             || acknowledgement.vault_policy_sequence != checkpoint.vault_policy_sequence
-            || acknowledgement.witness_policy_digest != checkpoint.witness_policy_digest
+            || acknowledgement.active_witness_policy_set_digest
+                != checkpoint.active_witness_policy_set_digest
         {
             return Err(invalid(CheckpointStatusErrorKind::InvalidAcknowledgement));
         }
@@ -354,8 +363,14 @@ pub fn verify_witness_recovery(
         || recovery.next_checkpoint_digest != next_checkpoint_digest
         || recovery.new_registration_digest != registration_digest
         || next_checkpoint.predecessor_checkpoint_digest != prior_checkpoint_digest
-        || next_checkpoint.witness_policy_digest != rotation.next_witness_policy_digest
-        || prior_checkpoint.witness_policy_digest != rotation.prior_witness_policy_digest
+        || !next
+            .active_witness_policies()
+            .map_err(|_| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?
+            .contains(&next_policy)
+        || !prior
+            .active_witness_policies()
+            .map_err(|_| rotation_error(RotationVerificationErrorKind::UnsafeRecovery))?
+            .contains(&prior_policy)
         || !descriptor_matches
         || !old_is_retired
         || recovery.owner_id != rotation.owner_id

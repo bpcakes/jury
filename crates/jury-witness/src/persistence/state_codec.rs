@@ -3,7 +3,6 @@ use std::io;
 use jury_core::witness_engine::{PersistedWitnessState, WitnessStoreError};
 use serde::Serialize;
 
-use super::MAX_PERSISTED_WITNESS_STATE_BYTES;
 use crate::{AdapterError, AdapterErrorKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +48,7 @@ impl io::Write for BoundedJsonWriter {
 pub(super) fn encode_persisted_state(
     state: &PersistedWitnessState,
 ) -> Result<Vec<u8>, StateCodecError> {
-    encode_json_bounded(state, MAX_PERSISTED_WITNESS_STATE_BYTES)
+    super::persisted_json::encode(state)
 }
 
 pub(super) fn encode_json_bounded(

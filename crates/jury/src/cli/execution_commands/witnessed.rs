@@ -3,7 +3,7 @@ fn execute_witnessed_prepared(
     environment: &Environment,
     current: &Path,
     protection: ProtectionPolicy,
-    prepared: PreparedExecution,
+    mut prepared: PreparedExecution,
     files: WitnessExecutionFiles<'_>,
 ) -> Result<CommandOutput, CliError> {
     use jury_protocol::vault_v1::BoundedBytes;
@@ -53,8 +53,7 @@ fn execute_witnessed_prepared(
         ));
     }
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let checkpoint = read_checkpoint(checkpoint_path)?;
-    let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
+    let review_labels = active_review_labels(&context)?;
     let mut target_ids = BTreeMap::new();
     for reference in &references {
         let target = resolve_request_target(
@@ -141,6 +140,31 @@ fn execute_witnessed_prepared(
                 .map_err(|_| invalid_execution_arguments())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let policy_operation = if has_stdin {
+        WitnessOperation::ChildStdin
+    } else {
+        WitnessOperation::ChildEnvironment
+    };
+    let rule = context.policy.witness_access_rule(&item_id, policy_operation)
+        .map_err(|_| CliError::new(
+            CliErrorKind::AccessDenied,
+            "witnessed-operation-not-in-policy",
+            "the current item policy does not authorize this child operation; child-stdin and child-environment require separate policy rules",
+        ))?;
+    if files.use_policy_timeout {
+        prepared.timeout = Some(Duration::from_millis(
+            rule.max_timeout_ms.min(1_800_000),
+        ));
+        prepared.manifest_digest = manifest_digest(
+            prepared.mode,
+            &prepared.command,
+            &prepared.environment,
+            &prepared.files,
+            prepared.stdin.as_ref(),
+            prepared.timeout,
+            prepared.output_limit,
+        )?;
+    }
     let timeout_ms = prepared
         .timeout
         .map(|timeout| {
@@ -148,8 +172,30 @@ fn execute_witnessed_prepared(
         })
         .transpose()?
         .unwrap_or(0);
+    if timeout_ms > rule.max_timeout_ms {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "witnessed-timeout-exceeds-policy",
+            "the child timeout exceeds the witnessed policy limit; omit --timeout for a policy-bounded default or select a smaller value",
+        ));
+    }
     let output_limit_bytes =
         u32::try_from(prepared.output_limit).map_err(|_| invalid_execution_arguments())?;
+    if output_limit_bytes > rule.max_output_bytes {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "witnessed-output-limit-exceeds-policy",
+            "the requested output limit exceeds the witnessed policy limit; lower --output-limit or ask the owner to revise the policy",
+        ));
+    }
+    let target_count = if has_stdin { 1 } else { field_ids.len() + 1 };
+    if target_count > usize::from(rule.max_target_count) {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "witnessed-target-count-exceeds-policy",
+            "the child request includes more targets than the witnessed policy allows; use fewer distinct fields or ask the owner to revise the policy",
+        ));
+    }
     let action = WitnessActionRequest {
         item_id,
         field_ids,

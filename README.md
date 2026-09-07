@@ -62,6 +62,9 @@ registered principals, policy, checkpoints, and configured witness endpoints.
 See the [self-hosting guide](docs/self-hosting-juryd.md) for witness setup and
 the [recovery guide](docs/recovery.md) for an `ExampleVault` recovery drill.
 
+For the unsigned 0.0.1 package recipe, tested Linux baseline, installation and
+release requirements, see [Linux release preparation](docs/linux-release.md).
+
 ## What the Linux CLI implements
 
 The native Linux CLI currently handles:
@@ -79,7 +82,34 @@ The native Linux CLI currently handles:
 - owner backup creation, full verification, absent-target restore, and real recovery drills;
 - public history and capacity status.
 
+For piped field input, `--passphrase-stdin` consumes the identity passphrase
+line first and stores only the remaining bytes as the field value. It overrides
+all inherited passphrase environment variables, including backup and new-identity
+variables: supply every requested passphrase and confirmation in prompt order.
+With a terminal attached it still selects stdin and waits for hidden input,
+even if an environment variable was previously sufficient. Unattended jobs
+should use a pipe with the full input sequence or omit the flag and configure
+every required environment source; do not allocate a terminal expecting the
+flag to use environment values.
+Without that flag, a configured `JURY_IDENTITY_PASSPHRASE` consumes no stdin;
+provide only the intended field bytes. Do not mix these input layouts.
+
+`JURY_IDENTITY_PASSPHRASE` authenticates the existing identity for vault init,
+audit verification, identity public/prove, and other authenticated commands.
+`JURY_NEW_PASSPHRASE` supplies the new passphrase for identity init, passphrase
+changes, and restored identities. Without those sources, the CLI prompts and
+confirms new passphrases. Keep passphrases out of command arguments and shell history.
+
+At a terminal, `jury vault field set ITEM FIELD` reads hidden input, with or
+without `--value-stdin`. Ctrl-D finishes immediately without adding a newline;
+Enter adds a newline to the stored value. Backspace erases one byte on the
+current line; Ctrl-U clears that line. Ctrl-C cancels without saving and restores
+terminal settings. For exact binary bytes, pipe input with `--value-stdin`.
+
 Representative commands:
+
+For grants and revocations that include witnessed-only items, see
+[changing vault owners](docs/owner-changes.md).
 
 ```console
 $ jury identity init
@@ -97,7 +127,7 @@ $ jury policy require witnessed --item ExampleItem \
     --operation template-injection --operation child-environment \
     --review-label ExampleItem \
     --field-review-label ExampleField=ExampleField --request-lifetime 300
-$ jury witness checkpoint --item-id ITEM_ID \
+$ jury witness checkpoint \
     --output /absolute/public/path/ExampleCheckpoint.json
 $ jury request create --item ExampleItem --field ExampleField \
     --checkpoint /absolute/public/path/ExampleCheckpoint.json \
@@ -206,12 +236,35 @@ owned by the recipient. Both `principal add` and `principal replace` require
 the selected descriptor against the candidate descriptor authenticated by the
 proof.
 
+New fields created with `jury vault field set` are concealed by default.
+Updating a field preserves its existing classification unless you specify
+`--concealed` or `--unconcealed`. Use `--unconcealed` only when that field's
+value may appear in child output; its stored value remains encrypted. Existing
+fields are not reclassified automatically. Inspect them with `jury vault field list`.
+Concealed values must contain at least four bytes; shorter public values require
+`--unconcealed`.
+
 In explicit `--direct` mode, `jury exec` inherits the ordinary environment and
-stdin, removes every `JURY_*` variable, and redacts the child's stdout and
-stderr independently.
-`jury run` starts with a small environment allowlist, an explicit timeout, and
-bounded output capture. Both commands resolve and authorize every
-`Item.Field` reference before starting a child. They support protected stdin
+stdin, removes every `JURY_*` variable, and filters supplied concealed field
+values and supported encodings from the child's stdout and stderr independently.
+Unconcealed fields pass through. Redaction cannot guarantee coverage of arbitrary
+encodings or transformations and does not prevent an authorized child from
+retaining or transmitting plaintext.
+`jury run` starts with a small environment allowlist and bounded output capture.
+Without `--timeout`, runs use 1,800 seconds, reduced to the witnessed policy
+limit when smaller. Witnessed `exec` uses the same policy-bounded default;
+transparent direct `exec` remains unbounded. Explicit timeouts above the witnessed policy
+limit are refused before publishing a request. Both commands resolve and authorize every
+`Item/Field` reference before starting a child. Templates use `{{Item/Field}}`.
+The slash separates exact names even when either contains dots: for example,
+`{{Example.Group/ExampleField}}` differs from `{{Example/Group.ExampleField}}`.
+Legacy `Item.Field` shorthand remains valid only when neither name contains a
+dot; multi-dot shorthand is rejected. For public review labels outside the
+native name profile, use a JSON pair such as `'["Example Item","Example Field"]'`
+as the reference, or `{{["Example Item","Example Field"]}}` inside a template
+or dotenv value. JSON escaping preserves exact labels containing quotes,
+braces, dots, slashes, spaces, or Unicode. This input syntax does not require
+the `--json` output option. Both commands support protected stdin
 and sealed anonymous-file delivery, and they own the Linux process group
 through cleanup.
 
@@ -329,3 +382,16 @@ See the [licensing guide](docs/open-source.md), [copyright and third-party
 notice](NOTICE.md), and [contribution requirements](CONTRIBUTING.md). Licensing
 permission does not change Jury's pre-alpha status or make it suitable for real
 secrets.
+
+For a complete synthetic registration and approval journey, follow the
+[Linux witness operator walkthrough](docs/witness-operator-walkthrough.md).
+
+For scripts, `--json` makes command results and parser/domain failures JSON;
+failures are one object on stderr with a nonzero exit status. `--json` is a
+standalone flag and does not accept `=true` or `=false`; malformed `--json=…`
+also selects JSON for its error. Parser failures
+use `invalid-arguments` without echoing supplied values. Place `--json` before
+the `--` child-argument separator. Explicit `--help` and `--version` remain
+human-readable informational output with exit status 0. Plaintext/child stdout
+remains the requested byte stream; notices for those streaming commands use
+stderr. Human-readable metadata commands include their notice on stdout.

@@ -564,6 +564,7 @@ fn set_example_field(paths: NativePaths<'_>) -> TestResult {
             "set",
             "ExampleItem",
             "ExampleField",
+            "--unconcealed",
             "--value-stdin",
         ],
         b"ExamplePass1234\nExampleValue",

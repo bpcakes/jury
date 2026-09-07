@@ -37,6 +37,20 @@ pub(crate) struct ValidatedRequestPolicy {
     pub(crate) slot: WitnessedSlotV1,
 }
 
+pub(crate) fn validate_manifest_policy(
+    policy: &PolicyState,
+    request: &WitnessRequestV1,
+    manifest: &jury_protocol::witness_v1::ActionManifestV1,
+) -> Result<ValidatedRequestPolicy, RequestPolicyError> {
+    let validated = validate_request_policy(policy, request)?;
+    validate_owner_change_context(
+        policy,
+        &request.requester_principal_id,
+        &manifest.operation_context,
+    )?;
+    Ok(validated)
+}
+
 pub(crate) fn validate_request_policy(
     policy: &PolicyState,
     request: &WitnessRequestV1,
@@ -67,8 +81,10 @@ pub(crate) fn validate_request_policy(
     if request.witness_policy_id != rule.policy_id
         || request.witness_policy_revision != rule.policy_revision
         || request.witness_policy_digest != rule.policy_digest
-        || request_lifetime > rule.allowed_request_lifetime_ms
     {
+        return Err(RequestPolicyError::WrongScope);
+    }
+    if request_lifetime > rule.allowed_request_lifetime_ms {
         return Err(RequestPolicyError::StalePolicy);
     }
 
@@ -186,6 +202,42 @@ pub const fn operation_capability(operation: WitnessOperationV1) -> Capability {
             Capability::Administer
         }
     }
+}
+
+pub(crate) fn validate_owner_change_context(
+    policy: &PolicyState,
+    requester: &jury_protocol::vault_v1::PrincipalId,
+    context: &jury_protocol::witness_v1::OperationContextV1,
+) -> Result<(), RequestPolicyError> {
+    use jury_protocol::witness_v1::{OperationContextV1, OwnerChangeKindV1};
+    let OperationContextV1::OwnerChange {
+        change,
+        target_principal_id,
+        next_vault_policy_sequence,
+    } = context
+    else {
+        return Ok(());
+    };
+    if policy.sequence().checked_add(1) != Some(*next_vault_policy_sequence) {
+        return Err(RequestPolicyError::WrongScope);
+    }
+    if !policy.is_owner(requester)
+        || policy
+            .principal(target_principal_id)
+            .is_none_or(|p| p.descriptor.principal_kind != PrincipalKind::Human)
+    {
+        return Err(RequestPolicyError::PolicyDenied);
+    }
+    let target_is_owner = policy.is_owner(target_principal_id);
+    if match change {
+        OwnerChangeKindV1::Grant => target_is_owner,
+        OwnerChangeKindV1::Revoke => {
+            !target_is_owner || requester == target_principal_id || policy.owner_count() <= 1
+        }
+    } {
+        return Err(RequestPolicyError::PolicyDenied);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -140,7 +140,12 @@ fn assert_drill_rejects_every_output_inside_source_repository(
         assert_eq!(rejected.status.code(), Some(2));
         assert!(rejected.stdout.is_empty());
         let error: serde_json::Value = serde_json::from_slice(&rejected.stderr)?;
-        assert_eq!(error["error"]["code"], "private-state-overlap");
+        assert_eq!(error["error"]["code"], "invalid-restore-target");
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("source vault home or worktree"))
+        );
         assert!(!forbidden.exists());
     }
     Ok(())

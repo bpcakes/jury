@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Real CLI/PTY regressions for exact references and secret input; synthetic data only."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pty
+import select
+import signal
+import subprocess
+import tempfile
+import termios
+import time
+
+PASSWORD = b"ExampleInputPassphrase1234"
+REPLACEMENT = b"ExampleReplacementPassphrase5678"
+FIRST = b"ExampleFirstPrivateValue"
+SECOND = b"ExampleSecondPrivateValue"
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+class Fixture:
+    def __init__(self, jury, root):
+        self.jury, self.root = jury, root
+        for name in ("repository", "data", "state", "private"):
+            (root / name).mkdir(mode=0o700)
+        self.repository = root / "repository"
+        subprocess.run(["git", "init", "--quiet", str(self.repository)], check=True)
+        self.environment = {
+            "HOME": str(root), "XDG_DATA_HOME": str(root / "data"),
+            "XDG_STATE_HOME": str(root / "state"), "PATH": "/usr/bin:/bin",
+        }
+        self.auth = {"JURY_IDENTITY_PASSPHRASE": PASSWORD.decode()}
+        self.private_values = [PASSWORD, REPLACEMENT, FIRST, SECOND]
+
+    def call(self, args, data=b"", env=None, expected=0, json_output=True, code=None):
+        flags = ["--allow-degraded-protection"] + (["--json"] if json_output else [])
+        result = subprocess.run(
+            [str(self.jury), *flags, *map(str, args)], input=data,
+            cwd=self.repository, env=self.environment | (self.auth if env is None else env),
+            capture_output=True, timeout=90,
+        )
+        self.no_private_output(result.stdout + result.stderr)
+        require(result.returncode == expected, f"CLI status mismatch for {args[0]}: expected {expected}, got {result.returncode}")
+        if code:
+            require(code.encode() in result.stderr, "unexpected CLI error category")
+        return result
+
+    def no_private_output(self, output):
+        require(all(value not in output for value in self.private_values), "private bytes appeared in command or terminal output")
+
+    def private_file(self, name, data):
+        path = self.root / "private" / name
+        path.write_bytes(data)
+        path.chmod(0o600)
+        return path
+
+    def snapshot(self):
+        return {
+            str(path.relative_to(self.repository)): hashlib.sha256(path.read_bytes()).digest()
+            for path in (self.repository / ".jury").rglob("*") if path.is_file()
+        }
+
+    def read_exact(self, item, field, expected):
+        out = self.root / "private" / "read-value"
+        out.unlink(missing_ok=True)
+        self.call(["read", "--direct", item, field, "--out", out])
+        require(out.read_bytes() == expected, "stored/resolved field bytes differ")
+
+    def sources(self):
+        self.call(["identity", "init"], env={"JURY_NEW_PASSPHRASE": PASSWORD.decode()})
+        # Wrong inherited credentials must not initialize the vault.
+        self.call(["vault", "init"], env={"JURY_IDENTITY_PASSPHRASE": REPLACEMENT.decode()}, expected=5, code="identity-authentication-failed")
+        require(not (self.repository / ".jury" / "vault.json").exists(), "failed authentication created a vault")
+        self.call(["vault", "init"])
+        before = self.snapshot()
+        self.call(["vault", "audit", "verify"])
+        self.call(["--passphrase-stdin", "vault", "audit", "verify"], PASSWORD + b"\n", env={"JURY_IDENTITY_PASSPHRASE": REPLACEMENT.decode()})
+        self.call(["vault", "audit", "verify"], env={}, expected=2, code="passphrase-input-opt-in-required")
+        self.call(["--passphrase-stdin", "vault", "audit", "verify"], REPLACEMENT + b"\n", expected=5, code="identity-authentication-failed")
+        require(before == self.snapshot(), "audit verification mutated the vault")
+        public = self.root / "private" / "owner-public.json"
+        self.call(["identity", "public", "--out", public])
+        principal = json.loads(self.call(["identity", "status"]).stdout)["principal_id"]
+        self.call(["identity", "passphrase", "change"], env=self.auth | {"JURY_NEW_PASSPHRASE": REPLACEMENT.decode()})
+        self.call(["vault", "audit", "verify"], expected=5, code="identity-authentication-failed")
+        self.call(["vault", "audit", "verify"], env={"JURY_IDENTITY_PASSPHRASE": REPLACEMENT.decode()})
+        # Explicit stdin owns old/new/confirmation even when both env sources disagree.
+        self.call(["--passphrase-stdin", "identity", "passphrase", "change"], REPLACEMENT + b"\n" + PASSWORD + b"\n" + PASSWORD + b"\n", env=self.auth | {"JURY_NEW_PASSPHRASE": REPLACEMENT.decode()})
+        self.call(["vault", "audit", "verify"])
+        require(json.loads(self.call(["identity", "status"]).stdout)["principal_id"] == principal, "passphrase change replaced the principal")
+        self.call(["identity", "init", "--name", "ExampleCandidate"], env={"JURY_NEW_PASSPHRASE": PASSWORD.decode()})
+        descriptor, challenge, proof = [self.root / "private" / f"candidate.{kind}.json" for kind in ("descriptor", "challenge", "proof")]
+        self.call(["--identity", "ExampleCandidate", "identity", "public", "--out", descriptor])
+        self.call(["principal", "challenge", "--from", descriptor, "--out", challenge])
+        self.call(["--identity", "ExampleCandidate", "identity", "prove", "--challenge", challenge, "--out", proof])
+        self.call(["principal", "add", "--from", descriptor, "--proof", proof])
+        print("PASS identity/vault environment sources, stdin precedence, failed-auth immutability", flush=True)
+
+    def references(self):
+        pairs = [("Example.Group", "ExampleField", FIRST), ("Example", "Group.ExampleField", SECOND), ("ExampleItem", "ExampleField", FIRST)]
+        for item, field, value in pairs:
+            self.call(["item", "create", item, "--allow-direct"])
+            self.call(["vault", "field", "set", item, field, "--value-stdin"], value)
+            self.read_exact(item, field, value)
+        for index, (item, field, value) in enumerate(pairs):
+            reference = f"{item}/{field}" if index < 2 else f"{item}.{field}"
+            expected = self.private_file("expected", value)
+            template = self.private_file("template", ("before{{" + reference + "}}after").encode())
+            rendered = self.root / "private" / "rendered"
+            rendered.unlink(missing_ok=True)
+            self.call(["inject", "--direct", "--template", template, "--out", rendered])
+            require(rendered.read_bytes() == b"before" + value + b"after", "template selected the wrong field")
+            dotenv = self.private_file("child.env", ("EXAMPLE_VALUE={{" + reference + "}}\n").encode())
+            programs = {
+                "env": "os.environb[b'EXAMPLE_VALUE']",
+                "stdin": "sys.stdin.buffer.read()",
+                "file": "pathlib.Path(os.environ['EXAMPLE_FILE']).read_bytes()",
+            }
+            for command in ("exec", "run"):
+                for channel, expression in programs.items():
+                    bindings = {
+                        "env": ["--env-file", dotenv] if command == "exec" else ["--env", "EXAMPLE_VALUE=" + reference],
+                        "stdin": ["--stdin", reference],
+                        "file": ["--file", "EXAMPLE_FILE=" + reference],
+                    }[channel]
+                    program = f"import os,sys,pathlib; sys.exit(0 if {expression} == pathlib.Path(sys.argv[1]).read_bytes() else 41)"
+                    self.call([command, "--direct", *bindings, "--", "/usr/bin/python3", "-c", program, expected], json_output=command == "run")
+        # Both dotted pairs exist. Legacy multi-dot syntax must fail before
+        # any output publication or child starts, rather than selecting either.
+        ambiguous = "Example.Group.ExampleField"
+        template = self.private_file("ambiguous", ("{{" + ambiguous + "}}").encode())
+        absent = self.root / "private" / "must-not-exist"
+        self.call(["inject", "--direct", "--template", template, "--out", absent], expected=2, code="invalid-field-reference")
+        dotenv = self.private_file("ambiguous.env", ("EXAMPLE_VALUE={{" + ambiguous + "}}\n").encode())
+        for command in ("exec", "run"):
+            for bindings in (["--stdin", ambiguous], ["--file", "EXAMPLE_FILE=" + ambiguous], ["--env-file", dotenv] if command == "exec" else ["--env", "EXAMPLE_VALUE=" + ambiguous]):
+                self.call([command, "--direct", *bindings, "--", "/usr/bin/touch", absent], expected=2, json_output=command == "run", code="invalid-field-reference")
+        require(not absent.exists(), "ambiguous reference published output or started a child")
+        print("PASS both colliding dotted names and legacy controls through every reference channel", flush=True)
+
+    def tty(self, value, expected=0, flag=False, prompt_password=False, cancel=None):
+        master, slave = pty.openpty()
+        original = termios.tcgetattr(slave)
+        transcript = bytearray()
+
+        def control():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        args = [str(self.jury), "--json", "--allow-degraded-protection", "vault", "field", "set", "ExampleItem", "ExampleField"]
+        if flag:
+            args.append("--value-stdin")
+        child = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave, cwd=self.repository, env=self.environment | ({} if prompt_password else self.auth), preexec_fn=control)
+
+        def wait_for(prompt):
+            deadline = time.monotonic() + 60
+            while prompt not in transcript.lower():
+                require(time.monotonic() < deadline and child.poll() is None, "terminal prompt unavailable")
+                if select.select([master], [], [], 0.1)[0]:
+                    transcript.extend(os.read(master, 65536))
+            require(not termios.tcgetattr(slave)[3] & (termios.ECHO | termios.ECHONL), "terminal input echo enabled")
+
+        try:
+            if prompt_password:
+                wait_for(b"passphrase: ")
+                os.write(master, PASSWORD + b"\n")
+            wait_for(b"field value (hidden):")
+            require(len(list(Path(f"/proc/{child.pid}/task").iterdir())) == 1, "terminal field capture started worker threads")
+            # Write in chunks so a long paste exercises the real PTY input queue.
+            for offset in range(0, len(value), 512):
+                os.write(master, value[offset:offset + 512])
+            if cancel == "keyboard":
+                os.write(master, b"\x03")
+            elif cancel:
+                os.kill(child.pid, cancel)
+            else:
+                os.write(master, b"\x04")
+            deadline = time.monotonic() + 60
+            while child.poll() is None:
+                require(time.monotonic() < deadline, "terminal command timed out")
+                if select.select([master], [], [], 0.1)[0]:
+                    transcript.extend(os.read(master, 65536))
+            while select.select([master], [], [], 0)[0]:
+                transcript.extend(os.read(master, 65536))
+            self.no_private_output(transcript)
+            require(child.returncode == expected, f"terminal exit mismatch: expected {expected}, got {child.returncode}")
+            require(termios.tcgetattr(slave) == original, "terminal settings were not restored exactly")
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            os.close(slave)
+            os.close(master)
+
+    def terminal(self):
+        for flag, prompt in ((False, False), (True, False), (False, True), (True, True)):
+            self.tty(FIRST, flag=flag, prompt_password=prompt)
+            self.read_exact("ExampleItem", "ExampleField", FIRST)
+        multiline = FIRST + b"\n" + SECOND + b"\n"
+        self.tty(multiline)
+        self.read_exact("ExampleItem", "ExampleField", multiline)
+        long_value = FIRST * 400  # Exceeds Linux's canonical line buffer.
+        self.tty(long_value)
+        self.read_exact("ExampleItem", "ExampleField", long_value)
+        self.tty(FIRST + b"X\x7f\nDiscarded\x15" + SECOND)
+        self.read_exact("ExampleItem", "ExampleField", FIRST + b"\n" + SECOND)
+        before = self.snapshot()
+        for cancellation, status in (("keyboard", 130), (signal.SIGINT, 130), (signal.SIGTERM, 143), (signal.SIGHUP, 129), (signal.SIGQUIT, 131), (signal.SIGTSTP, 148)):
+            self.tty(FIRST, cancel=cancellation, expected=status)
+            require(self.snapshot() == before, "cancelled terminal input mutated the vault")
+        self.tty(b"", expected=2)
+        require(self.snapshot() == before, "rejected empty concealed input mutated the vault")
+        binary = b"\x00\xff\r\n" + FIRST + b"\n"
+        self.call(["vault", "field", "set", "ExampleItem", "ExampleField", "--value-stdin"], binary)
+        self.read_exact("ExampleItem", "ExampleField", binary)
+        before = self.snapshot()
+        self.call(["vault", "field", "set", "ExampleItem", "ExampleField"], FIRST, expected=2, code="field-input-opt-in-required")
+        require(self.snapshot() == before, "unselected pipe input mutated the vault")
+        self.call(["vault", "field", "set", "ExampleItem", "ExampleField", "--value-stdin"], b"x" * (1024 * 1024 + 1), expected=2, code="protected-input-too-large")
+        require(self.snapshot() == before, "oversized pipe input mutated the vault")
+        help_text = self.call(["vault", "field", "set", "--help"], env={}).stdout
+        require(b"Ctrl-D" in help_text and b"hidden" in help_text, "field help omits terminal contract")
+        require(b"--json option is unsupported" in self.call(["exec", "--help"], env={}).stdout, "exec help omits JSON restriction")
+        print("PASS hidden PTY entry, exact long/multiline/binary input, editing, EOF, signals and rollback", flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--jury", type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="ExampleInputQA-") as temporary:
+        fixture = Fixture(args.jury.resolve(), Path(temporary))
+        fixture.sources()
+        fixture.references()
+        fixture.terminal()
+
+
+if __name__ == "__main__":
+    main()

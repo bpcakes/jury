@@ -18,7 +18,7 @@ pub(crate) enum CheckpointPolicyError {
 pub(crate) fn validate_checkpoint_policy<'a>(
     policy: &'a PolicyState,
     checkpoint: &VaultPolicyCheckpointV1,
-) -> Result<&'a WitnessPolicy, CheckpointPolicyError> {
+) -> Result<Vec<&'a WitnessPolicy>, CheckpointPolicyError> {
     checkpoint
         .validate_shape()
         .map_err(|_| CheckpointPolicyError::Invalid)?;
@@ -29,24 +29,16 @@ pub(crate) fn validate_checkpoint_policy<'a>(
     {
         return Err(CheckpointPolicyError::ScopeMismatch);
     }
-    let witness_policy = policy
-        .witness_policy(&checkpoint.witness_policy_digest)
-        .ok_or(CheckpointPolicyError::ScopeMismatch)?;
-    let (approver_set_digest, witness_set_digest) = witness_policy
-        .active_descriptor_set_digests()
+    let policies = policy
+        .active_witness_policy_entries()
         .map_err(|_| CheckpointPolicyError::Invalid)?;
-    if checkpoint.witness_policy_id != witness_policy.witness_policy_id
-        || checkpoint.witness_policy_revision != witness_policy.revision
-        || checkpoint.witness_policy_digest
-            != witness_policy
-                .digest()
-                .map_err(|_| CheckpointPolicyError::Invalid)?
-        || checkpoint.witness_set_digest != witness_set_digest
-        || checkpoint.approver_set_digest != approver_set_digest
-        || checkpoint.review_label_set_digest != witness_policy.review_label_set_digest
-        || witness_policy.vault_policy_sequence > policy.sequence()
-        || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
-            != Some(&witness_policy.vault_policy_hash)
+    let digests = policies
+        .iter()
+        .map(|(digest, _)| (*digest).clone())
+        .collect::<Vec<_>>();
+    if checkpoint.active_witness_policy_set_digest
+        != jury_protocol::witness_v1::active_witness_policy_set_digest(&digests)
+            .map_err(|_| CheckpointPolicyError::Invalid)?
     {
         return Err(CheckpointPolicyError::ScopeMismatch);
     }
@@ -73,5 +65,5 @@ pub(crate) fn validate_checkpoint_policy<'a>(
         &checkpoint.signature,
     )
     .map_err(|_| CheckpointPolicyError::InvalidSignature)?;
-    Ok(witness_policy)
+    Ok(policies.into_iter().map(|(_, policy)| policy).collect())
 }

@@ -172,3 +172,25 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Run locked Rust tests
         run: scripts/jig check api:test-locked
+      - name: Build the native CLI and witness daemon
+        run: cargo build --locked --release -p jury -p jury-witness
+      - name: Exercise exact field references and hidden terminal input
+        run: python3 scripts/check-linux-input-surfaces --jury target/release/jury
+      - name: Exercise exact public review labels through witnessed commands
+        run: python3 scripts/check-linux-public-labels --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise persisted witnessed access through the real binaries
+        run: python3 scripts/check-linux-witness-lifecycle --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise governed descriptor approvals through real terminals
+        run: python3 scripts/check-linux-descriptor-access --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise witnessed owner changes through real approvals
+        run: python3 scripts/check-linux-owner-changes --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise authenticated approval summaries through real terminals
+        run: python3 scripts/check-linux-approval-review --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise safe diagnostics and policy timeout defaults
+        run: python3 scripts/check-linux-diagnostics --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise role onboarding, remote approval and multi-role recovery
+        run: python3 scripts/check-linux-role-onboarding --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise shared witness pairs and global checkpoint advancement
+        run: python3 scripts/check-linux-shared-policies --jury target/release/jury --juryd target/release/juryd
+      - name: Exercise disjoint policy memberships under one checkpoint
+        run: python3 scripts/check-linux-shared-policies --jury target/release/jury --juryd target/release/juryd --disjoint

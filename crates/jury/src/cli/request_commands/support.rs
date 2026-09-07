@@ -163,20 +163,22 @@ pub(super) fn approve_request(
     })
     .map_err(|_| invalid_request_artifact())?;
     let expected = if arguments.deny { "deny" } else { "approve" };
-    if !std::io::stdin().is_terminal() {
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(CliError::new(
             CliErrorKind::InvalidArguments,
             "interactive-approval-required",
-            "human approval or denial requires a terminal after the complete review is rendered",
+            "human approval or denial requires terminal stdin and stderr so the complete review is visible before confirmation",
         ));
     }
+    let (_, reason) = approval_decision(arguments);
+    eprintln!(
+        "{}",
+        approval_summary::approval_summary(&review, expected, reason, review_time_ms)?
+    );
     eprintln!("{}", review.text());
     eprint!("Type {expected} to sign this exact decision: ");
     std::io::stderr().flush().map_err(|_| filesystem_error())?;
-    let mut confirmation = String::new();
-    std::io::stdin()
-        .read_line(&mut confirmation)
-        .map_err(|_| filesystem_error())?;
+    let confirmation = secret_input::read_confirmation_line().map_err(map_secret_error)?;
     if confirmation.trim() != expected {
         return Err(CliError::new(
             CliErrorKind::Conflict,
@@ -353,7 +355,9 @@ fn wait_for_approvals(
     artifact: &WitnessRequestArtifactV1,
     paths: &[PathBuf],
     wait_seconds: u64,
+    batch_deadline: Option<std::time::Instant>,
 ) -> Result<Vec<jury_protocol::witness_v1::ApprovalDecisionV1>, CliError> {
+    check_authorization_deadline(batch_deadline)?;
     if paths.len() > jury_protocol::witness_v1::MAX_RECORDED_APPROVALS {
         return Err(invalid_approval_decision());
     }
@@ -366,10 +370,14 @@ fn wait_for_approvals(
     if rule.approval_threshold == 0 {
         return Ok(Vec::new());
     }
-    let deadline = std::time::Instant::now()
+    let mut deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_secs(wait_seconds))
         .ok_or_else(approval_pending)?;
+    if let Some(batch_deadline) = batch_deadline {
+        deadline = deadline.min(batch_deadline);
+    }
     loop {
+        check_authorization_deadline(batch_deadline)?;
         let mut approvals: Vec<jury_protocol::witness_v1::ApprovalDecisionV1> = Vec::new();
         for path in paths {
             if !path.exists() {
@@ -510,16 +518,47 @@ fn validated_review_at_issue<'a>(
     .map_err(|_| invalid_request_artifact())
 }
 
-pub(super) fn review_labels_for_checkpoint(
-    catalog: &PolicyCatalogV1,
-    checkpoint: &VaultPolicyCheckpointV1,
+pub(super) fn active_review_labels(
+    context: &VaultPrincipalContext,
 ) -> Result<Vec<jury_protocol::witness_v1::OwnerReviewLabelV1>, CliError> {
-    catalog
-        .review_label_sets
-        .iter()
-        .find(|set| set.digest == checkpoint.review_label_set_digest)
-        .map(|set| set.labels.clone())
-        .ok_or_else(invalid_request_artifact)
+    let mut labels = BTreeMap::new();
+    for policy in context.policy.active_witness_policies().map_err(|_| invalid_vault())? {
+        for label in labels_for_policy(&context.catalog, &policy.review_label_set_digest)? {
+            if let Some(prior) = labels.insert(label.label_id, label.clone())
+                && prior != label
+            {
+                return Err(invalid_request_artifact());
+            }
+        }
+    }
+    Ok(labels.into_values().collect())
+}
+
+pub(super) fn review_labels_for_item(
+    context: &VaultPrincipalContext,
+    item_id: &ItemId,
+    role: jury_protocol::vault_v1::ContentRole,
+) -> Result<Vec<jury_protocol::witness_v1::OwnerReviewLabelV1>, CliError> {
+    let item = context.policy.item(item_id).ok_or_else(item_unavailable)?;
+    let state = item.witnessed_state.as_ref().ok_or_else(invalid_request_artifact)?;
+    let slot = state.slots.iter().find(|slot| slot.content_role == role)
+        .ok_or_else(invalid_request_artifact)?;
+    let policies = context.policy.active_witness_policies().map_err(|_| invalid_vault())?;
+    let policy = policies.into_iter().find(|policy| policy.digest().ok().as_ref() == Some(&slot.witness_policy_digest))
+        .ok_or_else(invalid_request_artifact)?;
+    labels_for_policy(&context.catalog, &policy.review_label_set_digest)
+}
+
+fn labels_for_policy(
+    catalog: &PolicyCatalogV1,
+    digest: &Digest32,
+) -> Result<Vec<jury_protocol::witness_v1::OwnerReviewLabelV1>, CliError> {
+    catalog.review_label_sets.iter().find(|set| &set.digest == digest)
+        .map(|set| set.labels.clone()).ok_or_else(|| CliError::new(
+            CliErrorKind::NotFound,
+            "review-labels-unavailable",
+            "the selected policy review labels are missing locally; import a current complete vault transfer before retrying",
+        ))
 }
 
 pub(super) fn resolve_request_target(
@@ -550,7 +589,8 @@ pub(super) fn resolve_request_target(
         .collect::<Vec<_>>();
     let item_id = match matching_items.as_slice() {
         [label] => label.item_id.ok_or_else(invalid_request_artifact)?,
-        _ => return Err(invalid_request_selector()),
+        [] => return Err(invalid_request_selector()),
+        _ => return Err(ambiguous_request_selector()),
     };
     let matching_fields = labels
         .iter()
@@ -565,8 +605,17 @@ pub(super) fn resolve_request_target(
             item_id,
             label.field_id.ok_or_else(invalid_request_artifact)?,
         )),
-        _ => Err(invalid_request_selector()),
+        [] => Err(invalid_request_selector()),
+        _ => Err(ambiguous_request_selector()),
     }
+}
+
+const fn ambiguous_request_selector() -> CliError {
+    CliError::new(
+        CliErrorKind::InvalidArguments,
+        "ambiguous-review-label",
+        "the public item or field label matches multiple targets; use --item-id and --field-id from transfer inspect or distinct public review labels",
+    )
 }
 
 fn parse_field_id(value: &str) -> Result<FieldId, CliError> {
@@ -676,4 +725,15 @@ mod tests {
         assert_eq!(error.kind(), CliErrorKind::InvalidArguments);
         assert_eq!(error.code(), "invalid-witness-selector");
     }
+}
+
+fn check_authorization_deadline(deadline: Option<std::time::Instant>) -> Result<(), CliError> {
+    if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        return Err(CliError::new(
+            CliErrorKind::Conflict,
+            "descriptor-access-timeout",
+            "the descriptor access batch exhausted its time budget; retry with fresh request, approval, and receipt paths",
+        ));
+    }
+    Ok(())
 }

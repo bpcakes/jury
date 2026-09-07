@@ -407,21 +407,22 @@ fn validate_complete_owner_slots(state: &PolicyState) -> Result<(), PolicyError>
         let mode = item
             .access_mode()
             .ok_or_else(|| PolicyError::new(PolicyErrorKind::InvalidTransition))?;
-        if matches!(mode, ItemAccessMode::DirectOnly | ItemAccessMode::Mixed)
-            && state.owners.iter().any(|owner_id| {
-                let (count, has_descriptor, has_body) = item
-                    .direct_slots
-                    .iter()
-                    .filter(|slot| slot.recipient_principal_id == *owner_id)
-                    .fold((0_u8, false, false), |(count, descriptor, body), slot| {
-                        (
-                            count.saturating_add(1),
-                            descriptor || slot.content_role == ContentRole::Descriptor,
-                            body || slot.content_role == ContentRole::Body,
-                        )
-                    });
-                count != 2 || !has_descriptor || !has_body
-            })
+        if mode == ItemAccessMode::WitnessedOnly {
+            continue;
+        }
+        // Replay checks every revision. Index each slot once instead of
+        // rescanning all slots for each owner on externally supplied journals.
+        let mut coverage = BTreeMap::<PrincipalId, (u8, bool, bool)>::new();
+        for slot in &item.direct_slots {
+            let entry = coverage.entry(slot.recipient_principal_id).or_default();
+            entry.0 = entry.0.saturating_add(1);
+            entry.1 |= slot.content_role == ContentRole::Descriptor;
+            entry.2 |= slot.content_role == ContentRole::Body;
+        }
+        if state
+            .owners
+            .iter()
+            .any(|owner_id| coverage.get(owner_id) != Some(&(2, true, true)))
         {
             return Err(PolicyError::new(PolicyErrorKind::IncompleteRotation));
         }

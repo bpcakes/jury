@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Build and reproduce the experimental Linux package; never sign or publish it."""
+import argparse
+import gzip
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import tomllib
+from linux_release_support import (collect_notices, extract_vendor, file_record,
+    snapshot_files, vendor_config, verify_packaged_binaries, normalize_sbom, normalized_sha256,
+    package_documentation)
+
+ROOT = Path(__file__).resolve().parents[1]
+IMAGE = 'rust@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073'
+TARGET = 'x86_64-unknown-linux-gnu'
+WARNING = 'Externally unreviewed pre-alpha; unsuitable for real secrets.'
+EXCLUDED = ('.agent/', '.beads/', 'web/')
+FLAGS = '--remap-path-prefix=/src=/jury --remap-path-prefix=/vendor=/deps'
+
+
+def run(args, **kwargs):
+    return subprocess.run([str(a) for a in args], check=True, **kwargs)
+
+
+def capture(args, **kwargs):
+    return run(args, stdout=subprocess.PIPE, **kwargs).stdout
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(path):
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def json_bytes(value):
+    return (json.dumps(value, sort_keys=True, indent=2)+'\n').encode()
+
+
+def source_files():
+    names = capture(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=ROOT).split(b'\0')
+    result = {}
+    for name in sorted(set(names)):
+        if not name:
+            continue
+        name = name.decode()
+        if name.startswith(EXCLUDED):
+            continue
+        path = ROOT/name
+        if not path.exists() and not path.is_symlink():
+            continue
+        require(path.is_file() and path.resolve().is_relative_to(ROOT), f'unsupported source entry: {name}')
+        result[name] = file_record(path)
+    return result
+
+
+def archive(source, output, prefix):
+    with output.open('xb') as raw, gzip.GzipFile(filename='', fileobj=raw, mode='wb', mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode='w', format=tarfile.PAX_FORMAT) as tar:
+            for path in sorted(source.rglob('*')):
+                require(path.resolve().is_relative_to(source.resolve()), 'archive source escapes its root')
+                if not path.is_file():
+                    continue
+                info = tar.gettarinfo(str(path), str(Path(prefix)/path.relative_to(source)))
+                info.uid = info.gid = info.mtime = 0
+                info.uname = info.gname = ''
+                info.mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
+                if path.is_symlink():
+                    tar.addfile(info)
+                else:
+                    with path.open('rb') as content:
+                        tar.addfile(info, content)
+
+
+def docker(source, vendor, config, output, command, *, runtime=False, tools=None, writable_source=False, jobs=8):
+    args = ['docker', 'run', '--rm', '--network', 'none', '--read-only',
+            '--user', f'{os.getuid()}:{os.getgid()}', '--platform', 'linux/amd64',
+            '--tmpfs', '/tmp:rw,exec,nosuid,size=1g',
+            '--mount', f'type=bind,src={source},dst=/src'+('' if writable_source else ',readonly'),
+            '--mount', f'type=bind,src={vendor},dst=/vendor,readonly',
+            '--mount', f'type=bind,src={config},dst=/config/config.toml,readonly',
+            '--mount', f'type=bind,src={output},dst=/build'+(',readonly' if runtime else ''),
+            '--env', 'CARGO_HOME=/tmp/cargo', '--env', 'CARGO_TARGET_DIR=/build',
+            '--env', f'CARGO_BUILD_JOBS={jobs}', '--env', 'CARGO_NET_OFFLINE=true', '--env', 'CARGO_INCREMENTAL=0', '--env', 'CARGO_PROFILE_RELEASE_STRIP=symbols',
+            '--env', 'RUSTFLAGS='+FLAGS, '--env', 'SOURCE_DATE_EPOCH=0', '--workdir', '/src']
+    if tools:
+        args.extend(['--mount', f'type=bind,src={tools},dst=/tools,readonly'])
+    if runtime:
+        args.extend(['--ulimit', 'memlock=67108864:67108864'])
+    launcher = ['python3', '-c', 'import os,pathlib,shutil,sys; pathlib.Path("/tmp/cargo").mkdir(exist_ok=True); shutil.copyfile("/config/config.toml","/tmp/cargo/config.toml"); os.execvp(sys.argv[1],sys.argv[1:])']
+    run(args+[IMAGE]+launcher+command)
+
+
+def verify(directory, checksums_sha256):
+    require(digest(directory/'SHA256SUMS') == normalized_sha256(checksums_sha256), 'expected checksum digest mismatch')
+    manifest = json.loads((directory/'provenance.json').read_bytes())
+    require(manifest['schema'] == 'jury-linux-build-v1', 'unsupported provenance schema')
+    require(manifest['source_files'] == source_files(), 'source bytes, modes or inventory drifted')
+    inventory = set(manifest['artifacts']) | {'provenance.json', 'SHA256SUMS'}
+    actual = {p.name for p in directory.iterdir()} - {'SHA256SUMS.sigstore.json'}
+    require(actual == inventory, 'artifact inventory drifted')
+    require(all((directory/name).is_file() and not (directory/name).is_symlink() for name in inventory),
+            'artifact must be a regular file')
+    version = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
+    require(manifest['version'] == version and manifest['target'] == TARGET, 'candidate version or target mismatch')
+    require(set(manifest['reproduced_binaries']) == {'jury', 'juryd'}, 'binary inventory mismatch')
+    for name, expected in manifest['artifacts'].items():
+        require(Path(name).name == name, 'invalid artifact name')
+        require(digest(directory/name) == expected, f'artifact drifted: {name}')
+    expected = ''.join(f'{digest(p)}  {p.name}\n' for p in sorted(directory.iterdir())
+                       if p.name not in {'SHA256SUMS', 'SHA256SUMS.sigstore.json'} and p.is_file())
+    require((directory/'SHA256SUMS').read_text() == expected, 'checksum inventory drifted')
+    verify_packaged_binaries(directory/f'jury-{version}-{TARGET}.tar.gz', version, TARGET, manifest['reproduced_binaries'])
+    if manifest['dirty_candidate']:
+        print('UNSIGNED DIRTY CANDIDATE: not approved for publication.')
+    print('Local source and artifact consistency matches the supplied checksum digest. No publisher identity or security review is verified.')
+    if (directory/'SHA256SUMS.sigstore.json').exists():
+        print('SIGNATURE NOT VERIFIED: authenticate this bundle separately using the expected identity and issuer.')
+
+
+def build_candidate(args):
+    require(sys.version_info >= (3, 11, 4), 'Python 3.11.4 or newer is required')
+    require(platform.system() == 'Linux' and platform.machine() == 'x86_64', 'build requires Linux x86_64')
+    version = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
+    require(version == '0.0.1', 'this recipe is scoped to 0.0.1')
+    dirty = bool(capture(['git', 'status', '--porcelain', '--', '.', ':(exclude).agent', ':(exclude).beads', ':(exclude)web'], cwd=ROOT))
+    require(not dirty or args.allow_dirty, 'checkout is dirty; use --allow-dirty only for an unsigned local candidate')
+    output = args.output.resolve()
+    require(not output.exists(), 'output directory already exists; choose a fresh path')
+    require(bool(args.vendor_archive) == bool(args.vendor_sha256), 'supply --vendor-archive and --vendor-sha256 together')
+    audit_version = capture(['cargo', 'audit', '--version']).decode().strip()
+    require(audit_version == 'cargo-audit-audit 0.22.2', 'install cargo-audit 0.22.2 for this recipe')
+    files = source_files()
+    output.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix='jury-linux-build-') as temporary:
+        work = Path(temporary)
+        source, vendor, first, second = [work/name for name in ('source', 'vendor', 'first', 'second')]
+        for path in (source, first, second):
+            path.mkdir()
+        for name in files:
+            destination = source/name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT/name, destination, follow_symlinks=False)
+        audit_bytes = capture(['cargo', 'audit', '--json', '--deny', 'warnings', '--file', source/'Cargo.lock'], cwd=work)
+        audit = json.loads(audit_bytes)
+        require(not audit['settings']['ignore'] and not audit['settings']['target_arch']
+                and not audit['settings']['target_os'] and audit['settings']['severity'] is None,
+                'dependency audit must not filter or ignore advisories')
+        (output/'dependency-audit.json').write_bytes(audit_bytes)
+        if args.vendor_archive:
+            extract_vendor(args.vendor_archive.resolve(), args.vendor_sha256, work)
+        else:
+            capture(['cargo', 'vendor', '--locked', '--versioned-dirs', vendor], cwd=source)
+        config_text = vendor_config(source/'Cargo.lock')
+        require(digest(source/'Cargo.lock') == files['Cargo.lock']['sha256'], 'vendoring changed Cargo.lock')
+        config = work/'config.toml'
+        config.write_text(config_text)
+        command = ['cargo', '--config', '/config/config.toml', 'build', '--frozen', '--release', '-p', 'jury', '-p', 'jury-witness']
+        for target, jobs in ((first, 8), (second, 4)):
+            docker(source, vendor, config, target, command, jobs=jobs)
+        binary_hashes = {name: digest(first/'release'/name) for name in ('jury', 'juryd')}
+        for name, value in binary_hashes.items():
+            require(value == digest(second/'release'/name), f'{name} did not reproduce')
+        if args.expect_binary_sha256:
+            require(binary_hashes == args.expect_binary_sha256, 'binaries do not match the supplied reproduction hashes')
+        docker(source, vendor, config, first, ['python3', '-c',
+            'import subprocess; '+
+            '; '.join(f'assert subprocess.check_output(["/build/release/{name}", "--version"]).decode().strip() == "{name} {version}"' for name in binary_hashes)], runtime=True)
+        docker(source, vendor, config, first,
+               ['python3', 'scripts/check-linux-owner-changes', '--jury', '/build/release/jury', '--juryd', '/build/release/juryd'], runtime=True)
+        # The toolchain's own notices cover Rust standard-library/native materials.
+        notice_output = work/'notice-output'
+        notice_output.mkdir()
+        docker(source, vendor, config, notice_output, ['python3', '-c',
+            'import pathlib,shutil,subprocess; p=pathlib.Path(subprocess.check_output(["rustc","--print","sysroot"]).decode().strip())/"share/doc/rust"; shutil.copytree(p,"/build/rust-notices")'])
+        docker(source, vendor, config, notice_output, ['python3', '-c',
+            'import json,pathlib,subprocess; read=lambda args: subprocess.check_output(args).decode().strip(); pathlib.Path("/build/toolchain.json").write_text(json.dumps({"rustc":read(["rustc","--version"]),"cargo":read(["cargo","--version"]),"glibc":read(["getconf","GNU_LIBC_VERSION"]),"os_release":pathlib.Path("/etc/os-release").read_text()}))'])
+        toolchain = json.loads((notice_output/'toolchain.json').read_bytes())
+        require(toolchain['rustc'].startswith('rustc 1.97.0 ') and toolchain['glibc'] == 'glibc 2.36'
+                and 'VERSION_ID="12"' in toolchain['os_release'], 'pinned toolchain runtime differs from the documented baseline')
+        bundle = work/f'jury-{version}-{TARGET}'
+        bundle.mkdir()
+        for binary in ('jury', 'juryd'):
+            require(digest(first/'release'/binary) == binary_hashes[binary], 'tested binary changed')
+            shutil.copy2(first/'release'/binary, bundle/binary)
+        for name in ('LICENSE.md', 'NOTICE.md', 'SECURITY.md'):
+            shutil.copy2(source/name, bundle/name)
+        package_documentation(source, bundle)
+        notices = bundle/'third-party-notices'
+        notice_inventory = collect_notices(vendor, source/'licenses/vendor-supplements', notices/'cargo')
+        shutil.copytree(notice_output/'rust-notices', notices/'rust')
+        (notices/'inventory.json').write_bytes(json_bytes(notice_inventory))
+        (notices/'README.txt').write_text('Cargo license and notice files cover every vendored package, including build and development dependencies. Missing published-crate license files are supplemented from recorded upstream revisions. Nested native-provider notices and Rust toolchain notices are included. See inventory.json and supplement-sources.json for the exact coverage and source bindings.\n')
+        (bundle/'README.txt').write_text(f'Jury {version} for Linux x86_64\n{WARNING}\nTested on Debian 12 (glibc 2.36).\n\nVerify the signed SHA256SUMS using the published signing identity before extraction.\nInstall: install -Dm755 jury ~/.local/bin/jury\n         install -Dm755 juryd ~/.local/bin/juryd\nThen run jury --help and juryd --help.\nSee docs/linux-release.md and docs/self-hosting-juryd.md.\n')
+        # Compile the pinned SBOM tool with the same pinned compiler; no host resolver.
+        tool_output = work/'tool-output'
+        tool_output.mkdir()
+        run(['docker', 'run', '--rm', '--read-only', '--platform', 'linux/amd64',
+             '--user', f'{os.getuid()}:{os.getgid()}', '--tmpfs', '/tmp:rw,exec,nosuid,size=512m',
+             '--mount', f'type=bind,src={tool_output},dst=/build', '--env', 'CARGO_HOME=/build/cargo',
+             '--env', 'CARGO_BUILD_JOBS=8', IMAGE, 'cargo', 'install', 'cargo-cyclonedx',
+             '--version', '0.5.9', '--locked', '--root', '/build/tools'])
+        sbom_source = work/'sbom-source'
+        shutil.copytree(source, sbom_source, symlinks=True)
+        docker(sbom_source, vendor, config, first,
+               ['/tools/bin/cargo-cyclonedx', 'cyclonedx', '--manifest-path', '/src/Cargo.toml',
+                '--format', 'json', '--describe', 'binaries', '--target', TARGET, '--spec-version', '1.5'],
+               tools=tool_output/'tools', writable_source=True)
+        for binary, crate in (('jury', 'jury'), ('juryd', 'jury-witness')):
+            matches = list((sbom_source/'crates'/crate).glob(f'{binary}*.cdx.json'))
+            require(len(matches) == 1, f'expected one {binary} SBOM')
+            # bom-ref identifiers are opaque; normalize all references together.
+            bom = normalize_sbom(json.loads(matches[0].read_text()))
+            require(bom['metadata']['component']['version'] == version, 'SBOM version mismatch')
+            (bundle/f'{binary}.cdx.json').write_bytes(json_bytes(bom))
+            matches[0].unlink()
+        # Retain the exact provider sources for offline reproduction and license inspection.
+        archive(vendor, output/f'jury-{version}-vendor.tar.gz', 'vendor')
+        # Remove any additional SBOM products before freezing the source archive.
+        for path in sbom_source.rglob('*.cdx.json'):
+            if str(path.relative_to(sbom_source)) not in files:
+                path.unlink()
+        require(snapshot_files(sbom_source) == files, 'SBOM generation changed source inputs')
+        require(snapshot_files(source) == files, 'source snapshot drifted before archiving')
+        archive(source, output/f'jury-{version}-source.tar.gz', f'jury-{version}-source')
+        archive(bundle, output/f'jury-{version}-{TARGET}.tar.gz', bundle.name)
+        for binary in ('jury', 'juryd'):
+            shutil.copy2(bundle/f'{binary}.cdx.json', output/f'{binary}.cdx.json')
+        require(files == source_files(), 'source changed while building')
+        manifest = {
+            'schema': 'jury-linux-build-v1', 'version': version, 'warning': WARNING,
+            'source_commit': capture(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(),
+            'dirty_candidate': dirty, 'signed': False, 'published': False,
+            'target': TARGET, 'tested_runtime_baseline': 'Debian 12; glibc 2.36',
+            'builder_image': IMAGE, 'builder_toolchain': toolchain, 'rustflags': FLAGS, 'cargo_command': command,
+            'build_jobs': [8, 4], 'builder_uid': os.getuid(), 'builder_gid': os.getgid(),
+            'source_date_epoch': 0, 'strip': 'symbols', 'incremental': False,
+            'sbom_generator': 'cargo-cyclonedx 0.5.9', 'sbom_builder_image': IMAGE,
+            'sbom_generator_sha256': digest(tool_output/'tools/bin/cargo-cyclonedx'),
+            'dependency_audit_tool': audit_version, 'dependency_audit_lock_sha256': files['Cargo.lock']['sha256'],
+            'vendor_config': config_text, 'source_files': files,
+            'reproduced_binaries': binary_hashes,
+            'artifacts': {path.name: digest(path) for path in sorted(output.iterdir())},
+        }
+        (output/'provenance.json').write_bytes(json_bytes(manifest))
+        (output/'SHA256SUMS').write_text(''.join(f'{digest(path)}  {path.name}\n' for path in sorted(output.iterdir())))
+    verify(output, digest(output/'SHA256SUMS'))
+
+
+def build(args):
+    output = args.output.resolve()
+    require(not output.exists(), 'output directory already exists; choose a fresh path')
+    if output.is_relative_to(ROOT):
+        require(subprocess.run(['git', 'check-ignore', '-q', str(output)], cwd=ROOT).returncode == 0,
+                'output inside the checkout must be git-ignored; use target/ or a directory outside the checkout')
+    expected = {}
+    for entry in args.expect_binary_sha256 or []:
+        name, separator, value = entry.partition('=')
+        require(separator and name in ('jury', 'juryd') and name not in expected, 'expected binary must be jury=SHA256 or juryd=SHA256, without duplicates')
+        expected[name] = normalized_sha256(value)
+    require(not expected or set(expected) == {'jury', 'juryd'}, 'supply expected hashes for both binaries')
+    args.expect_binary_sha256 = expected
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.jury-candidate-', dir=output.parent) as temporary:
+        args.output = Path(temporary)/'candidate'
+        build_candidate(args)
+        require(not output.exists(), 'output appeared during build; refusing replacement')
+        args.output.rename(output)
+    print(f'Unsigned experimental candidate: {output}')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    build_parser = commands.add_parser('build', help='build twice, exercise actual CLI, and package')
+    build_parser.add_argument('--output', type=Path, required=True)
+    build_parser.add_argument('--vendor-archive', type=Path, help='reuse a previously verified provider archive')
+    build_parser.add_argument('--vendor-sha256', help='expected digest from separately verified release checksums')
+    build_parser.add_argument('--expect-binary-sha256', action='append', metavar='NAME=SHA256', help='compare reproduction to separately authenticated hashes; supply once for jury and once for juryd')
+    build_parser.add_argument('--allow-dirty', action='store_true', help='create an explicitly dirty unsigned local candidate')
+    verify_parser = commands.add_parser('verify', help='check this source tree and local artifacts against their recorded hashes')
+    verify_parser.add_argument('directory', type=Path)
+    verify_parser.add_argument('--checksums-sha256', required=True, help='expected SHA256SUMS digest obtained through a separately authenticated channel')
+    args = parser.parse_args()
+    if args.command == 'build':
+        build(args)
+    else:
+        verify(args.directory.resolve(), args.checksums_sha256)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f'Linux release preparation failed: {error}') from error

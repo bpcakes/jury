@@ -272,6 +272,66 @@ impl PolicyState {
         self.items.get(item_id)
     }
 
+    /// Distinct policies referenced by current live item slots, sorted by digest.
+    pub fn active_witness_policies(&self) -> Result<Vec<&WitnessPolicy>, PolicyError> {
+        Ok(self
+            .active_witness_policy_entries()?
+            .into_iter()
+            .map(|(_, policy)| policy)
+            .collect())
+    }
+
+    pub(crate) fn active_witness_policy_entries(
+        &self,
+    ) -> Result<Vec<(&Digest32, &WitnessPolicy)>, PolicyError> {
+        let digests = self
+            .items
+            .values()
+            .filter_map(|item| item.witnessed_state.as_ref())
+            .flat_map(|state| state.slots.iter().map(|slot| &slot.witness_policy_digest))
+            .collect::<BTreeSet<_>>();
+        let policies = digests
+            .into_iter()
+            .map(|digest| {
+                let policy = self
+                    .witness_policies
+                    .get(digest)
+                    .ok_or_else(|| PolicyError::new(PolicyErrorKind::MissingWitnessPolicy))?;
+                if policy.vault_policy_sequence > self.sequence()
+                    || self.predecessor_hash_for_sequence(policy.vault_policy_sequence)
+                        != Some(&policy.vault_policy_hash)
+                    || policy.digest()? != *digest
+                {
+                    return Err(PolicyError::new(PolicyErrorKind::InvalidAncestry));
+                }
+                Ok((digest, policy))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut witnesses = BTreeMap::new();
+        for descriptor in policies
+            .iter()
+            .flat_map(|(_, policy)| &policy.witness_descriptors)
+            .filter(|descriptor| descriptor.status == super::DescriptorStatus::Active)
+        {
+            if let Some(prior) = witnesses.insert(descriptor.witness_id, descriptor)
+                && prior != descriptor
+            {
+                return Err(PolicyError::new(PolicyErrorKind::InvalidFormat));
+            }
+        }
+        Ok(policies)
+    }
+
+    pub fn active_witness_policy_set_digest(&self) -> Result<Digest32, PolicyError> {
+        let digests = self
+            .active_witness_policy_entries()?
+            .into_iter()
+            .map(|(digest, _)| digest.clone())
+            .collect::<Vec<_>>();
+        jury_protocol::witness_v1::active_witness_policy_set_digest(&digests)
+            .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidFormat))
+    }
+
     pub(crate) fn witness_policy(&self, digest: &Digest32) -> Option<&WitnessPolicy> {
         self.witness_policies.get(digest)
     }

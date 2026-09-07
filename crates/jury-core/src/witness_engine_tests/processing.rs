@@ -5,7 +5,6 @@ fn role_bound_checkpoint_and_cancellation_creators_produce_shared_validated_evid
     let fixture = fixture()?;
     let checkpoint = VaultPolicyCheckpointCreator::create(
         &fixture.policy,
-        &fixture.request.witness_policy_digest,
         Digest32::new([0; 32]),
         &fixture.actors.owner,
         NOW_MS - 1,
@@ -41,18 +40,27 @@ fn automatic_read_builder_uses_only_the_exact_policy_target_and_empty_presentati
     let mut witness_policy = fixture_witness_policy(&principals)?;
     witness_policy.approver_descriptors.clear();
     witness_policy.review_label_set_digest = owner_review_label_set_digest(&[])?;
-    witness_policy.operation_rules[0].eligible_approver_ids.clear();
+    witness_policy.operation_rules[0]
+        .eligible_approver_ids
+        .clear();
     witness_policy.operation_rules[0].approval_threshold = 0;
-    witness_policy.operation_rules[0].automatic_read_targets = vec![AutomaticReadTarget {
-        item_id,
-        field_id: Some(field_id),
-    }];
+    witness_policy.operation_rules[0].automatic_read_targets = vec![
+        AutomaticReadTarget {
+            item_id,
+            content_role: ContentRole::Descriptor,
+            field_id: None,
+        },
+        AutomaticReadTarget {
+            item_id,
+            content_role: ContentRole::Body,
+            field_id: Some(field_id),
+        },
+    ];
     witness_policy.validate()?;
     let witness_digest = witness_policy.digest()?;
     let policy = fixture_policy(&principals, &witness_policy, &witness_digest)?;
     let checkpoint = VaultPolicyCheckpointCreator::create(
         &policy,
-        &witness_digest,
         Digest32::new([0; 32]),
         &principals.actors.owner,
         NOW_MS - 1,
@@ -78,12 +86,18 @@ fn automatic_read_builder_uses_only_the_exact_policy_target_and_empty_presentati
         prepared.manifest.approval_target.entries[0].presentation_commitment,
         Digest32::new([0; 32])
     );
-    validate_public_request(
-        &policy,
-        &checkpoint,
-        &prepared.request,
-        &prepared.manifest,
-    )?;
+    validate_public_request(&policy, &checkpoint, &prepared.request, &prepared.manifest)?;
+    let review = render_complete_approval_review(ApprovalReviewInput {
+        policy: &policy,
+        checkpoint: &checkpoint,
+        request: &prepared.request,
+        manifest: &prepared.manifest,
+        presentation: &prepared.presentation,
+        review_labels: &prepared.review_labels,
+        now_ms: NOW_MS,
+    })?;
+    assert!(review.authenticated_item_labels().is_empty());
+
 
     assert!(
         creator
@@ -100,6 +114,27 @@ fn automatic_read_builder_uses_only_the_exact_policy_target_and_empty_presentati
             )
             .is_err()
     );
+    // Keep the valid body slot, but request the entire body. Only the descriptor
+    // permission has a field-less target, so ignoring its role would authorize this.
+    let mut whole_body = prepared.manifest.clone();
+    whole_body.approval_target.entries[0].field_id = None;
+    whole_body.approval_target_digest = whole_body.approval_target.digest()?;
+    whole_body.validate_shape()?;
+    assert!(
+        creator
+            .create(
+                WitnessRequestContext {
+                    policy: &policy,
+                    checkpoint: &checkpoint,
+                    requester: &principals.actors.owner,
+                    review_labels: Vec::new(),
+                    now_ms: NOW_MS,
+                },
+                whole_body,
+                prepared.presentation
+            )
+            .is_err()
+    );
     Ok(())
 }
 
@@ -112,7 +147,10 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
         .iter_mut()
         .zip(&principals.actors.approvers)
     {
-        descriptor.allowed_operations = vec![WitnessOperation::TemplateInjection];
+        descriptor.allowed_operations = vec![
+            WitnessOperation::TemplateInjection,
+            WitnessOperation::ChildStdin,
+        ];
         descriptor.self_signature = Signature64::new([0; 64]);
         descriptor.self_signature =
             identity.sign_validated_approval(&descriptor.self_signature_preimage()?)?;
@@ -121,6 +159,9 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
     let field_id = FieldId::from_bytes([0x44; 32])?;
     witness_policy.operation_rules[0].operation = WitnessOperation::TemplateInjection;
     witness_policy.operation_rules[0].max_target_count = 2;
+    let mut stdin_rule = witness_policy.operation_rules[0].clone();
+    stdin_rule.operation = WitnessOperation::ChildStdin;
+    witness_policy.operation_rules.push(stdin_rule);
     witness_policy
         .validate()
         .map_err(|error| format!("template policy before labels: {error:?}"))?;
@@ -153,7 +194,20 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
         },
         |candidate| candidate == &item_label.label_id,
     )?;
-    let labels = vec![item_label, field_label];
+    let alias_label = label_creator.create(
+        OwnerReviewLabelInput {
+            policy: &provisional_policy,
+            owner: &principals.actors.owner,
+            label_revision: 2,
+            subject: ReviewLabelSubject::Item(item_id),
+            public_label: ReviewLabelBytes::new("Example…Alias".as_bytes().to_vec())?,
+            target_policy_sequence: 1,
+            issued_at_ms: NOW_MS - 1_000,
+            expires_at_ms: None,
+        },
+        |candidate| [item_label.label_id, field_label.label_id].contains(candidate),
+    )?;
+    let labels = vec![item_label, field_label, alias_label];
     witness_policy.review_label_set_digest = owner_review_label_set_digest(&labels)?;
     witness_policy
         .validate()
@@ -162,7 +216,6 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
     let policy = fixture_policy(&principals, &witness_policy, &witness_digest)?;
     let checkpoint = VaultPolicyCheckpointCreator::create(
         &policy,
-        &witness_digest,
         Digest32::new([0; 32]),
         &principals.actors.owner,
         NOW_MS - 1,
@@ -213,7 +266,7 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
             policy: &policy,
             checkpoint: &checkpoint,
             requester: &principals.actors.owner,
-            review_labels: labels,
+            review_labels: labels.clone(),
             now_ms: NOW_MS,
         },
         action(b"two")?,
@@ -230,8 +283,164 @@ fn human_action_builder_opens_every_scope_and_binds_command_changes() -> TestRes
         entry.subject_kind == PresentationSubjectV1::WorkingDirectory
             && entry.display_bytes.as_bytes() == b"/ExampleDirectory"
     }));
-    assert_ne!(first.manifest.workload_digest()?, second.manifest.workload_digest()?);
+    assert_ne!(
+        first.manifest.workload_digest()?,
+        second.manifest.workload_digest()?
+    );
     assert_ne!(first.manifest.digest()?, second.manifest.digest()?);
+    let make_stdin_action = || -> TestResult<WitnessActionRequest> {
+        let mut stdin_action = action(b"stdin")?;
+        stdin_action.operation_context = OperationContextV1::ChildStdin;
+        stdin_action
+            .arguments
+            .retain(|argument| matches!(argument, ManifestArgumentV1::PublicLiteral { .. }));
+        stdin_action.stdin_target = Some(WitnessTargetV1 {
+            item_id,
+            field_id: Some(field_id),
+        });
+        stdin_action.stdin_mode = StdinModeV1::SecretBytes;
+        Ok(stdin_action)
+    };
+    assert_stdin_action_review(
+        &policy,
+        &checkpoint,
+        &principals.actors.owner,
+        labels,
+        make_stdin_action,
+    )?;
+    Ok(())
+}
+
+fn assert_stdin_action_review(
+    policy: &crate::policy::PolicyState,
+    checkpoint: &jury_protocol::witness_v1::VaultPolicyCheckpointV1,
+    requester: &crate::identity::VaultPrincipalIdentity,
+    labels: Vec<jury_protocol::witness_v1::OwnerReviewLabelV1>,
+    make_stdin_action: impl Fn() -> TestResult<WitnessActionRequest>,
+) -> TestResult {
+    let action = make_stdin_action()?;
+    let item_id = action.item_id;
+    let field_id = *action.field_ids.first().ok_or("stdin field missing")?;
+    let mut creator = WitnessRequestCreator::from_source(TestRandom::new(0x3344), ProtectionPolicy::EmergencyAllowDegraded);
+    let prepared = creator.create_action(
+        WitnessRequestContext {
+            policy,
+            checkpoint,
+            requester,
+            review_labels: labels.clone(),
+            now_ms: NOW_MS,
+        },
+        make_stdin_action()?,
+    )?;
+    validate_public_request(policy, checkpoint, &prepared.request, &prepared.manifest)?;
+    assert_eq!(prepared.manifest.approval_target.entries.len(), 1);
+    assert_eq!(
+        prepared.manifest.approval_target.entries[0].field_id,
+        Some(field_id)
+    );
+    assert_eq!(
+        prepared.manifest.approval_target.entries[0].item_id,
+        item_id
+    );
+    let review = render_complete_approval_review(ApprovalReviewInput {
+        policy,
+        checkpoint,
+        request: &prepared.request,
+        manifest: &prepared.manifest,
+        presentation: &prepared.presentation,
+        review_labels: &labels,
+        now_ms: NOW_MS,
+    })?;
+    assert!(review.authenticated_item_labels().iter().any(|label| {
+        label.item_id == Some(item_id) && label.public_label.as_bytes() == b"ExampleItem"
+    }));
+    let mut forged_labels = labels.clone();
+    forged_labels
+        .iter_mut()
+        .find(|label| label.subject_kind == PresentationSubjectV1::Item)
+        .ok_or("missing item label")?
+        .public_label = ReviewLabelBytes::new(b"ExampleForged".to_vec())?;
+    let forged_error = render_complete_approval_review(ApprovalReviewInput {
+        policy,
+        checkpoint,
+        request: &prepared.request,
+        manifest: &prepared.manifest,
+        presentation: &prepared.presentation,
+        review_labels: &forged_labels,
+        now_ms: NOW_MS,
+    })
+    .err()
+    .ok_or("forged item label accepted")?;
+    assert_eq!(
+        forged_error.kind(),
+        crate::witness_approval::ReviewLabelErrorKind::InvalidScope
+    );
+    let missing_item_labels = labels
+        .iter()
+        .filter(|label| label.subject_kind != PresentationSubjectV1::Item)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        creator
+            .create_action(
+                WitnessRequestContext {
+                    policy,
+                    checkpoint,
+                    requester,
+                    review_labels: missing_item_labels,
+                    now_ms: NOW_MS,
+                },
+                make_stdin_action()?
+            )
+            .is_err()
+    );
+    let rendered: serde_json::Value = serde_json::from_str(review.text())?;
+    assert_eq!(
+        rendered["authenticated_item_labels"][0]["label_revision"],
+        review.authenticated_item_labels()[0].label_revision
+    );
+    assert!(rendered["authenticated_item_labels"][0]["label_id"].is_string());
+    assert_eq!(
+        rendered["authenticated_item_labels"]
+            .as_array()
+            .ok_or("missing labels")?
+            .len(),
+        2
+    );
+    assert_eq!(
+        rendered["authenticated_item_labels"][1]["exact_display"],
+        "Example…Alias"
+    );
+    assert_eq!(
+        rendered["authenticated_item_labels"][1]["label_revision"],
+        2
+    );
+    assert_ne!(
+        rendered["authenticated_item_labels"][0]["label_id"],
+        rendered["authenticated_item_labels"][1]["label_id"]
+    );
+    assert!(!review.text().contains('…'));
+    let mut stdin_action = make_stdin_action()?;
+    stdin_action
+        .field_ids
+        .push(FieldId::from_bytes([0x45; 32])?);
+    let error = creator
+        .create_action(
+            WitnessRequestContext {
+                policy,
+                checkpoint,
+                requester,
+                review_labels: labels,
+                now_ms: NOW_MS,
+            },
+            stdin_action,
+        )
+        .err()
+        .ok_or("multiple stdin fields accepted")?;
+    assert_eq!(
+        error.kind(),
+        crate::witness_client::WitnessRequestErrorKind::InvalidInput
+    );
     Ok(())
 }
 
@@ -276,7 +485,7 @@ fn policy_authenticated_presentation_opens_the_signed_request_and_rejects_tamper
     witness_policy.validate()?;
     let witness_policy_digest = witness_policy.digest()?;
     let policy = fixture_policy(&principals, &witness_policy, &witness_policy_digest)?;
-    let checkpoint = fixture_checkpoint(&principals, &witness_policy, &witness_policy_digest)?;
+    let checkpoint = fixture_checkpoint(&principals, &witness_policy_digest)?;
 
     let entry = ApprovalPresentationEntryV1 {
         subject_kind: PresentationSubjectV1::Item,

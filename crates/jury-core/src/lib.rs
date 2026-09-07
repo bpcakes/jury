@@ -40,4 +40,4 @@ pub const PRODUCT_NAME: &str = "Jury";
 pub const PRODUCT_TAGLINE: &str = "Portable secrets with configurable distributed authority.";
 
 /// Current implementation maturity.
-pub const MATURITY: &str = "pre-alpha; do not use with real secrets";
+pub const MATURITY: &str = "externally unreviewed pre-alpha; do not use with real secrets";

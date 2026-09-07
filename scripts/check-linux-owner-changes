@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Exercise atomic owner grant/revoke through real Linux CLIs and human approval PTYs."""
+import argparse
+import base64
+import json
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+ROOT = Path(__file__).resolve().parents[1]
+helpers = runpy.run_path(str(ROOT / 'scripts/check-linux-descriptor-access'), run_name='fixture')
+shared = helpers['shared']
+Fixture, require, document = (shared[name] for name in ('Fixture', 'require', 'document'))
+PASSPHRASE, VALUE = shared['PASSPHRASE'], shared['VALUE']
+
+
+def invoke_with_approvals(f, args, entries, expected=0, deny_at=None, pending=False, plaintext=False):
+    child = subprocess.Popen([str(f.jury), *([] if plaintext else ['--json']), '--passphrase-stdin', *map(str, args)],
+        cwd=f.root/'repo', env=f.environment, stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        child.stdin.write(PASSPHRASE+b'\n')
+        child.stdin.close()
+        child.stdin = None
+        for index, entry in enumerate(entries if not pending else []):
+            request = Path(entry['request_out'])
+            deadline = time.monotonic()+60
+            while not request.exists() and child.poll() is None and time.monotonic()<deadline:
+                time.sleep(.05)
+            if not request.exists():
+                stdout, stderr = child.communicate(timeout=10)
+                raise RuntimeError('authorization request missing: '+shared['safe_diagnostics'](stdout+stderr))
+            summary = helpers['approve'](f, request, Path(entry['approvals'][0]),
+                deny=index == deny_at, expected_role=entry['content_role'].upper())
+            manifest = json.loads(request.read_bytes())['action_manifest']
+            context = manifest['operation_context']
+            if context['kind'] == 'owner-change':
+                require(b'Owner change: ' in summary and context['target_principal_id'].encode() in summary,
+                        'approval omitted authenticated owner-change intent')
+                require(b'The requesting client receives the decrypted content' in summary,
+                        'approval omitted content disclosure to the client')
+                require(b'cannot enforce that the owner change is performed' in summary,
+                        'approval overstated enforcement of the owner change')
+                require(manifest['operation'] == 'administrative-rekey'
+                        and manifest['output_sink'] == 'none'
+                        and all(target['field_id'] is None for target in manifest['approval_target']['entries']),
+                        'owner change requested the wrong operation or scope')
+            if index == deny_at:
+                break
+        stdout, stderr = child.communicate(timeout=90)
+        require(child.returncode == expected, 'owner/read command failed: '+shared['safe_diagnostics'](stdout+stderr))
+        require(PASSPHRASE not in stdout+stderr and VALUE not in stderr, 'private material in metadata')
+        return stdout, stderr
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
+def exercise(f):
+    f.cli(['identity', 'init'], PASSPHRASE+b'\n')
+    f.cli(['vault', 'init'])
+    owner = f.cli(['identity', 'init', '--name', 'ExampleSecondOwner', '--kind', 'human'], PASSPHRASE+b'\n')['principal_id']
+    descriptor, challenge, proof = [f.root/'public'/f'owner.{kind}.json' for kind in ('descriptor', 'challenge', 'proof')]
+    f.cli(['--identity', 'ExampleSecondOwner', 'identity', 'public', '--out', descriptor])
+    f.cli(['principal', 'challenge', '--from', descriptor, '--out', challenge])
+    f.cli(['--identity', 'ExampleSecondOwner', 'identity', 'prove', '--challenge', challenge, '--out', proof])
+    f.cli(['principal', 'add', '--from', descriptor, '--proof', proof])
+    empty_vault = f.root/'repo/.jury/vault.json'
+    empty_before = empty_vault.read_bytes()
+    empty_plan = f.root/'public/empty.plan.json'
+    document(empty_plan, dict(version=1, total_wait_seconds=0, entries=[]))
+    error = f.cli(['principal', 'grant-owner', owner, '--administrative-access', empty_plan, '--dry-run'], expected=2)
+    require(error['error']['code'] == 'invalid-owner-access-plan' and empty_vault.read_bytes() == empty_before,
+            'empty vault silently ignored an invalid explicit plan')
+    document(empty_plan, dict(version=1, total_wait_seconds=1, entries=[]))
+    f.cli(['principal', 'grant-owner', owner, '--administrative-access', empty_plan, '--dry-run'])
+    require(empty_vault.read_bytes() == empty_before, 'empty vault dry-run changed ownership')
+    approver = helpers['register_approver'](f)
+    actors = [f.register_witness(name, index) for index, name in enumerate(('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    items, values = [], {}
+    for name in ('ExampleFirst', 'ExampleSecond', 'ExampleDirect'):
+        item_id = f.cli(['item', 'create', name, '--allow-direct'])['item_id']
+        values[item_id] = VALUE + name.encode()
+        f.cli(['vault', 'field', 'set', name, 'ExampleField', '--value-stdin'], values[item_id])
+        items.append((name, item_id))
+    for name, item_id in items[:2]:
+        f.cli(['policy', 'require', 'witnessed', '--item', name,
+               *[arg for actor in actors for arg in ('--witness', actor['id'])],
+               '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+               '--operation', 'read-stdout', '--operation', 'administrative-rekey',
+               '--review-label', 'ExamplePublicItem', '--field-review-label', 'ExampleField=ExampleField',
+               '--request-lifetime', '300'])
+    endpoints = [f.serve_witness(actor) for actor in actors]
+    checkpoint = f.root/'public/initial.checkpoint.json'
+    material_path = f.root/'public/initial.material.json'
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    f.cli(['witness', 'policy-material', '--output', material_path])
+    material = json.loads(material_path.read_bytes())
+    for actor in actors:
+        status, response = shared['http'](actor['port'], '/v1/operator/register', {
+            'policy_material': material, 'checkpoint': json.loads(checkpoint.read_bytes()),
+            'accepted_registration': base64.b64encode(actor['proof'].read_bytes()).decode()}, 'Operator')
+        require(status == 200 and response['durability'] == 'witness-database-and-external-anchor-readback',
+                'initial registration not durable')
+    vault = f.root/'repo/.jury/vault.json'
+    original = vault.read_bytes()
+    genesis = base64.b64decode(json.loads(original)['header']['genesis_fingerprint']).hex()
+
+    def plan(case, wait=60):
+        entries = []
+        for item_id in sorted(item_id for _, item_id in items[:2]):
+            for role in ('descriptor', 'body'):
+                stem = f'{case}-{item_id}-{role}'
+                entries.append(dict(item_id=item_id, content_role=role, checkpoint=str(checkpoint),
+                    request_out=str(f.root/'public'/f'{stem}.request.json'),
+                    receipt=str(f.root/'public'/f'{stem}.receipt.json'),
+                    approvals=[str(f.root/'public'/f'{stem}.approval.json')],
+                    witnesses=endpoints, allow_insecure_loopback=True, wait_seconds=wait))
+        return dict(version=1, total_wait_seconds=180, entries=entries)
+
+    grant_args = ['principal', 'grant-owner', owner, '--acknowledge-direct-access']
+    error = f.cli(grant_args, expected=2)
+    require(error['error']['code'] == 'owner-change-authorization-required' and vault.read_bytes() == original,
+            'missing authority did not preserve the vault with an actionable error')
+    for case in ('missing', 'duplicate', 'invalid-budget'):
+        value = plan(case)
+        if case == 'missing':
+            value['entries'].pop()
+        elif case == 'duplicate':
+            value['entries'][-1] = value['entries'][0]
+        else:
+            value['total_wait_seconds'] = 86401
+        path = f.root/'public'/f'{case}.plan.json'
+        document(path, value)
+        error = f.cli([*grant_args, '--administrative-access', path], expected=2)
+        require(error['error']['code'] == 'invalid-owner-access-plan' and vault.read_bytes() == original,
+                'invalid plan was accepted or changed the vault')
+        require(all(not Path(entry['request_out']).exists() for entry in value['entries']),
+                'invalid plan published an authorization request')
+
+    for case, expected in (('pending', 4), ('denied', 6), ('partial-denied', 6), ('dry-run', 0), ('granted', 0), ('revoked', 0)):
+        before = vault.read_bytes()
+        value = plan(case, 1 if case == 'pending' else 60)
+        path = f.root/'public'/f'{case}.plan.json'
+        document(path, value)
+        args = ['principal', 'revoke-owner', owner] if case == 'revoked' else grant_args[:]
+        args.extend(['--administrative-access', path])
+        if case == 'dry-run':
+            args.append('--dry-run')
+        denied = 0 if case == 'denied' else 1 if case == 'partial-denied' else None
+        stdout, stderr = invoke_with_approvals(f, args, value['entries'], expected, denied, case == 'pending')
+        if expected:
+            require(json.loads(stderr)['error']['code'] == ('approval-pending' if case == 'pending' else 'request-denied'),
+                    'authorization failure returned the wrong error')
+        if case not in ('granted', 'revoked'):
+            require(vault.read_bytes() == before, 'failed/dry-run owner change altered the vault')
+        completed = 0 if case in ('pending', 'denied') else 1 if case == 'partial-denied' else 4
+        for index, entry in enumerate(value['entries']):
+            require(Path(entry['receipt']).exists() == (index < completed), 'receipt does not match completed content opening')
+            if index < completed:
+                f.cli(['receipt', 'verify', entry['receipt'], '--checkpoint', checkpoint])
+        if case not in ('granted', 'revoked'):
+            continue
+        prior, after = json.loads(before), json.loads(vault.read_bytes())
+        require(len(after['policy']['revisions']) == len(prior['policy']['revisions'])+1, 'owner change was not one revision')
+        operations = after['policy']['revisions'][-1]['operations']
+        for name, item_id in items:
+            old = next(item for item in prior['items'] if item['item_id'] == item_id)
+            new = next(item for item in after['items'] if item['item_id'] == item_id)
+            require(new['current_revision']['key_epoch'] == old['current_revision']['key_epoch']+1,
+                    'owner change did not rotate every item epoch')
+            require(new['current_revision'] != old['current_revision'] and new['descriptor'] != old['descriptor'],
+                    'owner change retained a content revision')
+            for role in ('current_revision', 'descriptor'):
+                require(all(new[role][field] != old[role][field]
+                            for field in ('nonce', 'ciphertext_digest', 'revision_seal_id')),
+                        'owner change reused content sealing material')
+            replacements = [op['direct_slots'] for op in operations if op.get('item_id') == item_id and 'direct_slots' in op]
+            require(len(replacements) == 1, 'item access was not replaced exactly once')
+            slots = replacements[0]
+            if name != 'ExampleDirect':
+                require(not slots, 'witnessed-only item acquired direct slots')
+            else:
+                owner_slots = [slot for slot in slots if slot['recipient_principal_id'] == owner]
+                require((len(owner_slots) == 2 and {slot['content_role'] for slot in owner_slots} == {'body', 'descriptor'})
+                        if case == 'granted' else not owner_slots, 'direct owner slots do not match authority')
+        next_checkpoint = f.root/'public'/f'{case}.checkpoint.json'
+        next_material = f.root/'public'/f'{case}.material.json'
+        f.cli(['witness', 'checkpoint', '--predecessor', checkpoint, '--output', next_checkpoint])
+        f.cli(['witness', 'policy-material', '--output', next_material])
+        next_document = json.loads(next_material.read_bytes())
+        for previous in material['witness_policies']:
+            candidates = [policy for policy in next_document['witness_policies']
+                          if policy['witness_policy_id'] == previous['witness_policy_id']]
+            current = max(candidates, key=lambda policy: policy['revision'])
+            require(current['revision'] > previous['revision'], 'witness policy was not advanced')
+            changed = {'revision', 'predecessor_policy_digest', 'vault_policy_sequence', 'vault_policy_hash', 'review_label_set_digest'}
+            require({key: value for key, value in current.items() if key not in changed}
+                    == {key: value for key, value in previous.items() if key not in changed},
+                    'owner change altered witness membership or authorization terms')
+        for actor in actors:
+            status, response = shared['http'](actor['port'], '/v1/operator/checkpoint', {
+                'policy_material': next_document, 'checkpoint': json.loads(next_checkpoint.read_bytes())}, 'Operator')
+            require(status == 200, 'owner change checkpoint did not advance')
+            f.stop(actor['process'])
+            actor['process'] = f.start(['serve', '--config', actor['directory']/'witness.json'], actor['port'])
+        checkpoint = next_checkpoint
+        catalog = json.loads(next(f.root.rglob('policy-catalog.json')).read_bytes())
+        for name, item_id in items[:2]:
+            field_id = next(label['field_id'] for entry in catalog['review_label_sets'] for label in entry['labels']
+                            if label['item_id'] == item_id and label['field_id'] is not None)
+            entry = plan(f'{case}-read-{item_id}')['entries'][0]
+            entry.update(item_id=item_id, content_role='body')
+            identity_args = ['--identity', 'ExampleSecondOwner', '--expected-genesis', genesis] if case == 'granted' else []
+            args = [*identity_args, 'read', '--item-id', item_id, '--field-id', field_id,
+                    '--checkpoint', checkpoint, '--request-out', entry['request_out'], '--receipt', entry['receipt'],
+                    '--approval', entry['approvals'][0], '--wait-seconds', '60', '--allow-insecure-loopback', '--reveal',
+                    *[arg for endpoint in endpoints for arg in ('--witness', endpoint)]]
+            stdout, stderr = invoke_with_approvals(f, args, [entry], plaintext=True)
+            require(stdout == values[item_id], 'owner rotation changed exact field bytes or owner could not read')
+            f.cli(['receipt', 'verify', entry['receipt'], '--checkpoint', checkpoint])
+            if case == 'revoked':
+                request = f.root/'public'/f'revoked-{item_id}.request.json'
+                error = f.cli(['--identity', 'ExampleSecondOwner', 'request', 'create', '--item-id', item_id,
+                              '--field-id', field_id, '--checkpoint', checkpoint, '--out', request], expected=6)
+                require(error['error']['code'] == 'request-not-authorized' and not request.exists(),
+                        'revoked owner was not explicitly denied before request publication')
+        result = f.cli(['read', 'ExampleDirect', 'ExampleField', '--direct', '--reveal'], json_output=False)
+        require(result.stdout == values[items[2][1]], 'direct item bytes changed during owner rotation')
+    print('Real Linux owner changes passed: complete coverage, pending, denial, partial authorization, dry-run, atomic grant/revoke, fresh content, no witnessed direct slots, checkpoint advance/restart, exact owner reads and revoked-owner refusal.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT/'target/release/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT/'target/release/juryd')
+    args = parser.parse_args()
+    require(sys.platform == 'linux', 'requires Linux')
+    with tempfile.TemporaryDirectory(prefix='jury-owner-changes-') as directory:
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try:
+            exercise(fixture)
+        finally:
+            fixture.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print(shared['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

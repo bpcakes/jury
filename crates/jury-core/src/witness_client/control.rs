@@ -170,14 +170,13 @@ impl<R: RandomSource> RequestCancellationCreator<R> {
 }
 
 /// Constructs one exact owner-signed checkpoint from authenticated policy
-/// state. Callers choose only the witnessed-policy digest and predecessor
-/// checkpoint link; every duplicated policy field is derived here.
+/// state. Callers choose only the predecessor checkpoint link; the active
+/// policy set and every duplicated vault field are derived here.
 pub struct VaultPolicyCheckpointCreator;
 
 impl VaultPolicyCheckpointCreator {
     pub fn create(
         policy: &PolicyState,
-        witness_policy_digest: &Digest32,
         predecessor_checkpoint_digest: Digest32,
         owner: &VaultPrincipalIdentity,
         issued_at_ms: u64,
@@ -198,32 +197,14 @@ impl VaultPolicyCheckpointCreator {
                 WitnessRequestErrorKind::WrongIdentity,
             ));
         }
-        let witness_policy = policy
-            .witness_policy(witness_policy_digest)
-            .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
-        let (approver_set_digest, witness_set_digest) = witness_policy
-            .active_descriptor_set_digests()
-            .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::InvalidInput))?;
-        if witness_policy.vault_policy_sequence > policy.sequence()
-            || policy.predecessor_hash_for_sequence(witness_policy.vault_policy_sequence)
-                != Some(&witness_policy.vault_policy_hash)
-        {
-            return Err(WitnessRequestError::new(
-                WitnessRequestErrorKind::StalePolicy,
-            ));
-        }
         let mut checkpoint = jury_protocol::witness_v1::VaultPolicyCheckpointV1 {
             schema: 1,
             vault_id: policy.vault_id(),
             genesis_fingerprint: policy.genesis_fingerprint().clone(),
             vault_policy_sequence: policy.sequence(),
             vault_policy_hash: policy.terminal_revision_hash().clone(),
-            witness_policy_id: witness_policy.witness_policy_id,
-            witness_policy_revision: witness_policy.revision,
-            witness_policy_digest: witness_policy_digest.clone(),
-            witness_set_digest,
-            approver_set_digest,
-            review_label_set_digest: witness_policy.review_label_set_digest.clone(),
+            active_witness_policy_set_digest: policy.active_witness_policy_set_digest()
+                .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::InvalidInput))?,
             predecessor_checkpoint_digest,
             issued_at_ms,
             issuer_owner_id: owner.principal_id(),

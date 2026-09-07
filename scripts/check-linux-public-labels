@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Exercise exact public-label references with real witnesses, approvals and children."""
+import argparse
+import json
+from pathlib import Path
+import runpy
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+helper = runpy.run_path(str(ROOT/'scripts/check-linux-descriptor-access'), run_name='fixture')
+shared = helper['shared']
+Fixture, require, password, value = [shared[key] for key in ('Fixture', 'require', 'PASSPHRASE', 'VALUE')]
+ITEM = 'Example Item/Group. "Label" }} café'
+ITEM += 'x' * (256 - len(ITEM.encode('utf-8')))
+FIELD = 'Example Field/Token. = "Label" }} café'
+OTHER = 'Example Other.Field/Token'
+SECOND = b'ExampleSecondPrivateValue'
+
+
+def exercise(f):
+    f.cli(['identity', 'init'], password+b'\n')
+    f.cli(['vault', 'init'])
+    approver = helper['register_approver'](f)
+    actors = [f.register_witness(name, index) for index, name in enumerate(('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    item = f.cli(['item', 'create', 'ExampleItem', '--allow-direct'])
+    f.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleField', '--value-stdin'], value)
+    f.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleOther', '--value-stdin'], SECOND)
+    f.cli(['policy', 'require', 'witnessed', '--item', 'ExampleItem',
+           *[v for actor in actors for v in ('--witness', actor['id'])],
+           '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+           *[v for op in ('template-injection', 'child-environment', 'child-stdin') for v in ('--operation', op)],
+           '--review-label', ITEM, '--field-review-label', 'ExampleField='+FIELD,
+           '--field-review-label', 'ExampleOther='+OTHER, '--request-lifetime', '300'])
+    checkpoint, material = [f.root/'public'/name for name in ('checkpoint.json', 'policy.json')]
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    f.cli(['witness', 'policy-material', '--output', material])
+    endpoints = []
+    for actor in actors:
+        endpoints += ['--witness', f.serve_witness(actor)]
+        status, acknowledgement = shared['http'](actor['port'], '/v1/operator/register', dict(
+            policy_material=json.loads(material.read_bytes()), checkpoint=json.loads(checkpoint.read_bytes()),
+            accepted_registration=shared['base64'].b64encode(actor['proof'].read_bytes()).decode()), 'Operator')
+        require(status == 200 and acknowledgement['durability'] == 'witness-database-and-external-anchor-readback', 'registration was not durable')
+    output = f.root/'private'; output.mkdir(mode=0o700)
+    reference = json.dumps([ITEM, FIELD], ensure_ascii=False)
+    other = json.dumps([ITEM, OTHER], ensure_ascii=False)
+    expected = output/'expected'; shared['write'](expected, value)
+    expected_other = output/'expected-other'; shared['write'](expected_other, SECOND)
+    template = output/'template'
+    shared['write'](template, ('prefix={{'+reference+'}}|{{'+other+'}}suffix').encode())
+    dotenv = output/'child.env'; shared['write'](dotenv, ('EXAMPLE_VALUE={{'+reference+'}}\n').encode())
+    cases = [('inject', ['inject', '--template', template, '--out', output/'rendered'], [])]
+    for command in ('exec', 'run'):
+        for channel, expression in (
+                ('env', "os.environb[b'EXAMPLE_VALUE']"),
+                ('stdin', 'sys.stdin.buffer.read()'),
+                ('file', "pathlib.Path(os.environ['EXAMPLE_FILE']).read_bytes()")):
+            flags = {'env': ['--env-file', dotenv] if command == 'exec' else ['--env', 'EXAMPLE_VALUE='+reference],
+                     'stdin': ['--stdin', reference], 'file': ['--file', 'EXAMPLE_FILE='+reference]}[channel]
+            program = f'import os,sys,pathlib; sys.exit(0 if {expression} == pathlib.Path(sys.argv[1]).read_bytes() else 41)'
+            cases.append((command+'-'+channel, [command, *flags], ['--', '/usr/bin/python3', '-c', program, expected]))
+    cases.append(('other-field', ['exec', '--stdin', other], ['--', '/usr/bin/cmp', '-s', '-', expected_other]))
+    for name, args, command in cases:
+        request, approval, receipt = [f.root/'public'/f'{name}.{suffix}.json' for suffix in ('request', 'approval', 'receipt')]
+        arguments = [str(f.jury), '--passphrase-stdin', *args, '--checkpoint', checkpoint,
+                     '--request-out', request, '--approval', approval, '--receipt', receipt,
+                     '--allow-insecure-loopback', *endpoints, *command]
+        child = subprocess.Popen(list(map(str, arguments)), cwd=f.root/'repo', env=f.environment,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            child.stdin.write(password+b'\n'); child.stdin.close(); child.stdin = None
+            deadline = time.monotonic()+60
+            while not request.exists() and child.poll() is None and time.monotonic()<deadline:
+                time.sleep(.05)
+            require(request.exists(), name+' did not produce a witnessed request')
+            captured = helper['approve'](f, request, approval, expected_role='BODY')
+            require(all(secret not in captured for secret in (password, value, SECOND)), 'private bytes appeared in review')
+            artifact = json.loads(request.read_bytes())
+            require(artifact['request']['item_id'] == item['item_id'], 'JSON reference selected another item')
+            _, complete = captured.split(b'Full lossless review follows; signing binds the complete request and manifest.', 1)
+            review, _ = json.JSONDecoder().raw_decode(complete.decode().lstrip())
+            require(review['request'] == artifact['request'] and review['action_manifest'] == artifact['action_manifest'], 'signed review changed the requested operation')
+            stdout, stderr = child.communicate(timeout=90)
+            require(all(secret not in stdout+stderr for secret in (password, value, SECOND)), 'private bytes appeared in child or metadata output')
+            require(child.returncode == 0, name+' did not deliver the exact selected bytes')
+            if name == 'inject':
+                require((output/'rendered').read_bytes() == b'prefix='+value+b'|'+SECOND+b'suffix', 'JSON template changed labels, delimiters or field values')
+            f.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+        finally:
+            if child.poll() is None: child.kill(); child.wait()
+    absent = output/'must-not-exist'
+    for bad in ('["Example"]', '["Example",1]', '["Example","Field","Extra"]',
+                json.dumps(['x'*257, 'ExampleField']), json.dumps(['Example', 'Field\n']), reference+'trailing'):
+        result = f.cli(['run', '--direct', '--stdin', bad, '--', '/usr/bin/touch', absent], expected=2)
+        require(result['error']['code'] == 'invalid-field-reference' and not absent.exists(), 'malformed JSON reference started a child')
+    print('PASS exact public labels with spaces, Unicode, quotes, braces, dots, slashes and equals: template, both child commands and all delivery channels; verified receipts and malformed-reference refusal')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, required=True)
+    parser.add_argument('--juryd', type=Path, required=True)
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='ExampleLabelQA-') as directory:
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try: exercise(fixture)
+        finally: fixture.close()
+
+
+if __name__ == '__main__':
+    main()

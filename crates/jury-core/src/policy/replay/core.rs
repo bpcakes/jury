@@ -299,6 +299,7 @@ pub(super) fn replay_policy_with_catalog(
         if next.normalized_state_hash()? != revision.resulting_policy_state_hash {
             return Err(PolicyError::new(PolicyErrorKind::StateHashMismatch));
         }
+        validate_complete_owner_slots(&next)?;
         next.terminal_revision_hash = revision
             .recomputed_hash()
             .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidFormat))?;

@@ -76,6 +76,7 @@ pub(super) fn initialize_policy_actors(
             "set",
             "ExampleWitnessedItem",
             "ExampleField",
+            "--unconcealed",
             "--value-stdin",
         ],
         b"OwnerPassphrase1234\nExampleFieldValue",
@@ -369,7 +370,7 @@ fn commit_witnessed_policy(
     assert!(ReceiptPolicyMaterialV1::decode(&PolicyMaterialBytes::new(padded_material)?).is_err());
 
     let vault = VaultFileV1::parse(&fs::read(vault_path)?)?;
-    assert_request_artifact_workflow(repository, data, state, artifacts, &vault)?;
+    assert_request_artifact_workflow(repository, data, state, artifacts)?;
     let (direct_slots, witnessed_state) = vault
         .policy
         .revisions
@@ -402,17 +403,8 @@ fn assert_request_artifact_workflow(
     data: &Path,
     state: &Path,
     artifacts: &Path,
-    vault: &VaultFileV1,
 ) -> TestResult {
     let checkpoint_path = artifacts.join("ExampleCheckpoint.json");
-    let item_id = encode_hex(
-        vault
-            .items
-            .first()
-            .ok_or("witnessed item is absent")?
-            .item_id
-            .as_bytes(),
-    );
     let checkpoint_output = success_json(run(
         repository,
         data,
@@ -423,15 +415,16 @@ fn assert_request_artifact_workflow(
             "--allow-degraded-protection",
             "witness",
             "checkpoint",
-            "--item-id",
-            &item_id,
             "--output",
             checkpoint_path.to_str().ok_or("invalid checkpoint path")?,
         ],
         b"OwnerPassphrase1234\n",
     )?)?;
     assert_eq!(checkpoint_output["operation"], "witness-checkpoint");
-    assert_eq!(checkpoint_output["item_id"], item_id);
+    let active_policy_set = checkpoint_output["active_witness_policy_set_digest"]
+        .as_str()
+        .ok_or("missing active policy set digest")?;
+    assert_eq!(active_policy_set.len(), 64);
     assert_eq!(checkpoint_output["contains_private_material"], false);
     let checkpoint_bytes = fs::read(&checkpoint_path)?;
     let checkpoint: jury_protocol::witness_v1::VaultPolicyCheckpointV1 =

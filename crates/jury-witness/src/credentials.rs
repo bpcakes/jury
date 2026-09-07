@@ -8,7 +8,7 @@ use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
-use crate::{AdapterError, AdapterErrorKind};
+use crate::{AdapterError, error::ConfigurationConstraint};
 
 const MIN_CREDENTIAL_BYTES: usize = 32;
 const MAX_CREDENTIAL_BYTES: usize = 256;
@@ -46,7 +46,7 @@ pub(crate) fn load_bearer(path: &Path) -> Result<BearerCredential, AdapterError>
     let mut value = b"Bearer ".to_vec();
     value.extend_from_slice(bytes.as_slice());
     let mut header = HeaderValue::from_bytes(&value)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidCredential))?;
+        .map_err(|_| AdapterError::credential(ConfigurationConstraint::CredentialBytes))?;
     value.fill(0);
     header.set_sensitive(true);
     Ok(BearerCredential(header))
@@ -56,7 +56,7 @@ fn load(path: &Path) -> Result<Zeroizing<Vec<u8>>, AdapterError> {
     validate_private_regular_file(path)?;
     let mut bytes = Zeroizing::new(
         jury_filesystem::read_private_file(path, MAX_CREDENTIAL_BYTES + 2)
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidCredential))?,
+            .map_err(|_| AdapterError::credential(ConfigurationConstraint::PrivateFile))?,
     );
     while bytes
         .last()
@@ -69,23 +69,29 @@ fn load(path: &Path) -> Result<Zeroizing<Vec<u8>>, AdapterError> {
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(AdapterError::new(AdapterErrorKind::InvalidCredential));
+        return Err(AdapterError::credential(
+            ConfigurationConstraint::CredentialBytes,
+        ));
     }
     Ok(bytes)
 }
 
 pub(crate) fn validate_private_regular_file(path: &Path) -> Result<(), AdapterError> {
     if !path.is_absolute() {
-        return Err(AdapterError::new(AdapterErrorKind::InvalidConfiguration));
+        return Err(AdapterError::configuration(
+            ConfigurationConstraint::PrivateFile,
+        ));
     }
     let metadata = std::fs::symlink_metadata(path)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidCredential))?;
+        .map_err(|_| AdapterError::credential(ConfigurationConstraint::PrivateFile))?;
     if !metadata.file_type().is_file()
         || metadata.nlink() != 1
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.uid() != rustix::process::geteuid().as_raw()
     {
-        return Err(AdapterError::new(AdapterErrorKind::InvalidCredential));
+        return Err(AdapterError::credential(
+            ConfigurationConstraint::PrivateFile,
+        ));
     }
     Ok(())
 }
@@ -131,7 +137,8 @@ mod tests {
             [vec![b'a'; MIN_CREDENTIAL_BYTES - 1], b" ".to_vec()].concat(),
         ] {
             private_file(&path, &invalid)?;
-            assert!(load(&path).is_err());
+            let error = load(&path).err().ok_or("invalid credential accepted")?;
+            assert!(error.to_string().contains("32..=256"));
         }
         Ok(())
     }
@@ -144,17 +151,42 @@ mod tests {
         private_file(&path, &[b'a'; MIN_CREDENTIAL_BYTES])?;
 
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640))?;
-        assert!(load(&path).is_err());
+        assert!(
+            load(&path)
+                .err()
+                .ok_or("unsafe credential file accepted")?
+                .to_string()
+                .contains("mode 0600")
+        );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
 
         let hardlink = directory.path().join("hardlink");
         fs::hard_link(&path, &hardlink)?;
-        assert!(load(&path).is_err());
+        assert!(
+            load(&path)
+                .err()
+                .ok_or("unsafe credential file accepted")?
+                .to_string()
+                .contains("mode 0600")
+        );
         fs::remove_file(&hardlink)?;
 
         let link = directory.path().join("symlink");
         symlink(&path, &link)?;
-        assert!(load(&link).is_err());
+        assert!(
+            load(&link)
+                .err()
+                .ok_or("credential symlink accepted")?
+                .to_string()
+                .contains("symlinks are not allowed")
+        );
+        assert!(
+            load(&directory.path().join("missing"))
+                .err()
+                .ok_or("missing credential accepted")?
+                .to_string()
+                .contains("readable at an absolute path")
+        );
         Ok(())
     }
 }

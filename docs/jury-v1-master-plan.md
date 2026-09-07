@@ -3421,7 +3421,11 @@ The deferred J15 read-only Jig migration design reserves
 `JIG_V2_VAULT_PASSPHRASE`; the active CLI does not accept it.
 
 For Jury v1, `JURY_IDENTITY_PASSPHRASE` supplies the knowledge factor for the
-selected portable local identity.
+selected portable local identity unless `--passphrase-stdin` is explicit.
+That flag selects stdin for every passphrase and confirmation, overriding all
+inherited passphrase variables. Supply lines in prompt order before any field
+value bytes. Terminal stdin uses hidden prompts; environment-only input without
+the flag consumes no stdin bytes.
 
 The CLI prompt changes from `Vault passphrase` to `Identity passphrase` after
 detecting Jury v1 from the public header.
@@ -4569,7 +4573,9 @@ reports which metadata class exceeded the budget without exposing event content.
 For Jury v1, backup creation first unlocks the selected owner identity, then captures
 a separate backup passphrase twice. Interactive prompts say `Identity
 passphrase` and `Backup passphrase` and never carry one response into the other.
-Automation uses `JURY_BACKUP_PASSPHRASE`; there is no fallback to
+Automation without `--passphrase-stdin` uses `JURY_BACKUP_PASSPHRASE`; the explicit
+flag instead reads every identity/backup/new-identity prompt from stdin in order,
+including confirmations, and overrides inherited passphrase variables. There is no fallback to
 `JIG_V2_VAULT_PASSPHRASE` or `JURY_IDENTITY_PASSPHRASE`.
 
 Deliberate reuse requires `--reuse-identity-passphrase`, an explicit owner-

@@ -25,10 +25,7 @@ pub(super) fn confirm_expected_genesis(cli: &Cli, vault: &VaultFileV1) -> Result
     eprintln!("Genesis fingerprint: {}", grouped(&expected));
     eprint!("Enter the complete genesis fingerprint to continue: ");
     std::io::stderr().flush().map_err(|_| filesystem_error())?;
-    let mut confirmation = String::new();
-    std::io::stdin()
-        .read_line(&mut confirmation)
-        .map_err(|_| filesystem_error())?;
+    let confirmation = secret_input::read_confirmation_line().map_err(map_secret_error)?;
     if decode_presented_hex_32(&confirmation).as_ref()
         != Some(vault.header.genesis_fingerprint.as_bytes())
     {

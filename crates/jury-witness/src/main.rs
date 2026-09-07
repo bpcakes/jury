@@ -20,7 +20,7 @@ const MAX_AUDIT_EXPORT_BYTES: usize = 1024 * 1024;
     name = "juryd",
     version,
     about = "Self-hostable Jury witness and external-anchor services",
-    after_help = "WARNING: pre-alpha; do not use with real secrets."
+    after_help = "WARNING: externally unreviewed pre-alpha; do not use with real secrets."
 )]
 struct Cli {
     #[command(subcommand)]

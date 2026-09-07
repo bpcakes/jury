@@ -124,7 +124,7 @@ fn reconcile_transfer_catalog_locked(
         Err(error) => return Err(map_filesystem_error(error)),
     };
     let mut catalog = match prior.as_deref() {
-        Some(bytes) => PolicyCatalogV1::parse_local_compatible(bytes)?,
+        Some(bytes) => PolicyCatalogV1::parse_local(bytes)?,
         None => PolicyCatalogV1::empty(),
     };
     catalog.merge_transfer(transfer)?;

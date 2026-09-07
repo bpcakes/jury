@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn field_redaction_options_are_explicit_and_mutually_exclusive()
+-> Result<(), Box<dyn std::error::Error>> {
+    let field_help = help(&["jury", "vault", "field", "set", "--help"])?;
+    assert!(field_help.contains("default for new fields"));
+    assert!(field_help.contains("updates preserve the kind"));
+    assert!(field_help.contains("stored field remains encrypted"));
+    assert!(
+        Cli::try_parse_from([
+            "jury",
+            "vault",
+            "field",
+            "set",
+            "ExampleItem",
+            "ExampleField",
+            "--concealed",
+            "--unconcealed",
+            "--value-stdin"
+        ])
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn parser_rejects_ambiguous_home_and_identity_flags() {
     assert!(
         Cli::try_parse_from(["jury", "--home", "/tmp/v", "--global", "vault", "status"]).is_err()
@@ -97,12 +121,23 @@ fn access_help_explains_inputs() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn witnessed_automatic_help_names_exact_authority() -> Result<(), Box<dyn std::error::Error>> {
+    let witnessed_help = help(&["jury", "policy", "require", "witnessed", "--help"])?;
+    assert!(witnessed_help.contains("--automatic-read <FIELD>"));
+    assert!(witnessed_help.contains("exact field plus the item descriptor"));
+    assert!(witnessed_help.contains("Other body fields remain unauthorized"));
+    assert!(witnessed_help.contains("--automatic-descriptor"));
+    assert!(witnessed_help.contains("without body contents"));
+    assert!(!witnessed_help.contains("--automatic-read-item"));
+    Ok(())
+}
+
+#[test]
 fn witnessed_policy_help_explains_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let witnessed_help = help(&["jury", "policy", "require", "witnessed", "--help"])?;
     assert!(witnessed_help.contains("Resolved item name that will require witnessed authority"));
     assert!(witnessed_help.contains("at least two unique values"));
     assert!(witnessed_help.contains("descriptor permits every declared operation"));
-    assert!(witnessed_help.contains("automatic read-stdout"));
     assert!(witnessed_help.contains("--review-label"));
     assert!(witnessed_help.contains("field-touching operations"));
     assert!(witnessed_help.contains("2..=the number of --witness values"));
@@ -334,4 +369,49 @@ fn receipt_and_witness_operations_require_explicit_public_artifacts() {
 #[test]
 fn grouped_fingerprint_is_stable() {
     assert_eq!(grouped("0011223344556677"), "00112233-44556677");
+}
+
+#[test]
+fn witnessed_wait_bounds_are_checked_before_execution() -> Result<(), Box<dyn std::error::Error>> {
+    let commands: &[&[&str]] = &[
+        &["read", "ExampleItem", "ExampleField", "--reveal"],
+        &["inject", "--template", "/tmp/ExampleTemplate", "--reveal"],
+        &["run"],
+        &["exec"],
+        &[
+            "request",
+            "execute",
+            "--item",
+            "ExampleItem",
+            "--field",
+            "ExampleField",
+            "--checkpoint",
+            "/tmp/ExampleCheckpoint",
+            "--request-out",
+            "/tmp/ExampleRequest",
+            "--receipt",
+            "/tmp/ExampleReceipt",
+            "--witness",
+            "ExampleEndpoint",
+            "--reveal",
+        ],
+    ];
+    for command in commands {
+        for wait in ["0", "900", "901"] {
+            let mut arguments = vec!["jury"];
+            arguments.extend_from_slice(command);
+            arguments.extend(["--wait-seconds", wait]);
+            if matches!(command[0], "run" | "exec") {
+                arguments.extend(["--", "/bin/true"]);
+            }
+            match Cli::try_parse_from(arguments) {
+                Ok(_) => assert_ne!(wait, "901", "out-of-range wait parsed"),
+                Err(error) => {
+                    assert_eq!(wait, "901", "valid wait failed: {error}");
+                    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+                }
+            }
+        }
+    }
+    Ok(())
 }

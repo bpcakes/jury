@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "jury"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "close_fds",
@@ -1453,6 +1453,7 @@ dependencies = [
  "jury-process",
  "jury-protected",
  "jury-protocol",
+ "nix",
  "reqwest",
  "rustix",
  "serde",
@@ -1465,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "jury-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "aes-gcm-siv",
  "argon2",
@@ -1488,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "jury-filesystem"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "cap-fs-ext",
  "cap-std",
@@ -1501,7 +1502,7 @@ dependencies = [
 
 [[package]]
 name = "jury-process"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "jury-protected",
  "libproc",
@@ -1512,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "jury-protected"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "aho-corasick",
  "base64",
@@ -1526,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "jury-protocol"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64",
  "hex",
@@ -1538,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "jury-tui"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "jury-core",
  "jury-protected",
@@ -1546,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "jury-witness"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "axum",
  "axum-server",
@@ -1717,6 +1718,18 @@ dependencies = [
  "hybrid-array",
  "num-traits",
  "zeroize",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]

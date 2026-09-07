@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Check governed item creation using real Linux CLIs, daemons and approval PTYs.
+
+Only synthetic local actors are used. Build jury and juryd first. This reuses
+transport setup from check-linux-witness-lifecycle, not simulated responses.
+"""
+import argparse
+import errno
+import http.client
+import http.server
+import json
+import os
+from pathlib import Path
+import pty
+import runpy
+import select
+import subprocess
+import sys
+import tempfile
+import termios
+import time
+import threading
+import traceback
+
+ROOT = Path(__file__).resolve().parents[1]
+shared = runpy.run_path(str(ROOT / 'scripts/check-linux-witness-lifecycle'), run_name='fixture')
+Fixture, require, document = [shared[key] for key in ('Fixture', 'require', 'document')]
+PASSPHRASE = shared['PASSPHRASE']
+
+
+def approve(fixture, request, output, deny=False, expected_role="DESCRIPTOR", reason=None):
+    master, slave = pty.openpty()
+    command = [str(fixture.jury), '--identity', 'ExampleApprover', '--passphrase-stdin',
+               'approve', str(request), '--out', str(output)]
+    if deny:
+        command.append('--deny')
+    if reason:
+        command.extend(['--reason', reason])
+    child = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
+                             cwd=fixture.root / 'repo', env=fixture.environment, start_new_session=True)
+    os.close(slave)
+    captured, confirmed, unlocked = b'', False, False
+    deadline = time.monotonic() + 60
+    try:
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], .05)[0]:
+                try:
+                    captured += os.read(master, 65536)
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        break
+                    raise
+            if not confirmed and b'to sign this exact decision: ' in captured:
+                os.write(master, b'deny\n' if deny else b'approve\n')
+                confirmed = True
+            if not unlocked and b'Identity passphrase: ' in captured:
+                require(not termios.tcgetattr(master)[3] & termios.ECHO, 'passphrase echo was enabled')
+                os.write(master, PASSPHRASE + b'\n')
+                unlocked = True
+            if child.poll() is not None:
+                break
+        require(child.wait(timeout=5) == 0 and confirmed and unlocked and output.exists(),
+                'approval failed: ' + shared['safe_diagnostics'](captured))
+        require(PASSPHRASE not in captured, 'passphrase appeared in approval terminal')
+        require(('Content authorized: '+expected_role).encode() in captured.split(b'\n', 1)[0], 'authenticated content scope was not prominent')
+        return captured
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        os.close(master)
+
+
+def register_approver(f):
+    identity = f.cli(['identity', 'init', '--name', 'ExampleApprover', '--kind', 'approver'], PASSPHRASE+b'\n')
+    descriptor, challenge, proof = [f.root/'public'/f'approver.{kind}.json' for kind in ('descriptor', 'challenge', 'proof')]
+    f.cli(['--identity', 'ExampleApprover', 'identity', 'public', '--out', descriptor])
+    f.cli(['principal', 'challenge', '--from', descriptor, '--out', challenge])
+    f.cli(['--identity', 'ExampleApprover', 'identity', 'prove', '--challenge', challenge, '--out', proof])
+    f.cli(['principal', 'add', '--from', descriptor, '--proof', proof])
+    return identity['principal_id']
+
+
+def exercise(f):
+    f.cli(['identity', 'init'], PASSPHRASE+b'\n')
+    f.cli(['vault', 'init'])
+    approver = register_approver(f)
+    actors = [f.register_witness(name, index) for index, name in enumerate(('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    items = [(name, f.cli(['item', 'create', name, '--allow-direct'])['item_id'])
+             for name in ('ExampleFirst', 'ExampleSecond')]
+    f.cli(['item', 'create', 'ExampleDirect', '--allow-direct'])
+    # The same real pair serves both policies under one vault checkpoint.
+    for index, (name, item_id) in enumerate(items):
+        membership = [arg for actor in actors for arg in ('--witness', actor['id'])]
+        f.cli(['vault', 'field', 'set', name, 'ExampleField', '--value-stdin'], shared['VALUE'])
+        f.cli(['policy', 'require', 'witnessed', '--item', name, *membership,
+               '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+               '--operation', 'read-stdout', '--review-label', 'ExampleSharedLabel',
+               '--field-review-label', 'ExampleField=ExampleField', '--request-lifetime', '300'])
+    material_path = f.root/'public/material.json'
+    f.cli(['witness', 'policy-material', '--output', material_path])
+    material = json.loads(material_path.read_bytes())
+    endpoints = [f.serve_witness(actor) for actor in actors]
+    checkpoint = f.root/'public/ExampleVault.checkpoint.json'
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    checkpoints = [checkpoint] * len(items)
+    ambiguous_request = f.root/'public/ExampleAmbiguous.request.json'
+    error = f.cli(['request', 'create', '--checkpoint', checkpoint, '--item', 'ExampleSharedLabel',
+                   '--field', 'ExampleField', '--out', ambiguous_request], expected=2)
+    require(error['error']['code'] == 'ambiguous-review-label', 'ambiguous public labels lacked a recovery hint')
+    require(not ambiguous_request.exists(), 'ambiguous selector published a request')
+    catalogs = list(f.root.rglob('policy-catalog.json'))
+    require(len(catalogs) == 1, 'expected exactly one local catalog before role imports')
+    catalog_path = catalogs[0]
+    catalog_bytes = catalog_path.read_bytes()
+    catalog = json.loads(catalog_bytes)
+    selected_id = items[0][1]
+    selected_set = next(entry for entry in catalog['review_label_sets']
+                        if any(label.get('item_id') == selected_id for label in entry['labels']))
+    field_id = next(label['field_id'] for label in selected_set['labels'] if label['field_id'] is not None)
+    catalog['review_label_sets'] = [selected_set]
+    try:
+        shared['write'](catalog_path, json.dumps(catalog, separators=(',', ':'), ensure_ascii=False).encode())
+        selected_request = f.root/'public/ExamplePartialLabels.request.json'
+        f.cli(['request', 'create', '--checkpoint', checkpoint, '--item-id', selected_id,
+               '--field-id', field_id, '--out', selected_request])
+        require(selected_request.exists(), 'opaque-ID selection depended on another policy label set')
+        missing_request = f.root/'public/ExampleMissingLabels.request.json'
+        error = f.cli(['request', 'create', '--checkpoint', checkpoint, '--item', 'ExampleSharedLabel',
+                       '--field', 'ExampleField', '--out', missing_request], expected=3)
+        require(error['error']['code'] == 'review-labels-unavailable' and not missing_request.exists(),
+                'missing routing labels lacked an actionable refusal or published a request')
+    finally:
+        shared['write'](catalog_path, catalog_bytes)
+    for actor in actors:
+        status, response = shared['http'](actor['port'], '/v1/operator/register', {
+            'policy_material': material, 'checkpoint': json.loads(checkpoint.read_bytes()),
+            'accepted_registration': shared['base64'].b64encode(actor['proof'].read_bytes()).decode(),
+        }, 'Operator')
+        require(status == 200 and response['durability'] == 'witness-database-and-external-anchor-readback', 'registration not durable')
+    vault = f.root/'repo/.jury/vault.json'
+    original = vault.read_bytes()
+
+    def plan(case, wait=60):
+        entries = []
+        for index, ((_, item_id), checkpoint) in enumerate(zip(items, checkpoints)):
+            stem = f'{case}-{item_id}'
+            entries.append(dict(item_id=item_id, checkpoint=str(checkpoint),
+                request_out=str(f.root/'public'/f'{stem}.request.json'),
+                receipt=str(f.root/'public'/f'{stem}.receipt.json'),
+                approvals=[str(f.root/'public'/f'{stem}.approval.json')],
+                witnesses=endpoints, allow_insecure_loopback=True, wait_seconds=wait))
+        return {'version': 1, 'entries': entries}
+
+    local_duplicate = f.cli(['item', 'create', 'ExampleDirect', '--allow-direct'], expected=4)
+    require(local_duplicate['error']['code'] == 'duplicate-item-name', 'local duplicate required witnessed authority')
+    require(vault.read_bytes() == original, 'local duplicate changed vault')
+
+    for case in ('missing', 'duplicate', 'invalid-budget'):
+        value = plan(case)
+        if case == 'missing':
+            value['entries'] = value['entries'][:1]
+        elif case == 'duplicate':
+            value['entries'] *= 2
+        else:
+            value['total_wait_seconds'] = 86401
+        path = f.root/'public'/f'{case}.plan.json'
+        document(path, value)
+        error = f.cli(['item', 'create', 'ExampleNext', '--allow-direct', '--descriptor-access', path], expected=2)
+        require(error['error']['code'] == 'invalid-descriptor-access-plan', 'invalid coverage was accepted')
+        require(vault.read_bytes() == original, 'invalid coverage changed vault')
+        require(all(not Path(entry['request_out']).exists() for entry in value['entries']), 'invalid coverage issued a request')
+
+    for case, name, expected in [('pending', 'ExampleNext', 4), ('denied', 'ExampleNext', 6),
+                                  ('duplicate-name', 'ExampleSecond', 4), ('dry-run', 'ExampleNext', 0),
+                                  ('created', 'ExampleNext', 0)]:
+        value = plan(case, 1 if case == 'pending' else 60)
+        path = f.root/'public'/f'{case}.plan.json'
+        document(path, value)
+        args = ['item', 'create', name, '--allow-direct', '--descriptor-access', str(path)]
+        if case == 'dry-run':
+            args.append('--dry-run')
+        child = subprocess.Popen([str(f.jury), '--json', '--passphrase-stdin', *args],
+            cwd=f.root/'repo', env=f.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            child.stdin.write(PASSPHRASE+b'\n')
+            child.stdin.close()
+            child.stdin = None
+            if case != 'pending':
+                for entry in sorted(value['entries'], key=lambda entry: entry['item_id']):
+                    deadline = time.monotonic()+60
+                    while not Path(entry['request_out']).exists() and child.poll() is None and time.monotonic()<deadline:
+                        time.sleep(.05)
+                    require(Path(entry['request_out']).exists(), 'name-check request was not published')
+                    approve(f, Path(entry['request_out']), Path(entry['approvals'][0]), deny=case == 'denied')
+                    if case == 'denied':
+                        break
+            stdout, stderr = child.communicate(timeout=90)
+            require(child.returncode == expected, f'{case} failed: '+shared['safe_diagnostics'](stdout+stderr))
+            require(PASSPHRASE not in stdout+stderr, 'private input in create metadata')
+            result = json.loads(stdout if expected == 0 else stderr)
+            if case in ('pending', 'denied', 'duplicate-name'):
+                code = {'pending': 'approval-pending', 'denied': 'request-denied', 'duplicate-name': 'duplicate-item-name'}[case]
+                require(result['error']['code'] == code, f'{case} returned the wrong refusal')
+            if case != 'created':
+                require(vault.read_bytes() == original, f'{case} changed vault')
+            else:
+                after, before = json.loads(vault.read_bytes()), json.loads(original)
+                require(len(after['items']) == len(before['items'])+1, 'new item missing')
+                require(all(item in after['items'] for item in before['items']), 'creation changed a governed envelope')
+            for entry in value['entries']:
+                receipt = Path(entry['receipt'])
+                if case in ('pending', 'denied'):
+                    require(not receipt.exists(), 'refused descriptor produced success receipt')
+                else:
+                    require(receipt.exists(), 'authorized descriptor omitted receipt')
+                    f.cli(['receipt', 'verify', receipt, '--checkpoint', entry['checkpoint']])
+                    manifest = json.loads(Path(entry['request_out']).read_bytes())['action_manifest']
+                    require(manifest['content_role'] == 'descriptor', 'name check requested a body')
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+    print('Real Linux descriptor checks passed: two governed items, coverage, pending, denial, duplicate, dry-run, creation, unchanged governed envelopes and verified receipts.')
+
+
+def check_batch_deadline(f, actors, item_id, checkpoint):
+    # Forward actual requests to real witnesses. Delay the first actual response
+    # beyond the batch budget; no later witness call may start after it returns.
+    calls, failures, servers, threads, endpoints = [], [], [], [], []
+
+    def handler_for(actor):
+        class Forwarder(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                connection = http.client.HTTPConnection('127.0.0.1', actor['port'], timeout=20)
+                try:
+                    calls.append((actor['id'], self.path))
+                    body = self.rfile.read(int(self.headers['Content-Length']))
+                    connection.request('POST', self.path, body, {
+                        'Content-Type': 'application/json',
+                        'Authorization': self.headers['Authorization'],
+                    })
+                    response = connection.getresponse()
+                    result = response.read()
+                    if len(calls) == 1:
+                        time.sleep(2)
+                    self.send_response(response.status)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(result)))
+                    self.end_headers()
+                    self.wfile.write(result)
+                except Exception:
+                    failures.append('forwarding the real witness response failed')
+                finally:
+                    connection.close()
+        return Forwarder
+
+    try:
+        for actor in actors:
+            server = http.server.HTTPServer(('127.0.0.1', 0), handler_for(actor))
+            servers.append(server)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            threads.append(thread)
+            endpoints.append(f"{actor['id']},http://127.0.0.1:{server.server_port},{actor['directory'] / 'Client.token'}")
+        request, receipt, plan = [f.root/'public'/name for name in (
+            'slow.request.json', 'slow.receipt.json', 'slow.plan.json')]
+        document(plan, {'version': 1, 'total_wait_seconds': 1, 'entries': [dict(
+            item_id=item_id, checkpoint=str(checkpoint), request_out=str(request),
+            receipt=str(receipt), witnesses=endpoints, allow_insecure_loopback=True, wait_seconds=0)]})
+        vault = f.root/'repo/.jury/vault.json'
+        before = vault.read_bytes()
+        result = f.cli(['item', 'create', 'ExampleSlow', '--allow-direct', '--descriptor-access', plan], expected=4)
+        require(result['error']['code'] == 'descriptor-access-timeout', 'batch deadline returned the wrong refusal')
+        require(not failures, 'real witness forwarding failed')
+        require(len(calls) == 1 and calls[0][1] == '/v1/requests/reserve',
+                'another witness call started after the batch deadline')
+        require(request.exists() and not receipt.exists(), 'timed-out authorization artifacts were incorrect')
+        require(vault.read_bytes() == before, 'timed-out name check changed the vault')
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=5)
+            require(not thread.is_alive(), 'forwarding server survived cleanup')
+
+
+def exercise_field_only(f):
+    f.cli(['identity', 'init'], PASSPHRASE+b'\n')
+    f.cli(['vault', 'init'])
+    actors = [f.register_witness(name, index) for index, name in enumerate(('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    item = f.cli(['item', 'create', 'ExampleItem', '--allow-direct'])
+    f.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleField', '--value-stdin'], shared['VALUE'])
+    membership = [arg for actor in actors for arg in ('--witness', actor['id'])]
+    f.cli(['policy', 'require', 'witnessed', '--item', 'ExampleItem', *membership,
+           '--approvals', '0', '--witness-quorum', '2', '--operation', 'read-stdout',
+           '--automatic-read', 'ExampleField', '--request-lifetime', '300'])
+    checkpoint = f.root/'public/checkpoint.json'
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    material = f.root/'public/policy.json'
+    f.cli(['witness', 'policy-material', '--output', material])
+    policy = json.loads(material.read_bytes())
+    targets = policy['witness_policies'][0]['operation_rules'][0]['automatic_read_targets']
+    require(len(targets) == 2 and {t['content_role'] for t in targets} == {'descriptor', 'body'},
+            'automatic field selection omitted explicit descriptor/body scope')
+    descriptor = next(t for t in targets if t['content_role'] == 'descriptor')
+    field = next(t for t in targets if t['content_role'] == 'body')
+    require(descriptor['field_id'] is None and field['field_id'] is not None, 'automatic policy authorized whole body')
+    endpoints = []
+    for actor in actors:
+        endpoints.append(f.serve_witness(actor))
+        status, ack = shared['http'](actor['port'], '/v1/operator/register', dict(
+            policy_material=policy, checkpoint=json.loads(checkpoint.read_bytes()),
+            accepted_registration=shared['base64'].b64encode(actor['proof'].read_bytes()).decode()), 'Operator')
+        require(status == 200 and ack['durability'] == 'witness-database-and-external-anchor-readback', 'automatic registration lacked durability')
+    arguments = [v for endpoint in endpoints for v in ('--witness', endpoint)]
+    allowed_request, allowed_receipt = [f.root/'public'/name for name in ('field.request.json', 'field.receipt.json')]
+    result = f.cli(['read', '--item-id', item['item_id'], '--field-id', field['field_id'],
+                   '--checkpoint', checkpoint, '--request-out', allowed_request, '--receipt', allowed_receipt,
+                   '--allow-insecure-loopback', *arguments, '--reveal'], json_output=False)
+    require(result.stdout == shared['VALUE'], 'automatic field did not return exact requested bytes')
+    f.cli(['receipt', 'verify', allowed_receipt, '--checkpoint', checkpoint])
+    denied_request, denied_receipt = [f.root/'public'/name for name in ('denied.request.json', 'denied.receipt.json')]
+    f.cli(['read', '--item-id', item['item_id'], '--field-id', '45'*32,
+           '--checkpoint', checkpoint, '--request-out', denied_request, '--receipt', denied_receipt,
+           '--allow-insecure-loopback', *arguments, '--out', f.root/'public/denied-output'], expected=5)
+    require(not denied_request.exists() and not denied_receipt.exists(), 'unselected field published authorization')
+    check_batch_deadline(f, actors, item['item_id'], checkpoint)
+    request, receipt, plan = [f.root/'public'/name for name in ('request.json', 'receipt.json', 'plan.json')]
+    document(plan, {'version': 1, 'entries': [dict(item_id=item['item_id'], checkpoint=str(checkpoint),
+        request_out=str(request), receipt=str(receipt), witnesses=endpoints, allow_insecure_loopback=True, wait_seconds=0)]})
+    before = json.loads((f.root/'repo/.jury/vault.json').read_bytes())
+    result = f.cli(['item', 'create', 'ExampleNext', '--allow-direct', '--descriptor-access', plan])
+    require(result['committed'] and result['item'] == 'ExampleNext', 'automatic policy still prevented subsequent item creation')
+    artifact = json.loads(request.read_bytes())
+    require(artifact['action_manifest']['content_role'] == 'descriptor', 'name check requested body authority')
+    after = json.loads((f.root/'repo/.jury/vault.json').read_bytes())
+    require(len(after['items']) == len(before['items']) + 1, 'new item missing')
+    require(all(item in after['items'] for item in before['items']), 'name check changed governed envelope')
+    f.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+    print('Real automatic field policy passed: exact field read, other field refusal, subsequent item creation through descriptor-only authority, unchanged governed envelope, enforced batch deadline and verified receipts.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT/'target/debug/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT/'target/debug/juryd')
+    args = parser.parse_args()
+    require(sys.platform == 'linux', 'requires Linux')
+    for check in (exercise_field_only, exercise):
+        with tempfile.TemporaryDirectory(prefix='jury-descriptors-') as directory:
+            fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+            try:
+                check(fixture)
+            finally:
+                fixture.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print(shared['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

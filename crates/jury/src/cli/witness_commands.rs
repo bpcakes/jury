@@ -7,26 +7,8 @@ pub(super) fn witness_checkpoint(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    let item_id = parse_item_id(&arguments.item_id)?;
     let context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
-    let item = context.policy.item(&item_id).ok_or_else(item_unavailable)?;
-    let witnessed = item.witnessed_state.as_ref().ok_or_else(|| {
-        CliError::new(
-            CliErrorKind::Conflict,
-            "witnessed-authority-unavailable",
-            "the selected item does not have witnessed authority",
-        )
-    })?;
-    let mut policy_digests = witnessed
-        .slots
-        .iter()
-        .map(|slot| slot.witness_policy_digest.clone())
-        .collect::<BTreeSet<_>>();
-    if policy_digests.len() != 1 {
-        return Err(invalid_vault());
-    }
-    let witness_policy_digest = policy_digests.pop_first().ok_or_else(invalid_vault)?;
     let predecessor_checkpoint_digest = match &arguments.predecessor {
         Some(path) => {
             let checkpoint = read_checkpoint(path)?;
@@ -39,9 +21,13 @@ pub(super) fn witness_checkpoint(
         }
         None => Digest32::new([0; 32]),
     };
+    let active_policy_count = context
+        .policy
+        .active_witness_policies()
+        .map_err(|_| invalid_checkpoint())?
+        .len();
     let checkpoint = VaultPolicyCheckpointCreator::create(
         &context.policy,
-        &witness_policy_digest,
         predecessor_checkpoint_digest,
         &context.identity,
         timestamp_ms()?,
@@ -62,9 +48,9 @@ pub(super) fn witness_checkpoint(
     Ok(CommandOutput::Safe {
         operation: "witness-checkpoint",
         fields: serde_json::json!({
-            "item_id": hex(item_id.as_bytes()),
             "checkpoint_digest": hex(checkpoint_digest.as_bytes()),
-            "witness_policy_digest": hex(witness_policy_digest.as_bytes()),
+            "active_witness_policy_set_digest": hex(checkpoint.active_witness_policy_set_digest.as_bytes()),
+            "active_witness_policy_count": active_policy_count,
             "policy_sequence": checkpoint.vault_policy_sequence,
             "output": arguments.output,
             "durability": durability(publication),
@@ -76,6 +62,11 @@ pub(super) fn witness_checkpoint(
                 grouped(&hex(checkpoint_digest.as_bytes()))
             ),
             format!("Policy sequence: {}", checkpoint.vault_policy_sequence),
+            if active_policy_count == 0 {
+                "Active witnessed policies: 0; this checkpoint records removal only and cannot register a witness or authorize a request".to_owned()
+            } else {
+                format!("Active witnessed policies: {active_policy_count}")
+            },
             format!("Output: {}", arguments.output.display()),
             "Contains private material: false".to_owned(),
         ],
@@ -208,10 +199,22 @@ pub(super) fn witness_policy_status(
 
 fn read_acknowledgement(path: &Path) -> Result<WitnessCheckpointAcknowledgementV1, CliError> {
     let bytes = read_public_file(path, MAX_RECEIPT_JSON_BYTES).map_err(map_filesystem_error)?;
-    let value = serde_json::from_slice::<serde_json::Value>(&bytes)
-        .map_err(|_| invalid_acknowledgement())?;
-    let acknowledgement = value.get("acknowledgement").cloned().unwrap_or(value);
-    serde_json::from_value::<WitnessCheckpointAcknowledgementV1>(acknowledgement)
+    parse_acknowledgement(&bytes)
+}
+
+fn parse_acknowledgement(bytes: &[u8]) -> Result<WitnessCheckpointAcknowledgementV1, CliError> {
+    #[derive(serde::Deserialize)]
+    struct Response {
+        acknowledgement: WitnessCheckpointAcknowledgementV1,
+    }
+
+    // Parse directly from the source bytes: protocol identifiers borrow their
+    // hexadecimal strings while deserializing. An owned serde_json::Value
+    // cannot supply those borrowed strings. Accept either the daemon response
+    // envelope (with its transport metadata) or a bare acknowledgement.
+    serde_json::from_slice::<Response>(bytes)
+        .map(|response| response.acknowledgement)
+        .or_else(|_| serde_json::from_slice::<WitnessCheckpointAcknowledgementV1>(bytes))
         .map_err(|_| invalid_acknowledgement())
 }
 

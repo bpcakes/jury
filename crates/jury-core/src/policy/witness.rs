@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use jury_protocol::vault_v1::{
-    Digest32, FieldId, FixedBytes, ItemId, PrincipalId, RecipientPublicKey1216, Signature64,
-    VaultId, VerificationPublicKey32, WitnessPolicyId, recipient_public_key_fingerprint,
+    ContentRole, Digest32, FieldId, FixedBytes, ItemId, PrincipalId, RecipientPublicKey1216,
+    Signature64, VaultId, VerificationPublicKey32, WitnessPolicyId,
+    recipient_public_key_fingerprint,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -61,6 +62,7 @@ pub enum PlatformAssurance {
 #[serde(deny_unknown_fields)]
 pub struct AutomaticReadTarget {
     pub item_id: ItemId,
+    pub content_role: ContentRole,
     pub field_id: Option<FieldId>,
 }
 
@@ -256,6 +258,7 @@ impl OperationRule {
             .iter()
             .map(|target| {
                 let mut bytes = target.item_id.as_bytes().to_vec();
+                bytes.push(target.content_role.tag());
                 match target.field_id {
                     Some(field_id) => {
                         bytes.push(1);
@@ -283,6 +286,12 @@ impl OperationRule {
             || usize::from(self.max_target_count) > MAX_AUTOMATIC_TARGETS
             || self.automatic_read_targets.len() > MAX_AUTOMATIC_TARGETS
             || !strictly_sorted_unique(&self.automatic_read_targets)
+            || self.automatic_read_targets.iter().any(|target| {
+                !matches!(
+                    (target.content_role, target.field_id),
+                    (ContentRole::Descriptor, None) | (ContentRole::Body, Some(_))
+                )
+            })
             || (is_automatic
                 && (self.operation != WitnessOperation::ReadStdout
                     || self.automatic_read_targets.is_empty()))
@@ -354,34 +363,6 @@ impl WitnessPolicy {
 
     pub fn digest(&self) -> Result<Digest32, PolicyError> {
         hash_body("jury-witness-v1/policy/hash", &self.canonical_body()?)
-    }
-
-    pub(crate) fn active_descriptor_set_digests(
-        &self,
-    ) -> Result<(Digest32, Digest32), PolicyError> {
-        let approvers = self
-            .approver_descriptors
-            .iter()
-            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
-            .map(ApproverPolicyDescriptor::canonical_bytes)
-            .collect::<Result<Vec<_>, _>>()?;
-        let witnesses = self
-            .witness_descriptors
-            .iter()
-            .filter(|descriptor| descriptor.status == DescriptorStatus::Active)
-            .map(WitnessPolicyDescriptor::canonical_bytes)
-            .collect::<Vec<_>>();
-        let mut approver_list = Vec::new();
-        list_bytes(&mut approver_list, &approvers)?;
-        let mut witness_list = Vec::new();
-        list_bytes(&mut witness_list, &witnesses)?;
-        Ok((
-            hash_body(
-                "jury-witness-v1/approver-descriptor-set/hash",
-                &approver_list,
-            )?,
-            hash_body("jury-witness-v1/witness-descriptor-set/hash", &witness_list)?,
-        ))
     }
 
     pub fn validate(&self) -> Result<(), PolicyError> {

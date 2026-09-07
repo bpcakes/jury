@@ -79,6 +79,52 @@ fn vector_bytes(corpus: &Value, name: &str, field: &str) -> AnyResult<Vec<u8>> {
     Ok(hex::decode(encoded)?)
 }
 
+#[test]
+fn automatic_targets_bind_content_role_and_match_frozen_encoding() -> AnyResult {
+    use super::AutomaticReadTarget;
+    use jury_protocol::vault_v1::{ContentRole, FieldId, ItemId};
+    let corpus = corpus()?;
+    let (policy, _, _) = frozen_policy()?;
+    let mut rule = policy.operation_rules[0].clone();
+    rule.approval_threshold = 0;
+    rule.eligible_approver_ids.clear();
+    for (name, content_role, field_id) in [
+        ("automatic_descriptor_target", ContentRole::Descriptor, None),
+        (
+            "automatic_field_target",
+            ContentRole::Body,
+            Some(FieldId::from_bytes([0x44; 32])?),
+        ),
+    ] {
+        rule.automatic_read_targets = vec![AutomaticReadTarget {
+            item_id: ItemId::from_bytes([0x03; 32])?,
+            content_role,
+            field_id,
+        }];
+        rule.validate()?;
+        let body = vector_bytes(&corpus, name, "body_hex")?;
+        let expected_tail = [
+            1_u32.to_be_bytes().to_vec(),
+            u32::try_from(body.len())?.to_be_bytes().to_vec(),
+            body,
+        ]
+        .concat();
+        assert!(rule.canonical_bytes()?.ends_with(&expected_tail));
+        let mut legacy = serde_json::to_value(&rule.automatic_read_targets[0])?;
+        legacy
+            .as_object_mut()
+            .ok_or_else(|| failure("target is not an object"))?
+            .remove("content_role");
+        assert!(serde_json::from_value::<AutomaticReadTarget>(legacy).is_err());
+        rule.automatic_read_targets[0].content_role = match content_role {
+            ContentRole::Descriptor => ContentRole::Body,
+            ContentRole::Body => ContentRole::Descriptor,
+        };
+        assert!(rule.validate().is_err());
+    }
+    Ok(())
+}
+
 fn descriptor_status(tag: u8) -> AnyResult<DescriptorStatus> {
     match tag {
         1 => Ok(DescriptorStatus::Active),

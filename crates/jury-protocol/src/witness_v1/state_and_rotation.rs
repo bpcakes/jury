@@ -120,7 +120,7 @@ pub struct WitnessCheckpointAcknowledgementV1 {
     pub vault_id: VaultId,
     pub checkpoint_digest: Digest32,
     pub vault_policy_sequence: u64,
-    pub witness_policy_digest: Digest32,
+    pub active_witness_policy_set_digest: Digest32,
     pub state_generation: u64,
     pub anchor_digest: Digest32,
     pub exact_anchor: WitnessStateAnchorV1,

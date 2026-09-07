@@ -111,6 +111,8 @@ mod context;
 mod dispatch;
 mod environment;
 mod execution_commands;
+mod field_input;
+mod field_reference;
 mod identity_commands;
 mod item_commands;
 mod mutation_commands;
@@ -132,7 +134,7 @@ mod witness_transport;
 include!("cli/access_execution_args.rs");
 include!("cli/witness_args.rs");
 
-const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: do not use with real secrets";
+const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: externally unreviewed; do not use with real secrets";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -140,10 +142,10 @@ const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: do not use with real secrets";
     version,
     about = jury_core::PRODUCT_TAGLINE,
     long_about = jury_core::PRODUCT_TAGLINE,
-    after_help = "Native Linux support only. PRE-ALPHA: do not use with real secrets."
+    after_help = "Native Linux support only. PRE-ALPHA: externally unreviewed; do not use with real secrets."
 )]
 pub struct Cli {
-    /// Emit stable JSON instead of human-readable output.
+    /// Emit JSON results and errors; explicit help/version remain text.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -177,7 +179,8 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "FINGERPRINT")]
     pub expected_genesis: Option<String>,
 
-    /// Read passphrase lines from standard input when it is not a terminal.
+    /// Use stdin for every passphrase; terminal prompts hide input.
+    /// Overrides inherited passphrase environment variables for every prompt.
     #[arg(long, global = true)]
     pub passphrase_stdin: bool,
 
@@ -266,13 +269,13 @@ pub enum Command {
     Inject(InjectArgs),
     /// Transparently execute a command with atomic Jury field injection.
     #[command(
-        long_about = "Transparently execute a command after every Jury field reference resolves atomically. Output is streamed after redaction and the exact child status is returned. PRE-ALPHA: do not use with real secrets.",
+        long_about = "Transparently execute a command after every Jury field reference resolves atomically. Output is streamed after redaction and the exact child status is returned. The global --json option is unsupported here; use jury run --json for structured output. PRE-ALPHA: externally unreviewed; do not use with real secrets.",
         after_help = "Native Linux only. An authorized child can copy or retain every plaintext value it receives."
     )]
     Exec(ExecArgs),
     /// Run a command through a cleaned, bounded Jury broker.
     #[command(
-        long_about = "Run a command through Jury's cleaned, timeout-bounded, output-bounded broker after every field reference resolves atomically. PRE-ALPHA: do not use with real secrets.",
+        long_about = "Run a command through Jury's cleaned, timeout-bounded, output-bounded broker after every field reference resolves atomically. PRE-ALPHA: externally unreviewed; do not use with real secrets.",
         after_help = "Native Linux only. An authorized child can copy or retain every plaintext value it receives."
     )]
     Run(RunArgs),
@@ -408,10 +411,16 @@ pub struct FieldSetArgs {
     pub item: String,
     #[arg(value_name = "FIELD")]
     pub field: String,
-    /// Mark this value for output redaction when later used by process commands.
-    #[arg(long)]
+    /// Conceal this field in child output (default for new fields; updates preserve the kind).
+    /// Concealed values require at least four bytes.
+    #[arg(long, conflicts_with = "unconcealed")]
     pub concealed: bool,
+    /// Allow this field's bytes in child output; the stored field remains encrypted.
+    #[arg(long)]
+    pub unconcealed: bool,
     /// Read the field value from standard input; required for non-terminal use.
+    /// Terminal entry is hidden, with or without this flag. Ctrl-D finishes immediately;
+    /// Enter adds a newline to the value. Ctrl-C cancels without saving.
     #[arg(long)]
     pub value_stdin: bool,
     /// Prepare and authenticate the exact mutation without writing it.
@@ -543,7 +552,7 @@ pub struct TransferImportArgs {
     pub input: PathBuf,
     #[arg(long)]
     pub dry_run: bool,
-    /// Permit a first installation when this identity has no effective item access.
+    /// Permit a first installation with no directly accessible items (required for approvers and witnesses).
     #[arg(long)]
     pub allow_no_access: bool,
 }
@@ -567,7 +576,11 @@ pub struct ItemCreateArgs {
     /// Create direct slots and acknowledge unilateral access semantics.
     #[arg(long)]
     pub allow_direct: bool,
-    /// Prepare and authenticate the exact mutation without writing it.
+    /// Absolute path to a JSON access plan for fresh witnessed descriptor reads needed to check every existing name.
+    /// See docs/item-creation.md for checkpoint, approval, witness, and receipt fields.
+    #[arg(long, value_name = "FILE")]
+    pub descriptor_access: Option<PathBuf>,
+    /// Authenticate without committing the vault; witnessed name checks still contact services and publish requests/receipts.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -654,6 +667,9 @@ pub struct PrincipalRemoveArgs {
 pub struct PrincipalTargetArgs {
     #[arg(value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Per-item descriptor/body approvals for witnessed-only owner changes (see docs/owner-changes.md).
+    #[arg(long, value_name = "FILE")]
+    pub administrative_access: Option<PathBuf>,
     /// Acknowledge any new unilateral direct slots created by owner grant.
     #[arg(long)]
     pub acknowledge_direct_access: bool,

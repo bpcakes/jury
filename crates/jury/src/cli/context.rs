@@ -1,202 +1,7 @@
+mod catalog;
+pub(super) use catalog::PolicyCatalogV1;
+
 use super::*;
-
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct PolicyCatalogV1 {
-    version: u16,
-    pub(super) role_descriptors: Vec<RegistrationRoleDescriptorV1>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    registration_proofs: Vec<RegistrationProofV1>,
-    pub(super) witness_policies: Vec<WitnessPolicy>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(super) review_label_sets: Vec<jury_core::transfer::ReviewLabelSetV1>,
-}
-
-impl PolicyCatalogV1 {
-    pub(super) const fn empty() -> Self {
-        Self {
-            version: 1,
-            role_descriptors: Vec::new(),
-            registration_proofs: Vec::new(),
-            witness_policies: Vec::new(),
-            review_label_sets: Vec::new(),
-        }
-    }
-
-    pub(super) fn parse_local_compatible(bytes: &[u8]) -> Result<Self, CliError> {
-        let mut catalog: Self =
-            serde_json::from_slice(bytes).map_err(|_| invalid_policy_catalog())?;
-        if serde_json::to_vec(&catalog).ok().as_deref() != Some(bytes) {
-            return Err(invalid_policy_catalog());
-        }
-        catalog.validate()?;
-        catalog
-            .role_descriptors
-            .sort_by_key(RegistrationRoleDescriptorV1::principal_id);
-        catalog
-            .registration_proofs
-            .sort_by_key(|proof| proof.candidate_principal_id);
-        catalog.witness_policies.sort_by_key(|policy| {
-            policy
-                .digest()
-                .map(|digest| *digest.as_bytes())
-                .unwrap_or([0; 32])
-        });
-        catalog
-            .review_label_sets
-            .sort_by_key(|set| set.digest.clone());
-        Ok(catalog)
-    }
-
-    fn validate(&self) -> Result<(), CliError> {
-        if self.version != 1 {
-            return Err(invalid_policy_catalog());
-        }
-        let mut role_ids = BTreeSet::new();
-        for role in &self.role_descriptors {
-            match role {
-                RegistrationRoleDescriptorV1::VaultPrincipal => {
-                    return Err(invalid_policy_catalog());
-                }
-                RegistrationRoleDescriptorV1::Approver { descriptor } => descriptor
-                    .validate()
-                    .map_err(|_| invalid_policy_catalog())?,
-                RegistrationRoleDescriptorV1::Witness { descriptor } => descriptor
-                    .validate()
-                    .map_err(|_| invalid_policy_catalog())?,
-            }
-            let id = role.principal_id().ok_or_else(invalid_policy_catalog)?;
-            if !role_ids.insert(id) {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        let mut proof_ids = BTreeSet::new();
-        for proof in &self.registration_proofs {
-            let bytes = proof
-                .to_json_bytes()
-                .map_err(|_| invalid_policy_catalog())?;
-            RegistrationProofV1::parse(&bytes).map_err(|_| invalid_policy_catalog())?;
-            let id = proof
-                .role_descriptor
-                .principal_id()
-                .filter(|id| *id == proof.candidate_principal_id)
-                .ok_or_else(invalid_policy_catalog)?;
-            if !proof_ids.insert(id)
-                || !self
-                    .role_descriptors
-                    .iter()
-                    .any(|role| role.principal_id() == Some(id) && role == &proof.role_descriptor)
-            {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        let mut policy_digests = BTreeSet::new();
-        for policy in &self.witness_policies {
-            policy.validate().map_err(|_| invalid_policy_catalog())?;
-            if !policy_digests.insert(policy.digest().map_err(|_| invalid_policy_catalog())?) {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        let mut label_digests = BTreeSet::new();
-        for set in &self.review_label_sets {
-            set.validate().map_err(|_| invalid_policy_catalog())?;
-            if !label_digests.insert(set.digest.clone()) {
-                return Err(invalid_policy_catalog());
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn transfer_catalog(
-        &self,
-        policy: &PolicyState,
-    ) -> Result<TransferPublicCatalogV1, CliError> {
-        let mut proofs = self
-            .registration_proofs
-            .iter()
-            .filter(|proof| {
-                policy
-                    .principal(&proof.candidate_principal_id)
-                    .is_some_and(|principal| {
-                        matches!(
-                            principal.descriptor.principal_kind,
-                            PrincipalKind::Approver | PrincipalKind::Witness
-                        )
-                    })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        proofs.sort_by_key(|proof| proof.candidate_principal_id);
-        let required = policy
-            .principals()
-            .filter(|(_, principal)| {
-                matches!(
-                    principal.descriptor.principal_kind,
-                    PrincipalKind::Approver | PrincipalKind::Witness
-                )
-            })
-            .count();
-        if proofs.len() != required {
-            return Err(CliError::new(
-                CliErrorKind::Conflict,
-                "portable-registration-proof-missing",
-                "an active approver or witness lacks portable registration proof evidence",
-            ));
-        }
-        TransferPublicCatalogV1::with_review_label_sets(
-            proofs,
-            self.witness_policies.clone(),
-            self.review_label_sets.clone(),
-        )
-        .map_err(|_| invalid_policy_catalog())
-    }
-
-    pub(super) fn merge_transfer(
-        &mut self,
-        transfer: &TransferPublicCatalogV1,
-    ) -> Result<(), CliError> {
-        for proof in &transfer.registration_proofs {
-            add_catalog_registration_proof(self, proof)?;
-        }
-        for incoming in &transfer.witness_policies {
-            let digest = incoming.digest().map_err(|_| invalid_policy_catalog())?;
-            if let Some(existing) = self
-                .witness_policies
-                .iter()
-                .find(|policy| policy.digest().ok().as_ref() == Some(&digest))
-            {
-                if existing != incoming {
-                    return Err(invalid_policy_catalog());
-                }
-            } else {
-                self.witness_policies.push(incoming.clone());
-            }
-        }
-        for incoming in &transfer.review_label_sets {
-            if let Some(existing) = self
-                .review_label_sets
-                .iter()
-                .find(|set| set.digest == incoming.digest)
-            {
-                if existing != incoming {
-                    return Err(invalid_policy_catalog());
-                }
-            } else {
-                self.review_label_sets.push(incoming.clone());
-            }
-        }
-        self.witness_policies.sort_by_key(|policy| {
-            policy
-                .digest()
-                .map(|digest| *digest.as_bytes())
-                .unwrap_or([0; 32])
-        });
-        self.review_label_sets.sort_by_key(|set| set.digest.clone());
-        self.validate()
-    }
-}
-
-include!("context/catalog_mutation.rs");
 
 pub(super) fn discover_accessible_items(
     context: &VaultPrincipalContext,
@@ -352,9 +157,7 @@ pub(super) fn read_policy_catalog(
     state: &VaultStateDirectory,
 ) -> Result<PolicyCatalogV1, CliError> {
     match state.read_vault_state(VaultStateFile::PolicyCatalog) {
-        Ok(bytes) => {
-            PolicyCatalogV1::parse_local_compatible(&bytes).map_err(|_| invalid_policy_catalog())
-        }
+        Ok(bytes) => PolicyCatalogV1::parse_local(&bytes).map_err(|_| invalid_policy_catalog()),
         Err(error) if error.kind() == FilesystemErrorKind::NotFound => Ok(PolicyCatalogV1::empty()),
         Err(error) => Err(map_filesystem_error(error)),
     }
@@ -541,6 +344,96 @@ pub(super) fn load_vault_principal_with_passphrase(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<(VaultPrincipalContext, secret_input::CapturedPassphrase), CliError> {
+    let (context, passphrase) = load_principal_context_with_passphrase(
+        cli,
+        environment,
+        current,
+        protection,
+        PrincipalRegistration::VaultPrincipal,
+    )?;
+    let UnlockedIdentity::VaultPrincipal(identity) = context.identity else {
+        return Err(vault_principal_required());
+    };
+    Ok((
+        PrincipalContext {
+            home: context.home,
+            vault: context.vault,
+            policy: context.policy,
+            catalog_before: context.catalog_before,
+            catalog_before_bytes: context.catalog_before_bytes,
+            catalog: context.catalog,
+            identity,
+            state: context.state,
+            local: context.local,
+            protection_degraded: context.protection_degraded,
+        },
+        passphrase,
+    ))
+}
+
+enum PrincipalRegistration<'a> {
+    VaultPrincipal,
+    Transfer(&'a ValidatedTransfer),
+}
+
+pub(super) fn load_transfer_principal(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+    protection: ProtectionPolicy,
+    transfer: &ValidatedTransfer,
+) -> Result<PrincipalContext<UnlockedIdentity>, CliError> {
+    load_principal_context_with_passphrase(
+        cli,
+        environment,
+        current,
+        protection,
+        PrincipalRegistration::Transfer(transfer),
+    )
+    .map(|(context, _passphrase)| context)
+}
+
+pub(super) fn principal_local_state(
+    identity: &UnlockedIdentity,
+    vault: &VaultFileV1,
+) -> Result<PrincipalLocalState, CliError> {
+    let vault_id = vault.header.vault_id;
+    let genesis = vault.header.genesis_fingerprint.clone();
+    match identity {
+        UnlockedIdentity::VaultPrincipal(identity) => {
+            PrincipalLocalState::for_vault_principal(identity, vault_id, genesis)
+        }
+        UnlockedIdentity::Approver(identity) => {
+            PrincipalLocalState::for_approver(identity, vault_id, genesis)
+        }
+        UnlockedIdentity::Witness(identity) => {
+            PrincipalLocalState::for_witness(identity, vault_id, genesis)
+        }
+    }
+    .map_err(|_| local_state_error())
+}
+
+const fn vault_principal_required() -> CliError {
+    CliError::new(
+        CliErrorKind::InvalidIdentity,
+        "vault-principal-required",
+        "the selected command requires a vault-principal identity",
+    )
+}
+
+fn load_principal_context_with_passphrase(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+    protection: ProtectionPolicy,
+    registration: PrincipalRegistration<'_>,
+) -> Result<
+    (
+        PrincipalContext<UnlockedIdentity>,
+        secret_input::CapturedPassphrase,
+    ),
+    CliError,
+> {
     let home = selected_home(cli, environment, current)?;
     let bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&bytes).map_err(|_| invalid_vault())?;
@@ -560,8 +453,7 @@ pub(super) fn load_vault_principal_with_passphrase(
     ) {
         Ok(state) => match state.read_vault_state(VaultStateFile::PolicyCatalog) {
             Ok(bytes) => (
-                PolicyCatalogV1::parse_local_compatible(&bytes)
-                    .map_err(|_| invalid_policy_catalog())?,
+                PolicyCatalogV1::parse_local(&bytes).map_err(|_| invalid_policy_catalog())?,
                 Some(bytes),
             ),
             Err(error) if error.kind() == FilesystemErrorKind::NotFound => {
@@ -618,30 +510,50 @@ pub(super) fn load_vault_principal_with_passphrase(
     )
     .map_err(map_secret_error)?;
     let protection_degraded = passphrase.protection_degraded();
-    let UnlockedIdentity::VaultPrincipal(identity) = unlock(&identity_file, passphrase.memory())
-        .map_err(|error| map_identity_error(error.kind()))?
-    else {
-        return Err(CliError::new(
-            CliErrorKind::InvalidIdentity,
-            "vault-principal-required",
-            "the selected command requires a vault-principal identity",
-        ));
+    let identity = unlock(&identity_file, passphrase.memory())
+        .map_err(|error| map_identity_error(error.kind()))?;
+    if matches!(registration, PrincipalRegistration::VaultPrincipal)
+        && !matches!(&identity, UnlockedIdentity::VaultPrincipal(_))
+    {
+        return Err(vault_principal_required());
+    }
+    let descriptor = identity
+        .public_descriptor()
+        .map_err(|_| invalid_identity())?;
+    // A signed descendant can introduce this role. Retained local state and
+    // ancestry are still checked against the current vault before publication.
+    let registration_policy = match registration {
+        PrincipalRegistration::VaultPrincipal => &policy,
+        PrincipalRegistration::Transfer(transfer) => transfer.policy(),
     };
-    if policy.principal(&identity.principal_id()).is_none() {
+    if registration_policy
+        .principal(&descriptor.principal_id)
+        .is_none_or(|principal| principal.descriptor != descriptor)
+    {
         return Err(CliError::new(
             CliErrorKind::AuthenticationFailed,
             "identity-not-registered",
             "the selected identity is not active in this vault",
         ));
     }
-
-    let local = PrincipalLocalState::for_vault_principal(
-        &identity,
-        vault.header.vault_id,
-        vault.header.genesis_fingerprint.clone(),
-    )
-    .map_err(|_| local_state_error())?;
-    let principal_id = identity.principal_id();
+    let candidate = match registration {
+        PrincipalRegistration::Transfer(transfer)
+            if policy.principal(&descriptor.principal_id).is_none() =>
+        {
+            // This principal's history begins at its signed registration, not
+            // at an older snapshot in which it did not exist. A retry retains
+            // this authenticated target checkpoint until exact publication.
+            CheckpointCandidate::from_validated(
+                transfer.policy(),
+                &transfer.vault().policy,
+                &transfer.vault().items,
+            )
+            .map_err(|_| invalid_vault())?
+        }
+        _ => candidate,
+    };
+    let local = principal_local_state(&identity, &vault)?;
+    let principal_id = descriptor.principal_id;
     let (state, verified) = match probe {
         PrincipalStateProbe::Existing {
             state,
@@ -689,7 +601,7 @@ pub(super) fn load_vault_principal_with_passphrase(
         CheckpointRelation::Divergent => return Err(checkpoint_conflict()),
     }
     Ok((
-        VaultPrincipalContext {
+        PrincipalContext {
             home,
             vault,
             policy,
@@ -705,17 +617,60 @@ pub(super) fn load_vault_principal_with_passphrase(
     ))
 }
 
+include!("context/catalog_mutation.rs");
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn legacy_local_catalog_without_registration_proofs_remains_readable() -> Result<(), CliError> {
-        let bytes = br#"{"version":1,"role_descriptors":[],"witness_policies":[]}"#;
-        let catalog = PolicyCatalogV1::parse_local_compatible(bytes)?;
+    fn witness_catalog_batch_failure_is_atomic_and_readding_is_a_noop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let material: jury_core::witness_receipt::ReceiptPolicyMaterialV1 = serde_json::from_slice(
+            include_bytes!("../../tests/fixtures/witness-policy-status/policy.json"),
+        )?;
+        let policy = material.replay()?;
+        let existing = material
+            .witness_policies
+            .first()
+            .ok_or("missing policy")?
+            .clone();
+        let mut staged = existing.clone();
+        staged.revision += 1;
+        staged.predecessor_policy_digest = existing.digest()?;
+        staged.vault_policy_sequence += 1;
+        let mut catalog = PolicyCatalogV1::empty();
+        catalog.witness_policies = vec![existing.clone(), staged.clone()];
+        let before = catalog.clone();
+        add_catalog_witness_policy(&mut catalog, &policy, &existing)?;
+        assert_eq!(catalog, before, "an exact retry pruned a staged successor");
+        let mut invalid = staged.clone();
+        invalid.revision = 0;
+        catalog.witness_policies = vec![existing];
+        let before = catalog.clone();
+        assert!(add_catalog_witness_policies(&mut catalog, &policy, &[staged, invalid]).is_err());
+        assert_eq!(
+            catalog, before,
+            "a failed batch retained its first addition"
+        );
+        Ok(())
+    }
 
-        assert!(catalog.registration_proofs.is_empty());
+    #[test]
+    fn local_catalog_requires_explicit_collections() -> Result<(), CliError> {
+        let bytes = br#"{"version":1,"role_descriptors":[],"registration_proofs":[],"witness_policies":[],"review_label_sets":[]}"#;
+        let catalog = PolicyCatalogV1::parse_local(bytes)?;
         assert_eq!(policy_catalog_json_bytes(&catalog)?, bytes);
+        for field in ["registration_proofs", "review_label_sets"] {
+            let mut old: serde_json::Value =
+                serde_json::from_slice(bytes).map_err(|_| invalid_policy_catalog())?;
+            old.as_object_mut()
+                .ok_or_else(invalid_policy_catalog)?
+                .remove(field);
+            let old = serde_json::to_vec(&old).map_err(|_| invalid_policy_catalog())?;
+            assert!(serde_json::from_slice::<PolicyCatalogV1>(&old).is_err());
+            assert!(PolicyCatalogV1::parse_local(&old).is_err());
+        }
         Ok(())
     }
 
@@ -723,11 +678,11 @@ mod tests {
     fn local_catalog_parser_rejects_malformed_noncanonical_and_unknown_input() {
         for bytes in [
             b"{".as_slice(),
-            br#" {"version":1,"role_descriptors":[],"witness_policies":[]}"#,
-            br#"{"version":1,"role_descriptors":[],"witness_policies":[],"unknown":true}"#,
-            br#"{"version":2,"role_descriptors":[],"witness_policies":[]}"#,
+            br#" {"version":1,"role_descriptors":[],"registration_proofs":[],"witness_policies":[],"review_label_sets":[]}"#,
+            br#"{"version":1,"role_descriptors":[],"registration_proofs":[],"witness_policies":[],"review_label_sets":[],"unknown":true}"#,
+            br#"{"version":2,"role_descriptors":[],"registration_proofs":[],"witness_policies":[],"review_label_sets":[]}"#,
         ] {
-            assert!(PolicyCatalogV1::parse_local_compatible(bytes).is_err());
+            assert!(PolicyCatalogV1::parse_local(bytes).is_err());
         }
     }
 }

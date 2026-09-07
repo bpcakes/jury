@@ -244,7 +244,7 @@ fn audit_checkpoint_and_receipts_round_trip_without_private_values()
 }
 
 #[test]
-fn legacy_backup_receipt_fixture_verifies_and_retains_its_original_mac_contract()
+fn legacy_backup_receipt_fixture_is_rejected_without_coverage()
 -> Result<(), Box<dyn std::error::Error>> {
     const LEGACY_RECEIPTS: &[u8] = br#"{
   "version": 1,
@@ -267,39 +267,10 @@ fn legacy_backup_receipt_fixture_verifies_and_retains_its_original_mac_contract(
 "#;
 
     let context = context();
-    let legacy =
-        receipts::LocalReceipts::parse(LEGACY_RECEIPTS, context.scope(), &context.receipts_key)?;
-    let backup = legacy.latest_backup().ok_or("legacy backup absent")?;
-    assert_eq!(backup.backup_id(), &digest(0x63));
-    assert_eq!(backup.payload_digest(), &digest(0x64));
-    assert!(backup.coverage().is_none());
-    assert_eq!(legacy.to_bytes()?, LEGACY_RECEIPTS);
-
-    let candidate = candidate(context.scope(), &[(0, 0x12)]);
-    let mut state = context.initialize(&candidate, 1)?;
-    state.receipts = legacy;
-    context.record_receipt(
-        &mut state,
-        ReceiptUpdate::BackupVerification(BackupVerificationReceipt {
-            backup_id: digest(0x63),
-            captured_public_revision_hash: digest(0x12),
-            timestamp_ms: 63,
-            payload_digest: digest(0x64),
-        }),
-    )?;
-    let files = context.serialize(&state)?;
-    let verified = context.verify_files(
-        Some(files.audit()),
-        Some(files.checkpoint()),
-        Some(files.receipts()),
-    )?;
-    assert!(
-        verified
-            .receipts()
-            .latest_backup()
-            .is_some_and(|receipt| receipt.coverage().is_none())
-    );
-    assert!(verified.receipts().latest_backup_verification().is_some());
+    assert!(matches!(
+        receipts::LocalReceipts::parse(LEGACY_RECEIPTS, context.scope(), &context.receipts_key),
+        Err(error) if error.kind() == LocalStateErrorKind::InvalidFormat
+    ));
 
     let mut partial: Value = serde_json::from_slice(LEGACY_RECEIPTS)?;
     partial["latest_backup"]["identity_role_mask"] = Value::from(1);

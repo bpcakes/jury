@@ -133,25 +133,10 @@ fn split_mapping(value: &str) -> Result<(&str, &str), CliError> {
     let (name, reference) = value
         .split_once('=')
         .ok_or_else(invalid_execution_arguments)?;
-    if name.is_empty() || reference.is_empty() || reference.contains('=') {
+    if name.is_empty() || reference.is_empty() {
         return Err(invalid_execution_arguments());
     }
     Ok((name, reference))
-}
-
-fn parse_field_reference(value: &str) -> Result<FieldReference, CliError> {
-    let (item, field) = value
-        .split_once('.')
-        .ok_or_else(invalid_execution_arguments)?;
-    if item.is_empty() || field.is_empty() || field.contains('.') {
-        return Err(invalid_execution_arguments());
-    }
-    FieldSelector::parse(item.to_owned(), field.to_owned())
-        .map_err(|_| invalid_execution_arguments())?;
-    Ok(FieldReference {
-        item: item.to_owned(),
-        field: field.to_owned(),
-    })
 }
 
 fn validate_binding_destinations(

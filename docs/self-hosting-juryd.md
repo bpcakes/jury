@@ -195,10 +195,22 @@ therefore refuses a database with WAL, shared-memory, or rollback-journal
 sidecars; stop the service cleanly or audit a completed database backup.
 
 The SQLite adapter caps the complete serialized witness snapshot at 64 MiB.
-It rejects an operation that would cross the cap as protocol capacity
+Replay entries are stored as an ordered JSON record array, keyed in memory by
+the request's vault and request IDs; duplicate records are rejected on load.
+This unreleased format uses a record list even when empty. The former JSON
+object representation is rejected; there is no migration or compatibility path.
+Initialize fresh synthetic databases for this build. Never reset a running
+witness database to recover from a replay or anchor disagreement.
+The SQLite adapter rejects an operation that would cross the cap as protocol capacity
 exhaustion and refuses to load an oversized snapshot before materializing its
 blob. Operators must compact eligible replay records before reaching this
 deployment limit; compaction never shortens the protocol retention horizon.
+Unexpired records cannot be removed to make room. If they fill the snapshot,
+new requests remain refused until retained records become eligible for
+compaction. Plan traffic for the complete retention window, not the protocol's
+larger record-count ceiling: the adapter may reach its byte cap much earlier,
+and whole-snapshot reads and writes grow with the retained data. This release
+has no measured high-throughput capacity claim.
 
 ## Backup, restore, and rollback behavior
 
@@ -242,6 +254,10 @@ client that loses a response retries the same request ID; stable protocol
 responses are persisted rather than recomputed as a new decision.
 
 ## Policy distribution and propagation status
+
+The [Linux operator walkthrough](witness-operator-walkthrough.md) gives the
+complete descriptor/proof registration, exact authenticated operator POSTs,
+checkpoint propagation, and owner/approver terminal sequence.
 
 Export the exact compact public policy bundle from the vault installation:
 

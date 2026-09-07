@@ -29,8 +29,14 @@ pub(super) fn vault_init(
             .map_err(map_filesystem_error)?
     };
     let identity_file = IdentityFileV1::parse(&identity_bytes).map_err(|_| invalid_identity())?;
-    let passphrase =
-        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
+    let passphrase = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        false,
+        "Identity passphrase",
+        environment.identity_passphrase(),
+    )
+    .map_err(map_secret_error)?;
     let UnlockedIdentity::VaultPrincipal(owner) = unlock(&identity_file, passphrase.memory())
         .map_err(|error| map_identity_error(error.kind()))?
     else {
@@ -240,8 +246,14 @@ pub(super) fn vault_audit_verify(
         .read(&root, &repositories, MAX_IDENTITY_FILE_BYTES)
         .map_err(map_filesystem_error)?;
     let identity_file = IdentityFileV1::parse(&identity_bytes).map_err(|_| invalid_identity())?;
-    let passphrase =
-        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
+    let passphrase = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        false,
+        "Identity passphrase",
+        environment.identity_passphrase(),
+    )
+    .map_err(map_secret_error)?;
     let unlocked = unlock(&identity_file, passphrase.memory())
         .map_err(|error| map_identity_error(error.kind()))?;
     let local = match unlocked {

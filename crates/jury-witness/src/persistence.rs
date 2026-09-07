@@ -20,6 +20,9 @@ use tempfile::NamedTempFile;
 use self::state_codec::{encode_persisted_state, map_codec_adapter_error, map_codec_store_error};
 use crate::{AdapterError, AdapterErrorKind};
 
+mod persisted_json;
+#[cfg(test)]
+mod replay_storage_tests;
 mod state_codec;
 
 const SCHEMA_VERSION: i64 = 1;

@@ -240,18 +240,7 @@ fn policy_checkpoint(corpus: &Value) -> TestResult<VaultPolicyCheckpointV1> {
         genesis_fingerprint: repeated_digest(0x02),
         vault_policy_sequence: 7,
         vault_policy_hash: repeated_digest(0x72),
-        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
-        witness_policy_revision: 1,
-        witness_policy_digest: digest_hex(corpus, "witness_policy", "digest_hex")?,
-        witness_set_digest: fixed_hex(hex::decode(
-            "1ca3be89d2e1d2de0bf25cfcfe82569fd63228031feea946b1fff38ee30b200a",
-        )?)?,
-        approver_set_digest: fixed_hex(hex::decode(
-            "95ac3364e23be58775128029e79a3bd9f447011cc96bf95a98bc2e193d8d6bb5",
-        )?)?,
-        review_label_set_digest: fixed_hex(hex::decode(
-            "da3e0c4bc71493d609254bd71fc7f182947aa6f61bb63129cdcb3baea42082c5",
-        )?)?,
+        active_witness_policy_set_digest: digest_hex(corpus, "active_policy_set_single", "digest_hex")?,
         predecessor_checkpoint_digest: repeated_digest(0),
         issued_at_ms: ISSUED_AT - 500,
         issuer_owner_id: PrincipalId::from_bytes([0x09; 32])?,

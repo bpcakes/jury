@@ -334,6 +334,20 @@ impl EnvironmentInjectionV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OwnerChangeKindV1 {
+    Grant,
+    Revoke,
+}
+
+impl OwnerChangeKindV1 {
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self { Self::Grant => 1, Self::Revoke => 2 }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum OperationContextV1 {
@@ -357,6 +371,11 @@ pub enum OperationContextV1 {
         destination_commitment: Digest32,
         next_item_access_mode: ItemAccessMode,
     },
+    OwnerChange {
+        change: OwnerChangeKindV1,
+        target_principal_id: PrincipalId,
+        next_vault_policy_sequence: u64,
+    },
     AdministrativeRekey {
         next_vault_policy_sequence: u64,
         next_vault_policy_hash: Digest32,
@@ -379,7 +398,7 @@ impl OperationContextV1 {
             Self::ItemMutation { .. } => WitnessOperationV1::ItemMutation,
             Self::Backup { .. } => WitnessOperationV1::Backup,
             Self::Recovery { .. } => WitnessOperationV1::Recovery,
-            Self::AdministrativeRekey { .. } => WitnessOperationV1::AdministrativeRekey,
+            Self::AdministrativeRekey { .. } | Self::OwnerChange { .. } => WitnessOperationV1::AdministrativeRekey,
         }
     }
 
@@ -394,6 +413,7 @@ impl OperationContextV1 {
             Self::Backup { .. } => "backup",
             Self::Recovery { .. } => "recovery",
             Self::AdministrativeRekey { .. } => "administrative-rekey",
+            Self::OwnerChange { .. } => "owner-change",
         };
         let mut output = jce(&format!("jury-witness-v1/operation-context/{suffix}"));
         output.extend_from_slice(&1_u16.to_be_bytes());
@@ -443,6 +463,14 @@ impl OperationContextV1 {
                 output.push(*mode);
                 output.extend_from_slice(destination_commitment.as_bytes());
                 output.push(next_item_access_mode.tag());
+            }
+            Self::OwnerChange { change, target_principal_id, next_vault_policy_sequence } => {
+                if *next_vault_policy_sequence == 0 {
+                    return Err(WitnessProtocolError::new(WitnessProtocolErrorKind::InvalidFormat));
+                }
+                output.push(change.tag());
+                output.extend_from_slice(target_principal_id.as_bytes());
+                output.extend_from_slice(&next_vault_policy_sequence.to_be_bytes());
             }
             Self::AdministrativeRekey {
                 next_vault_policy_sequence,

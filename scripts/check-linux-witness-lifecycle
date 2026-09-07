@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Exercise real jury/juryd binaries, SQLite, anchors, and restart/replay.
+
+Use only generated synthetic identities and values. Loopback processes are test
+fixtures, not evidence of independent deployment authorities. Build both binaries
+first; pass --jury and --juryd to test a release build instead of target/debug.
+"""
+
+import argparse
+import base64
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import urllib.error
+import urllib.request
+
+ROOT = Path(__file__).resolve().parents[1]
+PASSPHRASE = b"ExampleLifecyclePassphrase1234"
+VALUE = b"ExampleLifecycleValue"
+TOKENS = {role: f"Example{role}Credential_0123456789abcdef" for role in ("Client", "Operator", "Anchor")}
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
+def write(path, contents):
+    path.write_bytes(contents)
+    path.chmod(0o600)
+
+
+def document(path, value):
+    write(path, json.dumps(value).encode())
+
+
+def unused_ports():
+    # Keep both sockets bound while choosing ports so the OS cannot return the
+    # same port twice. Daemons still bind after these reservations are released.
+    with socket.socket() as first, socket.socket() as second:
+        first.bind(("127.0.0.1", 0))
+        second.bind(("127.0.0.1", 0))
+        return [first.getsockname()[1], second.getsockname()[1]]
+
+
+def safe_diagnostics(output):
+    private = [PASSPHRASE, VALUE, *[value.encode() for value in TOKENS.values()]]
+    if any(value in output for value in private):
+        return "[output withheld: private fixture material detected]"
+    return output.decode("utf-8", errors="replace")[-8000:]
+
+
+def http(port, route, payload=None, role=None):
+    headers = {"Content-Type": "application/json"}
+    if role:
+        headers["Authorization"] = "Bearer " + TOKENS[role]
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{route}",
+        data=None if payload is None else json.dumps(payload).encode(), headers=headers,
+    )
+    # Loopback tests must not be routed through an inherited HTTP proxy.
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=20) as response:
+            return response.status, json.load(response)
+    except urllib.error.HTTPError as error:
+        raise RuntimeError(f"HTTP {error.code} at {route}: {safe_diagnostics(error.read(8192))}") from None
+
+
+class Fixture:
+    def __init__(self, root, jury, juryd):
+        self.root, self.jury, self.juryd = root, jury, juryd
+        self.children = []
+        self.environment = {key: value for key, value in os.environ.items() if not key.startswith(("JURY_", "XDG_"))}
+        for name in ("repo", "data", "state", "public", "services"):
+            (root / name).mkdir(mode=0o700)
+        self.environment.update(XDG_DATA_HOME=str(root / "data"), XDG_STATE_HOME=str(root / "state"))
+        subprocess.run(["git", "init", "--quiet", str(root / "repo")], check=True)
+
+    def cli(self, args, value=None, json_output=True, expected=0):
+        # A single, explicit stdin contract avoids environment/stdin ambiguity.
+        command = [str(self.jury), "--passphrase-stdin"]
+        if json_output:
+            command.append("--json")
+        result = subprocess.run(
+            command + list(map(str, args)), cwd=self.root / "repo", env=self.environment,
+            input=PASSPHRASE + b"\n" + (value or b""), capture_output=True, timeout=90,
+        )
+        require(result.returncode == expected, f"jury {args[0]} exit {result.returncode}, expected {expected}: {safe_diagnostics(result.stderr)}")
+        require(PASSPHRASE not in result.stdout + result.stderr, "passphrase appeared in CLI output")
+        if not json_output:
+            return result
+        require(VALUE not in result.stdout + result.stderr, "field value appeared in metadata output")
+        return json.loads(result.stdout if expected == 0 else result.stderr)
+
+    def daemon_command(self, args):
+        result = subprocess.run([str(self.juryd)] + list(map(str, args)), capture_output=True, timeout=30)
+        require(result.returncode == 0, f"juryd {args[0]} failed with exit {result.returncode}: {safe_diagnostics(result.stdout + result.stderr)}")
+
+    def start(self, args, port):
+        log = tempfile.TemporaryFile()
+        process = subprocess.Popen([str(self.juryd)] + list(map(str, args)), stdout=log, stderr=log, start_new_session=True)
+        self.children.append((process, log))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                log.seek(0)
+                raise RuntimeError(f"juryd exited before readiness: {safe_diagnostics(log.read())}")
+            try:
+                status, body = http(port, "/readyz")
+                if status == 200 and body["status"] == "ready":
+                    return process
+            except (urllib.error.URLError, TimeoutError):
+                pass
+            time.sleep(0.1)
+        log.seek(0)
+        raise RuntimeError(f"juryd readiness timed out: {safe_diagnostics(log.read())}")
+
+    def stop(self, process):
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+                raise RuntimeError("juryd failed graceful shutdown")
+        require(process.returncode == 0, "juryd exited unsuccessfully")
+
+    def close(self):
+        failures = []
+        for process, log in reversed(self.children):
+            try:
+                self.stop(process)
+            except Exception as error:
+                failures.append(str(error))
+            try:
+                log.seek(0)
+                output = log.read()
+                require(all(value not in output for value in [PASSPHRASE, VALUE, *[v.encode() for v in TOKENS.values()]]), "private fixture material appeared in daemon output")
+                if process.returncode != 0:
+                    print(safe_diagnostics(output), file=sys.stderr)
+            except Exception as error:
+                failures.append(str(error))
+            finally:
+                log.close()
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
+    def register_witness(self, name, index):
+        identity = self.cli(["identity", "init", "--name", name, "--kind", "witness"], PASSPHRASE + b"\n")
+        descriptor, challenge, proof = [self.root / "public" / f"{name}.{kind}.json" for kind in ("descriptor", "challenge", "proof")]
+        self.cli(["--identity", name, "identity", "public", "--out", descriptor])
+        self.cli(["principal", "challenge", "--from", descriptor, "--out", challenge, "--witness-share-index", str(index)])
+        self.cli(["--identity", name, "identity", "prove", "--challenge", challenge, "--out", proof])
+        self.cli(["principal", "add", "--from", descriptor, "--proof", proof])
+        return {"name": name, "id": identity["principal_id"], "proof": proof}
+
+    def serve_witness(self, actor):
+        directory = self.root / "services" / actor["name"]
+        directory.mkdir(mode=0o700)
+        anchor = json.loads((ROOT / "deploy/juryd/anchor.example.json").read_text())
+        witness = json.loads((ROOT / "deploy/juryd/witness.example.json").read_text())
+        ports = unused_ports()
+        for config, port, kind in zip((anchor, witness), ports, ("anchor", "witness")):
+            config.update(witness_id=actor["id"], listen=f"127.0.0.1:{port}", tls={"allow_insecure_loopback": True})
+            config["database"]["path"] = str(directory / f"{kind}.sqlite3")
+        for role in TOKENS:
+            write(directory / f"{role}.token", TOKENS[role].encode())
+        write(directory / "identity.passphrase", PASSPHRASE)
+        # The loopback anchor client still requires an explicit CA file. An
+        # empty PEM bundle is accepted for HTTP and provides no TLS trust.
+        write(directory / "ca.pem", b"")
+        anchor["write_credential_file"] = str(directory / "Anchor.token")
+        witness["identity"].update(identity_file=str(self.root / "data/jury/identities" / f"{actor['name']}.identity.json"), passphrase_file=str(directory / "identity.passphrase"))
+        witness["external_anchor"].update(base_url=f"http://127.0.0.1:{ports[0]}/", ca_certificate_file=str(directory / "ca.pem"), write_credential_file=str(directory / "Anchor.token"), allow_insecure_loopback=True)
+        witness.update(client_credential_file=str(directory / "Client.token"), operator_credential_file=str(directory / "Operator.token"))
+        for config, kind in ((anchor, "anchor"), (witness, "witness")):
+            document(directory / f"{kind}.json", config)
+        self.daemon_command(["anchor", "init", "--config", directory / "anchor.json"])
+        self.daemon_command(["database", "init", "--config", directory / "witness.json"])
+        self.start(["anchor", "serve", "--config", directory / "anchor.json"], ports[0])
+        actor.update(directory=directory, port=ports[1], process=self.start(["serve", "--config", directory / "witness.json"], ports[1]))
+        return f"{actor['id']},http://127.0.0.1:{ports[1]},{directory / 'Client.token'}"
+
+    def exercise(self):
+        self.cli(["identity", "init"], PASSPHRASE + b"\n")
+        self.cli(["vault", "init"])
+        actors = [self.register_witness(name, index) for index, name in enumerate(("ExampleWitnessOne", "ExampleWitnessTwo"), 1)]
+        item = self.cli(["item", "create", "ExampleItem", "--allow-direct"])
+        self.cli(["vault", "field", "set", "ExampleItem", "ExampleField", "--concealed", "--value-stdin"], VALUE)
+        second_owner = self.exercise_owner_slots()
+        membership = [arg for actor in actors for arg in ("--witness", actor["id"])]
+        self.cli(["policy", "require", "witnessed", "--item", "ExampleItem", *membership, "--approvals", "0", "--witness-quorum", "2", "--operation", "read-stdout", "--automatic-read", "ExampleField", "--request-lifetime", "300"])
+        # Missing administrative authority must fail before any mutation.
+        # The approved owner-change path is covered by check-linux-owner-changes.
+        vault = self.root / "repo/.jury/vault.json"
+        before_owner_attempt = vault.read_bytes()
+        refused = self.cli(["principal", "grant-owner", second_owner, "--acknowledge-direct-access"], expected=2)
+        require(refused['error']['code'] == 'owner-change-authorization-required', 'missing administrative authority was misclassified')
+        require(vault.read_bytes() == before_owner_attempt, 'refused witnessed owner change mutated vault')
+        checkpoint = self.root / "public/checkpoint.json"
+        material_path = self.root / "public/policy.json"
+        self.cli(["witness", "checkpoint", "--output", checkpoint])
+        self.cli(["witness", "policy-material", "--output", material_path])
+        material = json.loads(material_path.read_text())
+        target = next(target for target in material["witness_policies"][0]["operation_rules"][0]["automatic_read_targets"] if target["field_id"] is not None)
+        endpoint_args = []
+        for actor in actors:
+            endpoint_args += ["--witness", self.serve_witness(actor)]
+            status, response = http(actor["port"], "/v1/operator/register", {"policy_material": material, "checkpoint": json.loads(checkpoint.read_text()), "accepted_registration": base64.b64encode(actor["proof"].read_bytes()).decode()}, "Operator")
+            require(status == 200 and response["durability"] == "witness-database-and-external-anchor-readback", "registration not durable")
+            document(self.root / "public" / f"{actor['name']}.ack.json", response)
+        common = ["--item-id", target["item_id"], "--field-id", target["field_id"], "--checkpoint", checkpoint]
+        request, receipt = self.root / "public/request.json", self.root / "public/receipt.json"
+        result = self.cli(["read", *common, "--request-out", request, "--receipt", receipt, *endpoint_args, "--allow-insecure-loopback", "--reveal"], json_output=False)
+        require(result.stdout == VALUE, "witnessed read did not return exact field bytes")
+        self.cli(["receipt", "verify", receipt, "--checkpoint", checkpoint])
+        artifact = json.loads(request.read_text())
+        payload = {"request": artifact["request"], "manifest": artifact["action_manifest"]}
+        for actor in actors:
+            status, before = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            require(status == 200 and before["status"] == "stable", "completed request was not stable")
+            self.stop(actor["process"])
+            actor["process"] = self.start(["serve", "--config", actor["directory"] / "witness.json"], actor["port"])
+            status, after = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            require(status == 200 and after == before, "restart changed the exact stable response")
+        cancelled = self.root / "public/cancel-request.json"
+        self.cli(["request", "create", *common, "--out", cancelled])
+        self.cli(["request", "cancel", cancelled, "--out", self.root / "public/cancellation.json", *endpoint_args, "--allow-insecure-loopback"])
+        artifact = json.loads(cancelled.read_text())
+        payload = {"request": artifact["request"], "manifest": artifact["action_manifest"]}
+        for actor in actors:
+            self.stop(actor["process"])
+            actor["process"] = self.start(["serve", "--config", actor["directory"] / "witness.json"], actor["port"])
+            status, response = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            require(status == 200 and response["status"] == "stable", "cancelled request did not survive restart")
+            require(response["response"]["decision"]["reason"] == "cancelled", "cancelled request was not refused")
+        self.exercise_name_check(item["item_id"], checkpoint, endpoint_args)
+        print("Real Linux witness lifecycle passed: direct owner grant/revoke with denied former-owner read, witnessed owner-change refusal, exact read, receipt, stable replay, restart, cancellation, and governed descriptor name checks.")
+
+    def exercise_owner_slots(self):
+        owner = self.cli(["identity", "init", "--name", "ExampleSecondOwner", "--kind", "human"], PASSPHRASE + b"\n")
+        descriptor, challenge, proof = [self.root / "public" / f"owner.{kind}.json"
+                                         for kind in ("descriptor", "challenge", "proof")]
+        self.cli(["--identity", "ExampleSecondOwner", "identity", "public", "--out", descriptor])
+        self.cli(["principal", "challenge", "--from", descriptor, "--out", challenge])
+        self.cli(["--identity", "ExampleSecondOwner", "identity", "prove", "--challenge", challenge, "--out", proof])
+        self.cli(["principal", "add", "--from", descriptor, "--proof", proof])
+        self.cli(["principal", "grant-owner", owner['principal_id'], "--acknowledge-direct-access"])
+        vault = self.root / "repo/.jury/vault.json"
+        granted = json.loads(vault.read_bytes())
+        item = granted['items'][0]
+        def replaced_slots(value):
+            replacements = [operation['direct_slots']
+                for operation in value['policy']['revisions'][-1]['operations']
+                if operation.get('item_id') == item['item_id'] and 'direct_slots' in operation]
+            require(len(replacements) == 1, 'owner change did not replace the item slots once')
+            return replacements[0]
+        slots = [slot for slot in replaced_slots(granted) if slot['recipient_principal_id'] == owner['principal_id']]
+        require(len(slots) == 2 and {slot['content_role'] for slot in slots} == {'descriptor', 'body'},
+                'owner grant omitted required descriptor/body slots')
+        genesis = base64.b64decode(granted['header']['genesis_fingerprint']).hex()
+        result = self.cli(["--identity", "ExampleSecondOwner", "--expected-genesis", genesis,
+                           "read", "ExampleItem", "ExampleField", "--direct", "--reveal"], json_output=False)
+        require(result.stdout == VALUE, 'new owner could not read exact field bytes')
+        self.cli(["principal", "revoke-owner", owner['principal_id']])
+        revoked = json.loads(vault.read_bytes())
+        require(all(slot['recipient_principal_id'] != owner['principal_id']
+                    for slot in replaced_slots(revoked)), 'revoked owner retained a direct slot')
+        denied_output = self.root / "public/revoked-owner-output"
+        denied = self.cli(["--identity", "ExampleSecondOwner", "read", "ExampleItem", "ExampleField",
+                           "--direct", "--out", denied_output], expected=6)
+        require(denied['error']['code'] == 'item-unavailable', 'revoked owner retained read access or got the wrong refusal')
+        require(not denied_output.exists(), 'revoked owner read published private output')
+        result = self.cli(["read", "ExampleItem", "ExampleField", "--direct", "--reveal"], json_output=False)
+        require(result.stdout == VALUE, 'owner rotation changed field bytes')
+        return owner['principal_id']
+
+    def exercise_name_check(self, item_id, checkpoint, endpoints):
+        vault = self.root / "repo/.jury/vault.json"
+        before = vault.read_bytes()
+        missing = self.cli(["item", "create", "ExampleNext", "--allow-direct"], expected=2)
+        require(missing["error"]["code"] == "descriptor-authorization-required", "missing descriptor authority was misclassified")
+        require(vault.read_bytes() == before, "missing authorization changed the vault")
+        for name, expected in (("ExampleItem", 4), ("ExampleNext", 0)):
+            request = self.root / "public" / f"{name}.descriptor-request.json"
+            receipt = self.root / "public" / f"{name}.descriptor-receipt.json"
+            config = self.root / "public" / f"{name}.descriptor-access.json"
+            document(config, {"version": 1, "entries": [{"item_id": item_id, "checkpoint": str(checkpoint), "request_out": str(request), "receipt": str(receipt), "witnesses": endpoints[1::2], "allow_insecure_loopback": True, "wait_seconds": 1}]})
+            result = self.cli(["item", "create", name, "--allow-direct", "--descriptor-access", config], expected=expected)
+            if expected:
+                require(result["error"]["code"] == "duplicate-item-name", "witnessed duplicate was accepted or misclassified")
+                require(vault.read_bytes() == before, "duplicate name changed the vault")
+            else:
+                require(result["committed"], "new item was not committed")
+                prior = json.loads(before)
+                after = json.loads(vault.read_bytes())
+                require(len(after["items"]) == len(prior["items"]) + 1, "item count did not increase")
+                original = prior["items"][0]
+                retained = next(item for item in after["items"] if item["item_id"] == original["item_id"])
+                require(retained == original, "creating another item changed the governed envelope")
+            artifact = json.loads(request.read_bytes())
+            require(artifact["action_manifest"]["content_role"] == "descriptor", "name check requested body access")
+            require(all(target["field_id"] is None for target in artifact["action_manifest"]["approval_target"]["entries"]), "name check included a body field")
+            require(b"ExampleItem" not in request.read_bytes() + receipt.read_bytes(), "private descriptor name appeared in public artifacts")
+            self.cli(["receipt", "verify", receipt, "--checkpoint", checkpoint])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--jury", type=Path, default=ROOT / "target/debug/jury")
+    parser.add_argument("--juryd", type=Path, default=ROOT / "target/debug/juryd")
+    args = parser.parse_args()
+    require(sys.platform == "linux", "this test requires Linux")
+    with tempfile.TemporaryDirectory(prefix="jury-linux-lifecycle-") as directory:
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try:
+            fixture.exercise()
+        finally:
+            fixture.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        # Withhold diagnostics if known private fixture material is present.
+        print(safe_diagnostics(traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

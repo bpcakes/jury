@@ -131,6 +131,7 @@ pub(super) fn template_inject(
             authority: "direct-unilateral",
         })
     } else {
+        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: direct-unilateral");
         let mut stdout = std::io::stdout().lock();
         stdout
@@ -184,8 +185,8 @@ fn witnessed_template_inject(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let checkpoint = read_checkpoint(checkpoint_path)?;
-    let review_labels = review_labels_for_checkpoint(&context.catalog, &checkpoint)?;
+    read_checkpoint(checkpoint_path)?;
+    let review_labels = active_review_labels(&context)?;
     let mut target_ids = BTreeMap::new();
     for reference in references {
         let target = resolve_request_target(
@@ -308,6 +309,7 @@ fn witnessed_template_inject(
             ],
         })
     } else {
+        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: witnessed-approved");
         eprintln!("Receipt: {}", receipt_path.display());
         eprintln!("{}", VerifiedWitnessReceipt::NONCLAIM);
@@ -438,19 +440,27 @@ pub(super) fn parse_template(template: &str) -> Result<Vec<TemplateReference>, C
             return Err(invalid_template());
         }
         let content_start = start + 2;
-        let relative_end = bytes[content_start..]
-            .windows(2)
-            .position(|window| window == b"}}")
-            .ok_or_else(invalid_template)?;
+        let (reference, relative_end) = if bytes[content_start..].starts_with(b"[") {
+            field_reference::parse_json_prefix(&bytes[content_start..])?
+        } else {
+            let end = bytes[content_start..]
+                .windows(2)
+                .position(|window| window == b"}}")
+                .ok_or_else(invalid_template)?;
+            (
+                field_reference::parse(&template[content_start..content_start + end])?,
+                end,
+            )
+        };
         let content_end = content_start + relative_end;
-        let content = &template[content_start..content_end];
-        let (item, field) = content.split_once('.').ok_or_else(invalid_template)?;
-        FieldSelector::parse(item.to_owned(), field.to_owned()).map_err(|_| invalid_template())?;
+        if bytes.get(content_end..content_end + 2) != Some(b"}}") {
+            return Err(invalid_template());
+        }
         references.push(TemplateReference {
             start,
             end: content_end + 2,
-            item: item.to_owned(),
-            field: field.to_owned(),
+            item: reference.item,
+            field: reference.field,
         });
         if references.len() > MAX_TEMPLATE_REFERENCES {
             return Err(CliError::new(

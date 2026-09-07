@@ -52,18 +52,39 @@ pub(super) fn add_catalog_witness_policy(
     current_policy: &PolicyState,
     policy: &WitnessPolicy,
 ) -> Result<(), CliError> {
-    let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
-    if let Some(existing) = catalog
-        .witness_policies
-        .iter()
-        .find(|existing| existing.digest().ok().as_ref() == Some(&digest))
-    {
-        if existing == policy {
-            return Ok(());
-        }
-        return Err(invalid_policy_catalog());
+    if catalog.witness_policies.contains(policy) {
+        return Ok(());
     }
-    catalog.witness_policies.push(policy.clone());
+    add_catalog_witness_policies(catalog, current_policy, std::slice::from_ref(policy))
+}
+
+pub(super) fn add_catalog_witness_policies(
+    catalog: &mut PolicyCatalogV1,
+    current_policy: &PolicyState,
+    policies: &[WitnessPolicy],
+) -> Result<(), CliError> {
+    let mut candidate = catalog.clone();
+    update_catalog_witness_policies(&mut candidate, current_policy, policies)?;
+    *catalog = candidate;
+    Ok(())
+}
+
+fn update_catalog_witness_policies(
+    catalog: &mut PolicyCatalogV1,
+    current_policy: &PolicyState,
+    policies: &[WitnessPolicy],
+) -> Result<(), CliError> {
+    let mut added = BTreeSet::new();
+    for policy in policies {
+        let digest = policy.digest().map_err(|_| invalid_policy_catalog())?;
+        if let Some(existing) = catalog.witness_policies.iter()
+            .find(|existing| existing.digest().ok().as_ref() == Some(&digest)) {
+            if existing != policy { return Err(invalid_policy_catalog()); }
+        } else {
+            catalog.witness_policies.push(policy.clone());
+        }
+        added.insert(digest);
+    }
     let mut retained = current_policy
         .items()
         .filter_map(|(_, item)| {
@@ -73,7 +94,7 @@ pub(super) fn add_catalog_witness_policy(
                 .map(|slot| slot.witness_policy_digest.clone())
         })
         .collect::<BTreeSet<_>>();
-    retained.insert(digest);
+    retained.extend(added);
     let mut pending = retained.iter().cloned().collect::<Vec<_>>();
     while let Some(current) = pending.pop() {
         let entry = catalog
@@ -131,14 +152,16 @@ pub(super) fn add_catalog_review_label_set(
     policy_catalog_json_bytes(catalog).map(|_| ())
 }
 
-pub(super) struct VaultPrincipalContext {
+pub(super) type VaultPrincipalContext = PrincipalContext<VaultPrincipalIdentity>;
+
+pub(super) struct PrincipalContext<I> {
     pub(super) home: VaultHomeLocation,
     pub(super) vault: VaultFileV1,
     pub(super) policy: PolicyState,
     pub(super) catalog_before: PolicyCatalogV1,
     pub(super) catalog_before_bytes: Option<Vec<u8>>,
     pub(super) catalog: PolicyCatalogV1,
-    pub(super) identity: VaultPrincipalIdentity,
+    pub(super) identity: I,
     pub(super) state: VaultStateDirectory,
     pub(super) local: PrincipalLocalState,
     pub(super) protection_degraded: bool,

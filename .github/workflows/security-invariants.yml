@@ -19,10 +19,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+          components: clippy
       - name: Require immutable third-party action revisions
         run: bash scripts/test-ci-action-pins.sh
+      - name: Check Linux release artifact input and tamper handling
+        run: python3 scripts/test-linux-release.py
       - name: Check direct cryptographic provider binding
         run: python3 scripts/check-direct-crypto-gate
+      - name: Check frozen source inventory regressions
+        run: python3 scripts/test-witness-gate.py
+      - name: Check frozen witnessed construction and conformance
+        run: python3 scripts/check-witness-gate
       - name: Run isolated direct cryptographic conformance
         run: cargo test --manifest-path conformance/direct-crypto/Cargo.toml --locked
       - name: Verify exact-revision checkout bootstrap boundary

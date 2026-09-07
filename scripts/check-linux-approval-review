@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Exercise authenticated approval summaries through real Linux terminals.
+
+Synthetic actors only; actual jury/juryd, SQLite and anchors. Build release
+binaries first. Loopback does not demonstrate independent deployment authority.
+"""
+import argparse
+import json
+import os
+import pty
+import sys
+import traceback
+from pathlib import Path
+import runpy
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+helper = runpy.run_path(str(ROOT/'scripts/check-linux-descriptor-access'), run_name='fixture')
+shared = helper['shared']
+Fixture, require, password = shared['Fixture'], shared['require'], shared['PASSPHRASE']
+
+
+def exercise(f):
+    f.cli(['identity', 'init'], password+b'\n')
+    f.cli(['vault', 'init'])
+    approver = helper['register_approver'](f)
+    actors = [f.register_witness(name, index) for index, name in enumerate(
+        ('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    item = f.cli(['item', 'create', 'ExampleItem', '--allow-direct'])
+    f.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleField', '--value-stdin'], shared['VALUE'])
+    operations = ['read-stdout', 'write-private-file', 'template-injection', 'child-environment', 'child-stdin']
+    f.cli(['policy', 'require', 'witnessed', '--item', 'ExampleItem',
+           *[v for actor in actors for v in ('--witness', actor['id'])],
+           '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+           *[v for op in operations for v in ('--operation', op)], '--review-label', 'ExampleItem',
+           '--field-review-label', 'ExampleField=ExampleField', '--request-lifetime', '300'])
+    checkpoint, material = [f.root/'public'/name for name in ('checkpoint.json', 'policy.json')]
+    f.cli(['witness', 'checkpoint', '--output', checkpoint])
+    f.cli(['witness', 'policy-material', '--output', material])
+    endpoints = []
+    for actor in actors:
+        endpoints += ['--witness', f.serve_witness(actor)]
+        status, acknowledgement = shared['http'](actor['port'], '/v1/operator/register', dict(
+            policy_material=json.loads(material.read_bytes()), checkpoint=json.loads(checkpoint.read_bytes()),
+            accepted_registration=shared['base64'].b64encode(actor['proof'].read_bytes()).decode()), 'Operator')
+        require(status == 200 and acknowledgement['durability'] == 'witness-database-and-external-anchor-readback', 'registration lacked durable acknowledgement')
+    output = f.root/'private'; output.mkdir(mode=0o700)
+    template = output/'template'; shared['write'](template, b'prefix={{ExampleItem/ExampleField}}')
+    envfile = output/'env'; shared['write'](envfile, b'EXAMPLE_VALUE={{ExampleItem/ExampleField}}\n')
+    expected_input = output/'expected'; shared['write'](expected_input, shared['VALUE'])
+    marker = output/'denied-child'
+    destination = output/'ExampleRеports'; destination.mkdir(mode=0o700)
+    working = output/'ExampleDirеctory'; working.mkdir(mode=0o700)
+    cases = [
+        ('read', ['read', 'ExampleItem', 'ExampleField', '--reveal'], [], 0),
+        ('file', ['read', 'ExampleItem', 'ExampleField', '--out', destination/'field'], [], 0),
+        ('inject', ['inject', '--template', template, '--out', output/'rendered'], [], 0),
+        ('run', ['run', '--env', 'EXAMPLE_VALUE=ExampleItem/ExampleField', '--timeout', '5', '--cwd', working],
+         ['--', '/bin/true', 'Example\nArgument', '\x1b[31mExample', 'Exаmple', b'\xffExample'], 0),
+        ('exec', ['exec', '--env-file', envfile], ['--', '/bin/sh', '-c', 'printf %s "$EXAMPLE_VALUE" | cmp - "$1" || exit 8; exit 7', 'ExampleChild', expected_input], 7),
+        ('stdin', ['exec', '--stdin', 'ExampleItem/ExampleField'], ['--', '/usr/bin/cmp', '-', expected_input], 0),
+        ('deny', ['run', '--env', 'EXAMPLE_VALUE=ExampleItem/ExampleField', '--timeout', '5'],
+         ['--', '/usr/bin/touch', marker], 6),
+    ]
+    for name, args, command, expected in cases:
+        request, approval, receipt = [f.root/'public'/f'{name}.{suffix}.json' for suffix in ('request', 'approval', 'receipt')]
+        arguments = [str(f.jury), '--passphrase-stdin', *args, '--checkpoint', checkpoint,
+                     '--request-out', request, '--approval', approval, '--receipt', receipt,
+                     '--allow-insecure-loopback', *endpoints, *command]
+        child = subprocess.Popen([os.fspath(value) if isinstance(value, Path) else value for value in arguments], cwd=f.root/'repo', env=f.environment,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            child.stdin.write(password+b'\n'); child.stdin.close(); child.stdin = None
+            deadline = time.monotonic()+60
+            while not request.exists() and child.poll() is None and time.monotonic()<deadline:
+                time.sleep(.05)
+            if not request.exists():
+                stdout, stderr = child.communicate(timeout=5)
+                raise RuntimeError(name+' request missing: '+shared['safe_diagnostics'](stdout+stderr))
+            if name == 'read':
+                master, slave = pty.openpty()
+                hidden = f.root/'public/hidden-review.approval.json'
+                try:
+                    result = subprocess.run([str(f.jury), '--identity', 'ExampleApprover', 'approve', str(request), '--out', str(hidden)],
+                                            stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            cwd=f.root/'repo', env=f.environment, timeout=10)
+                    require(result.returncode == 2 and b'interactive-approval-required' in result.stderr and not hidden.exists(),
+                            'redirected review allowed signing')
+                finally:
+                    os.close(master); os.close(slave)
+            captured = helper['approve'](f, request, approval, deny=name=='deny', expected_role='BODY', reason='wrong-operation' if name=='deny' else None)
+            boundary = b'Full lossless review follows; signing binds the complete request and manifest.'
+            summary, complete = captured.split(boundary, 1)
+            require(b'ExampleField' in summary.split(b'Requester:', 1)[0], 'field was buried in review')
+            require(b'Decision to sign: '+(b'deny' if name=='deny' else b'approve') in summary, 'wrong decision summary')
+            if name == 'run':
+                require(b'Example\\x0aArgument' in summary and b'\\x1b[31mExample' in summary and b'Ex\\xd0\\xb0mple' in summary and b'\\xffExample' in summary and b'\x1b' not in summary, 'literal command arguments were not escaped faithfully')
+            require(shared['VALUE'] not in captured and password not in captured, 'private fixture input leaked into review')
+            artifact = json.loads(request.read_bytes())
+            request_data, manifest = artifact['request'], artifact['action_manifest']
+            for line in [f"Item ID: {request_data['item_id']}",
+                         f"Requester: {request_data['requester_principal_id']}",
+                         f"Revision: {request_data['revision']}; key epoch: {request_data['key_epoch']}; seal: {request_data['revision_seal_id']}",
+                         f"Expires: {request_data['expires_at_ms']} Unix milliseconds",
+                         f"Requested limits: {manifest['timeout_ms']} ms; {manifest['output_limit_bytes']} output bytes"]:
+                require(line.encode() in summary, 'summary differs from authenticated scope')
+            pascal = lambda value: ''.join(part.capitalize() for part in value.split('-'))
+            require(f"Action / sink: {pascal(manifest['operation'])} / {pascal(manifest['output_sink'])}".encode() in summary,
+                    'summary action/sink differs from manifest')
+            if name == 'run':
+                expected_path = str(working).encode().decode('ascii', 'backslashreplace')
+                require(f'Working directory: bytes"{expected_path}"'.encode() in summary, 'working directory bytes were ambiguous')
+            if name == 'file':
+                expected_path = str(destination/'field').encode().decode('ascii', 'backslashreplace')
+                require(f'Output destination: bytes"{expected_path}"'.encode() in summary, 'output destination bytes were ambiguous')
+            if name in ('run', 'exec', 'deny'):
+
+                require(b'Environment binding: bytes"EXAMPLE_VALUE" -> item ' in summary, 'environment channel missing')
+            if name == 'stdin':
+                require(len(manifest['approval_target']['entries']) == 1 and manifest['approval_target']['entries'][0]['field_id'] is not None, 'stdin request did not contain exactly one field target')
+                require(b'Authenticated item label: "ExampleItem"' in summary, 'stdin review omitted authenticated item label')
+                require(b'Stdin mode: SecretBytes' in summary and b'Stdin target: item ' in summary, 'stdin channel missing')
+            if name == 'deny':
+                decision = json.loads(approval.read_bytes())
+                require(decision['reason'] == 'wrong-operation' and b'reason: WrongOperation' in summary, 'denial reason differs from signature')
+            review, _ = json.JSONDecoder().raw_decode(complete.decode().lstrip())
+            require(review['request'] == artifact['request'], 'complete request changed in rendered review')
+            require(review['action_manifest'] == artifact['action_manifest'], 'complete manifest changed in rendered review')
+            require(review['presentation'] == artifact['presentation'], 'presentation changed in rendered review')
+            if name == 'stdin':
+                require(any(label['exact_display'] == 'ExampleItem' and label['item_id'] == request_data['item_id'] for label in review['authenticated_item_labels']), 'complete stdin review omitted authenticated item label')
+            stdout, stderr = child.communicate(timeout=90)
+            require(child.returncode == expected, name+' failed: '+shared['safe_diagnostics'](stdout+stderr))
+            require(password not in stdout+stderr, 'passphrase leaked in operation output')
+            if name == 'read': require(stdout == shared['VALUE'], 'read returned wrong bytes')
+            if name == 'file': require((destination/'field').read_bytes() == shared['VALUE'], 'private file returned wrong bytes')
+            if name == 'inject': require((output/'rendered').read_bytes() == b'prefix='+shared['VALUE'], 'injection returned wrong bytes')
+            if name == 'deny': require(not marker.exists() and not receipt.exists(), 'denied command executed or produced success receipt')
+            else: f.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+        finally:
+            if child.poll() is None: child.kill(); child.wait()
+    print('Real approval PTYs passed: visible field and decision, complete authenticated review unchanged, read/private file/inject/run/exec receipts, and denied child never executed.')
+
+
+def main():
+    require(sys.platform == 'linux', 'this check requires Linux')
+    require(Path('/usr/bin/cmp').is_file(), 'install diffutils: this check requires /usr/bin/cmp')
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT/'target/release/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT/'target/release/juryd')
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='jury-approval-review-') as directory:
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        try: exercise(fixture)
+        finally: fixture.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print(shared['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

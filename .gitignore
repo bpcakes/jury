@@ -55,3 +55,7 @@ temp/
 # Coverage-guided fuzzing keeps generated corpora and crash artifacts local.
 /fuzz/corpus/
 /fuzz/artifacts/
+
+# Python release tooling caches
+__pycache__/
+*.py[cod]

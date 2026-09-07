@@ -130,6 +130,20 @@ pub struct RekeyedItem {
     pub owner_change: Option<OwnerChange>,
 }
 
+impl Drop for NewItem {
+    fn drop(&mut self) {
+        self.descriptor.clear_sensitive();
+        self.state.clear_sensitive();
+    }
+}
+
+impl Drop for RekeyedItem {
+    fn drop(&mut self) {
+        self.descriptor.clear_sensitive();
+        self.state.clear_sensitive();
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrincipalReplacement {
     pub prior_principal_id: PrincipalId,

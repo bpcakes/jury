@@ -3,7 +3,9 @@
 > Jury is externally unreviewed pre-alpha software. It does not protect
 > secrets and must not be used with real credentials.
 
-Build from the repository root:
+The native binary package includes these setup examples. Container builds
+require the full repository or the accompanying source archive; the native
+package alone does not contain all Rust build inputs. Build from that source root:
 
 ```console
 $ docker build -f deploy/juryd/Dockerfile -t juryd:local .

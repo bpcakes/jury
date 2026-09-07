@@ -129,25 +129,26 @@ pub(super) fn transfer_inspect(
 
     let names = if arguments.me {
         let unlocked = unlock_selected_identity(cli, environment, current, protection)?;
-        let UnlockedIdentity::VaultPrincipal(identity) = unlocked.identity else {
-            return Err(CliError::new(
-                CliErrorKind::InvalidIdentity,
-                "vault-principal-required",
-                "transfer name inspection requires a vault-principal identity",
-            ));
-        };
-        let incoming_names = accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
-        let mut names = if let Some(local) = &local {
-            let catalog = load_policy_catalog_for_vault(environment, &home, local)?;
-            let policy =
-                replay_policy_with_witness_policies(&local.policy, &catalog.witness_policies)
+        match unlocked.identity {
+            UnlockedIdentity::VaultPrincipal(identity) => {
+                let incoming_names =
+                    accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
+                let mut names = if let Some(local) = &local {
+                    let catalog = load_policy_catalog_for_vault(environment, &home, local)?;
+                    let policy = replay_policy_with_witness_policies(
+                        &local.policy,
+                        &catalog.witness_policies,
+                    )
                     .map_err(|_| invalid_vault())?;
-            accessible_name_map(local, &policy, &identity)?
-        } else {
-            BTreeMap::new()
-        };
-        names.extend(incoming_names);
-        names
+                    accessible_name_map(local, &policy, &identity)?
+                } else {
+                    BTreeMap::new()
+                };
+                names.extend(incoming_names);
+                names
+            }
+            UnlockedIdentity::Approver(_) | UnlockedIdentity::Witness(_) => BTreeMap::new(),
+        }
     } else {
         BTreeMap::new()
     };
@@ -333,19 +334,12 @@ fn import_existing(
             &local.policy,
         );
     }
-    let mut context = load_vault_principal(cli, environment, current, protection)?;
-    if transfer
-        .policy()
-        .principal(&context.identity.principal_id())
-        .is_none()
-    {
-        return Err(identity_not_registered());
-    }
+    let mut context = load_transfer_principal(cli, environment, current, protection, &transfer)?;
     let mut plan = VaultMutationPlan::prepare_transfer_import(
         &context.vault,
         transfer.vault(),
         &transfer.catalog().witness_policies,
-        context.identity.principal_id(),
+        context.local.scope().principal_id(),
         timestamp_ms()?,
     )
     .map_err(map_transfer_import_error)?;
@@ -368,18 +362,15 @@ fn preview_existing_import_read_only(
     local_policy: &PolicyState,
 ) -> Result<CommandOutput, CliError> {
     let unlocked = unlock_selected_identity(cli, environment, current, protection)?;
-    let UnlockedIdentity::VaultPrincipal(identity) = unlocked.identity else {
-        return Err(CliError::new(
-            CliErrorKind::InvalidIdentity,
-            "vault-principal-required",
-            "transfer import requires a vault-principal identity",
-        ));
-    };
-    if local_policy.principal(&identity.principal_id()).is_none()
-        || transfer
-            .policy()
-            .principal(&identity.principal_id())
-            .is_none()
+    let identity = unlocked.identity;
+    let descriptor = identity
+        .public_descriptor()
+        .map_err(|_| invalid_identity())?;
+    let principal_id = descriptor.principal_id;
+    if transfer
+        .policy()
+        .principal(&principal_id)
+        .is_none_or(|principal| principal.descriptor != descriptor)
     {
         return Err(identity_not_registered());
     }
@@ -391,12 +382,7 @@ fn preview_existing_import_read_only(
     .map_err(|_| filesystem_error())?;
     validate_detached_separation(&state_root, &unlocked.home)?;
     let repositories = repository_refs(&unlocked.home);
-    match probe_principal_state(
-        &state_root,
-        local_vault,
-        &identity.principal_id(),
-        &repositories,
-    )? {
+    match probe_principal_state(&state_root, local_vault, &principal_id, &repositories)? {
         PrincipalStateProbe::Absent => confirm_expected_genesis(cli, local_vault)?,
         PrincipalStateProbe::Existing {
             audit,
@@ -404,19 +390,20 @@ fn preview_existing_import_read_only(
             receipts,
             ..
         } => {
-            let local = PrincipalLocalState::for_vault_principal(
-                &identity,
-                local_vault.header.vault_id,
-                local_vault.header.genesis_fingerprint.clone(),
-            )
-            .map_err(|_| local_state_error())?;
+            let local = principal_local_state(&identity, local_vault)?;
             let verified = local
                 .verify_files(Some(&audit), Some(&checkpoint), Some(&receipts))
                 .map_err(|_| local_state_error())?;
+            let (candidate_policy, candidate_vault) =
+                if local_policy.principal(&principal_id).is_some() {
+                    (local_policy, local_vault)
+                } else {
+                    (transfer.policy(), transfer.vault())
+                };
             let candidate = CheckpointCandidate::from_validated(
-                local_policy,
-                &local_vault.policy,
-                &local_vault.items,
+                candidate_policy,
+                &candidate_vault.policy,
+                &candidate_vault.items,
             )
             .map_err(|_| invalid_vault())?;
             if candidate
@@ -447,21 +434,24 @@ fn import_absent(
 ) -> Result<CommandOutput, CliError> {
     confirm_expected_genesis(cli, transfer.vault())?;
     let unlocked = unlock_selected_identity(cli, environment, current, protection)?;
-    let UnlockedIdentity::VaultPrincipal(identity) = unlocked.identity else {
-        return Err(CliError::new(
-            CliErrorKind::InvalidIdentity,
-            "vault-principal-required",
-            "transfer import requires a vault-principal identity",
-        ));
-    };
+    let identity = unlocked.identity;
+    let descriptor = identity
+        .public_descriptor()
+        .map_err(|_| invalid_identity())?;
+    let principal_id = descriptor.principal_id;
     if transfer
         .policy()
-        .principal(&identity.principal_id())
-        .is_none()
+        .principal(&principal_id)
+        .is_none_or(|principal| principal.descriptor != descriptor)
     {
         return Err(identity_not_registered());
     }
-    let names = accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
+    let names = match &identity {
+        UnlockedIdentity::VaultPrincipal(identity) => {
+            accessible_name_map(transfer.vault(), transfer.policy(), identity)?
+        }
+        UnlockedIdentity::Approver(_) | UnlockedIdentity::Witness(_) => BTreeMap::new(),
+    };
     if names.is_empty() && !arguments.allow_no_access {
         return Err(CliError::new(
             CliErrorKind::AccessDenied,
@@ -469,12 +459,7 @@ fn import_absent(
             "first transfer import requires one directly accessible descriptor or --allow-no-access",
         ));
     }
-    let local = PrincipalLocalState::for_vault_principal(
-        &identity,
-        transfer.vault().header.vault_id,
-        transfer.vault().header.genesis_fingerprint.clone(),
-    )
-    .map_err(|_| local_state_error())?;
+    let local = principal_local_state(&identity, transfer.vault())?;
     let candidate = CheckpointCandidate::from_validated(
         transfer.policy(),
         &transfer.vault().policy,
@@ -490,12 +475,7 @@ fn import_absent(
     validate_detached_separation(&state_root, &unlocked.home)?;
     if arguments.dry_run {
         let repositories = repository_refs(&unlocked.home);
-        match probe_principal_state(
-            &state_root,
-            transfer.vault(),
-            &identity.principal_id(),
-            &repositories,
-        )? {
+        match probe_principal_state(&state_root, transfer.vault(), &principal_id, &repositories)? {
             PrincipalStateProbe::Absent => {}
             PrincipalStateProbe::Existing {
                 audit,
@@ -531,7 +511,7 @@ fn import_absent(
         &transfer,
         &local,
         &candidate,
-        &identity.principal_id(),
+        &principal_id,
         protection,
     )?;
     let shared_publication = prepared_shared.publish().map_err(map_filesystem_error)?;

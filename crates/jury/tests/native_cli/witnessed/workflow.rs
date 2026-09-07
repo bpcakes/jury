@@ -443,8 +443,6 @@ fn witnessed_only_default_read_inject_and_execution_complete_after_async_approva
     let material_bytes = fs::read(&material_path)?;
     let policy_material = PolicyMaterialBytes::new(material_bytes)?;
     let policy = ReceiptPolicyMaterialV1::decode(&policy_material)?.replay()?;
-    let vault = VaultFileV1::parse(&fs::read(repository.join(".jury/vault.json"))?)?;
-    let item_id = vault.items.first().ok_or("missing item")?.item_id;
     let checkpoint_path = artifacts.join("ExampleCheckpoint.json");
     success_json(run(
         &repository,
@@ -456,8 +454,6 @@ fn witnessed_only_default_read_inject_and_execution_complete_after_async_approva
             "--allow-degraded-protection",
             "witness",
             "checkpoint",
-            "--item-id",
-            &encode_hex(item_id.as_bytes()),
             "--output",
             checkpoint_path.to_str().ok_or("non-UTF-8 checkpoint")?,
         ],

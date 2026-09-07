@@ -237,18 +237,7 @@ fn approval_and_checkpoint_match_the_frozen_vectors() -> TestResult {
         genesis_fingerprint: repeated_digest(0x02),
         vault_policy_sequence: 7,
         vault_policy_hash: repeated_digest(0x72),
-        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
-        witness_policy_revision: 1,
-        witness_policy_digest: digest_hex(&corpus, "witness_policy", "digest_hex")?,
-        witness_set_digest: fixed_hex(hex::decode(
-            "1ca3be89d2e1d2de0bf25cfcfe82569fd63228031feea946b1fff38ee30b200a",
-        )?)?,
-        approver_set_digest: fixed_hex(hex::decode(
-            "95ac3364e23be58775128029e79a3bd9f447011cc96bf95a98bc2e193d8d6bb5",
-        )?)?,
-        review_label_set_digest: fixed_hex(hex::decode(
-            "da3e0c4bc71493d609254bd71fc7f182947aa6f61bb63129cdcb3baea42082c5",
-        )?)?,
+        active_witness_policy_set_digest: digest_hex(&corpus, "active_policy_set_single", "digest_hex")?,
         predecessor_checkpoint_digest: repeated_digest(0),
         issued_at_ms: ISSUED_AT - 500,
         issuer_owner_id: PrincipalId::from_bytes([0x09; 32])?,
@@ -297,7 +286,7 @@ fn decision_and_anchor_match_the_frozen_vectors() -> TestResult {
         issued_at_ms: ISSUED_AT + 2_000,
         expires_at_ms: EXPIRES_AT,
         contribution_digest: Some(fixed_hex(hex::decode(
-            "878e3f50c5199d22573d5320dd6ad264f0e3b427982536fbb82cf8dd72fb3511",
+            corpus["construction_vector"]["contributions"][0]["digest_hex"].as_str().ok_or("missing frozen contribution digest")?,
         )?)?),
         share_index: Some(1),
         share_commitment: Some(fixed_hex(hex::decode(
@@ -379,7 +368,7 @@ fn decision_and_anchor_match_the_frozen_vectors() -> TestResult {
         witness_signing_key_epoch: 1,
         state_generation: 4,
         database_state_digest: fixed_hex(hex::decode(
-            "d09a95ebdbb009c5eb4f587410479e1df5974c30b182578c4ffe794ae02fa4fa",
+            "a63bbff95d2541e91564f815335d48fd0d34864e9d626d1507a929ab65b726fe",
         )?)?,
         vault_high_watermarks: vec![VaultHighWatermarkV1 {
             vault_id: VaultId::from_bytes([0x01; 32])?,
@@ -455,5 +444,53 @@ fn cancellation_matches_the_frozen_vector() -> TestResult {
         cancellation.digest()?,
         digest_hex(&corpus, "request_cancellation", "digest_hex")?
     );
+    Ok(())
+}
+
+#[test]
+fn global_policy_set_matches_frozen_vectors_and_rejects_legacy_checkpoint_json() -> TestResult {
+    use jury_protocol::witness_v1::active_witness_policy_set_digest;
+    let corpus = corpus()?;
+    for (name, digests) in [
+        ("active_policy_set_empty", vec![]),
+        ("active_policy_set_single", vec![digest_hex(&corpus, "witness_policy", "digest_hex")?]),
+        ("active_policy_set_multiple", vec![repeated_digest(0xe1), repeated_digest(0xe2)]),
+    ] {
+        assert_eq!(active_witness_policy_set_digest(&digests)?, digest_hex(&corpus, name, "digest_hex")?);
+    }
+    for digests in [vec![repeated_digest(0)], vec![repeated_digest(2), repeated_digest(1)], vec![repeated_digest(1); 2]] {
+        assert!(active_witness_policy_set_digest(&digests).is_err());
+    }
+    let checkpoint = policy_checkpoint(&corpus)?;
+    let mut legacy = serde_json::to_value(&checkpoint)?;
+    legacy.as_object_mut().ok_or("checkpoint JSON object")?.remove("active_witness_policy_set_digest");
+    legacy["witness_policy_digest"] = serde_json::to_value(repeated_digest(1))?;
+    assert!(serde_json::from_slice::<VaultPolicyCheckpointV1>(&serde_json::to_vec(&legacy)?).is_err());
+    let mut mixed = serde_json::to_value(&checkpoint)?;
+    mixed["witness_policy_digest"] = serde_json::to_value(repeated_digest(1))?;
+    assert!(serde_json::from_slice::<VaultPolicyCheckpointV1>(&serde_json::to_vec(&mixed)?).is_err());
+    Ok(())
+}
+
+
+#[test]
+fn owner_change_contexts_match_frozen_bytes_and_reject_unknown_fields() -> TestResult {
+    use jury_protocol::witness_v1::OwnerChangeKindV1;
+    let corpus = corpus()?;
+    for (name, change) in [("owner_change_grant_context", OwnerChangeKindV1::Grant), ("owner_change_revoke_context", OwnerChangeKindV1::Revoke)] {
+        let context = OperationContextV1::OwnerChange { change,
+            target_principal_id: PrincipalId::from_bytes([0x71; 32])?, next_vault_policy_sequence: 8 };
+        assert_eq!(context.operation(), WitnessOperationV1::AdministrativeRekey);
+        assert_eq!(context.canonical_bytes()?, vector_hex(&corpus, name, "preimage_hex")?);
+        assert_eq!(serde_json::from_slice::<OperationContextV1>(&serde_json::to_vec(&context)?)?, context);
+        let zero_sequence = OperationContextV1::OwnerChange { change, target_principal_id: PrincipalId::from_bytes([0x71; 32])?, next_vault_policy_sequence: 0 };
+        assert!(zero_sequence.canonical_bytes().is_err());
+        let mut json = serde_json::to_value(&context)?;
+        json["change"] = "replace".into();
+        assert!(serde_json::from_slice::<OperationContextV1>(&serde_json::to_vec(&json)?).is_err());
+        let mut json = serde_json::to_value(&context)?;
+        json["future_ciphertext_digest"] = serde_json::json!(vec![0; 32]);
+        assert!(serde_json::from_slice::<OperationContextV1>(&serde_json::to_vec(&json)?).is_err());
+    }
     Ok(())
 }

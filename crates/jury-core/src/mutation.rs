@@ -584,6 +584,11 @@ impl VaultMutationPlan {
         self.acting_principal_id
     }
 
+    #[must_use]
+    pub const fn kind(&self) -> MutationKind {
+        self.kind
+    }
+
     pub fn audit_intent(&self) -> AuditEventDraft {
         AuditEventDraft {
             timestamp_ms: self.timestamp_ms,

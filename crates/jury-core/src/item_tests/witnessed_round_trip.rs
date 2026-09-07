@@ -83,8 +83,6 @@ fn assert_prior_witnessed_authorization_is_revision_scoped(
 fn assert_witnessed_provider_round_trip(
     fixture: WitnessedProviderFixture<'_>,
 ) -> Result<WitnessedRoundTrip, Box<dyn std::error::Error>> {
-    let (approver_set_digest, witness_set_digest) =
-        fixture.witness_policy.active_descriptor_set_digests()?;
     let mut checkpoint = VaultPolicyCheckpointV1 {
         schema: 1,
         vault_id: fixture.created_item.policy.state.vault_id(),
@@ -101,12 +99,7 @@ fn assert_witnessed_provider_round_trip(
             .state
             .terminal_revision_hash()
             .clone(),
-        witness_policy_id: fixture.witness_policy.witness_policy_id,
-        witness_policy_revision: fixture.witness_policy.revision,
-        witness_policy_digest: fixture.witness_digest.clone(),
-        witness_set_digest,
-        approver_set_digest,
-        review_label_set_digest: fixture.witness_policy.review_label_set_digest.clone(),
+        active_witness_policy_set_digest: fixture.created_item.policy.state.active_witness_policy_set_digest()?,
         predecessor_checkpoint_digest: Digest32::new([0; 32]),
         issued_at_ms: 1_800_000_000_000,
         issuer_owner_id: fixture.owner.principal_id(),
@@ -127,7 +120,7 @@ fn assert_witnessed_provider_round_trip(
     let approval_target = ApprovalTargetV1 {
         entries: vec![ApprovalTargetEntryV1 {
             item_id: fixture.created_item.envelope.item_id,
-            field_id: None,
+            field_id: Some(FieldId::from_bytes([0x44; 32])?),
             presentation_commitment: Digest32::new([0; 32]),
         }],
         presentation_digest: presentation_digest.clone(),

@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Exercise role transfer imports, remote approval and multi-role recovery on Linux.
+
+Uses real CLI processes, signed public transfers, live witnesses and a PTY.
+Only synthetic Example identities and values are used.
+"""
+import argparse
+import base64
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+ROOT = Path(__file__).resolve().parents[1]
+shared = runpy.run_path(str(ROOT / 'scripts/check-linux-witness-lifecycle'), run_name='fixture')
+approval = runpy.run_path(str(ROOT / 'scripts/check-linux-descriptor-access'), run_name='fixture')
+Fixture, require = shared['Fixture'], shared['require']
+PASSPHRASE, VALUE = shared['PASSPHRASE'], shared['VALUE']
+BACKUP_PASSPHRASE = b'ExampleSeparateBackupPassphrase-OnlyForTests'
+
+
+def identity_file(fixture, name):
+    return fixture.root / 'data/jury/identities' / f'{name}.identity.json'
+
+
+def snapshot(root):
+    return {str(path.relative_to(root)): (path.stat().st_mode,
+                path.read_bytes() if path.is_file() else None)
+            for path in root.rglob('*')
+            if '.git' not in path.parts and path.relative_to(root).parts[0] != 'services'}
+
+
+def recovery_cli(fixture, args, passphrases):
+    result = subprocess.run([str(fixture.jury), '--json', '--passphrase-stdin', *map(str, args)],
+                            cwd=fixture.root / 'repo', env=fixture.environment,
+                            input=b'\n'.join(passphrases) + b'\n', capture_output=True, timeout=90)
+    output = result.stdout + result.stderr
+    require(not any(value in output for value in (PASSPHRASE, BACKUP_PASSPHRASE, VALUE)),
+            'private fixture material appeared in recovery output')
+    require(result.returncode == 0, 'role recovery failed: ' + shared['safe_diagnostics'](output))
+    return json.loads(result.stdout)
+
+
+def check_pre_registration_snapshot(source, name, initial_vault, transfer, genesis):
+    with tempfile.TemporaryDirectory(prefix='jury-role-existing-') as directory:
+        fixture = Fixture(Path(directory), source.jury, source.juryd)
+        try:
+            home = fixture.root / 'repo/.jury'
+            if initial_vault is not None:
+                home.mkdir(mode=0o700)
+                (home / 'vault.json').write_bytes(initial_vault)
+                (home / 'vault.json').chmod(0o600)
+            identity = identity_file(fixture, name)
+            identity.parent.mkdir(mode=0o700, parents=True)
+            identity.parent.parent.chmod(0o700)
+            shutil.copyfile(identity_file(source, name), identity)
+            identity.chmod(0o600)
+            delivered = fixture.root / 'public/ExampleVault.transfer.json'
+            shutil.copyfile(transfer, delivered)
+            delivered.chmod(0o600)
+            args = ['--identity', name, '--expected-genesis', genesis,
+                    'transfer', 'import', '--in', delivered]
+            if initial_vault is None:
+                args.append('--allow-no-access')
+            before = snapshot(fixture.root)
+            fixture.cli([*args, '--dry-run'])
+            require(snapshot(fixture.root) == before, 'pre-registration import preview wrote state')
+            imported = fixture.cli(args)
+            require(imported['committed'], 'pre-registration import did not install signed descendant')
+            fixture.cli(['--identity', name, 'vault', 'audit', 'verify'])
+        finally:
+            fixture.close()
+
+
+def exercise(source, remote):
+    source.cli(['identity', 'init'], PASSPHRASE + b'\n')
+    source.cli(['vault', 'init'])
+    initial_vault = (source.root / 'repo/.jury/vault.json').read_bytes()
+    approver = approval['register_approver'](source)
+    actors = [source.register_witness(name, index) for index, name in enumerate(
+        ('ExampleWitnessOne', 'ExampleWitnessTwo'), 1)]
+    item = source.cli(['item', 'create', 'ExampleItem', '--allow-direct'])
+    source.cli(['vault', 'field', 'set', 'ExampleItem', 'ExampleField', '--value-stdin'], VALUE)
+    membership = [argument for actor in actors for argument in ('--witness', actor['id'])]
+    source.cli(['policy', 'require', 'witnessed', '--item', 'ExampleItem', *membership,
+                '--approver', approver, '--approvals', '1', '--witness-quorum', '2',
+                '--operation', 'write-private-file', '--review-label', 'ExampleItem',
+                '--field-review-label', 'ExampleField=ExampleField', '--request-lifetime', '300'])
+    vault = json.loads((source.root / 'repo/.jury/vault.json').read_bytes())
+    genesis = base64.b64decode(vault['header']['genesis_fingerprint']).hex()
+    # Public transfer artifacts may live in the source worktree. This also
+    # bounds repository discovery to the real fixture repository.
+    transfer = source.root / 'repo/ExampleVault.transfer.json'
+    source.cli(['transfer', 'export', '--out', transfer])
+
+    # A selected role imports the same public transfer to create its own MACed
+    # local state. No test constructs or seeds an authenticated state file.
+    for name in ('ExampleApprover', 'ExampleWitnessOne'):
+        before = snapshot(source.root / 'state')
+        args = ['--identity', name, '--expected-genesis', genesis, 'transfer', 'import', '--in', transfer]
+        source.cli([*args, '--dry-run'])
+        require(snapshot(source.root / 'state') == before, 'role import preview wrote state')
+        result = source.cli(args)
+        require(result['result'] == 'identical', 'same-vault role bootstrap changed the public vault')
+        source.cli(['--identity', name, 'vault', 'audit', 'verify'])
+        inspected = source.cli(['--identity', name, 'transfer', 'inspect', '--in', transfer, '--me'])
+        require(inspected['identity_unlocked'] and not inspected['inaccessible_names_disclosed'],
+                'role inspection did not preserve private names')
+        require(all(delta['item'] is None for delta in inspected['deltas']), 'role inspection disclosed item names')
+        before = snapshot(source.root)
+        error = source.cli(['--identity', name, 'item', 'create', 'ExampleUnauthorized', '--allow-direct'], expected=1)
+        require(error['error']['code'] == 'vault-principal-required', 'role gained owner command authority')
+        require(snapshot(source.root) == before, 'refused owner command wrote files')
+        check_pre_registration_snapshot(source, name, initial_vault, transfer, genesis)
+    check_pre_registration_snapshot(source, 'ExampleWitnessOne', None, transfer, genesis)
+
+    source.cli(['identity', 'init', '--name', 'ExampleUnregistered', '--kind', 'approver'], PASSPHRASE + b'\n')
+    before = snapshot(source.root / 'state')
+    error = source.cli(['--identity', 'ExampleUnregistered', '--expected-genesis', genesis,
+                        'transfer', 'import', '--in', transfer], expected=5)
+    require(error['error']['code'] == 'identity-not-registered', 'unregistered role was not refused')
+    require(snapshot(source.root / 'state') == before, 'unregistered role import wrote state')
+
+    # A different installation gets only its encrypted approver identity and
+    # the signed public transfer, never the owner's keys or local state.
+    remote_identity = identity_file(remote, 'ExampleApprover')
+    remote_identity.parent.mkdir(mode=0o700, parents=True)
+    remote_identity.parent.parent.chmod(0o700)
+    shutil.copyfile(identity_file(source, 'ExampleApprover'), remote_identity)
+    remote_identity.chmod(0o600)
+    remote_transfer = remote.root / 'public/ExampleVault.transfer.json'
+    shutil.copyfile(transfer, remote_transfer)
+    remote_transfer.chmod(0o600)
+    remote_args = ['--identity', 'ExampleApprover', '--expected-genesis', genesis,
+                   'transfer', 'import', '--in', remote_transfer, '--allow-no-access']
+    before = snapshot(remote.root)
+    remote.cli([*remote_args, '--dry-run'])
+    require(snapshot(remote.root) == before, 'fresh role import preview wrote files')
+    wrong = list(remote_args)
+    wrong[wrong.index(genesis)] = '99' * 32
+    remote.cli(wrong, expected=4)
+    require(snapshot(remote.root) == before, 'wrong genesis wrote files')
+    missing_ack = [argument for argument in remote_args if argument != '--allow-no-access']
+    error = remote.cli(missing_ack, expected=6)
+    require(error['error']['code'] == 'transfer-no-access', 'missing role no-access acknowledgement was not refused')
+    require(snapshot(remote.root) == before, 'missing no-access acknowledgement wrote files')
+    imported = remote.cli(remote_args)
+    require(imported['result'] == 'first-install' and imported['committed'], 'remote role import did not install')
+    require(imported['accessible_items'] == [], 'approver import disclosed private item names')
+    remote.cli(['--identity', 'ExampleApprover', 'vault', 'audit', 'verify'])
+    require(not identity_file(remote, 'default').exists(), 'remote installation received an owner identity')
+
+    material_path, checkpoint = [source.root / 'public' / name for name in ('material.json', 'checkpoint.json')]
+    source.cli(['witness', 'policy-material', '--output', material_path])
+    source.cli(['witness', 'checkpoint', '--output', checkpoint])
+    material = json.loads(material_path.read_bytes())
+    inspection = source.cli(['transfer', 'inspect', '--in', transfer])
+    field_id = next(label['field_id'] for label in inspection['public_review_labels']
+                    if label.get('field_id') is not None)
+    endpoints = []
+    for actor in actors:
+        endpoints.append(source.serve_witness(actor))
+        status, response = shared['http'](actor['port'], '/v1/operator/register', {
+            'policy_material': material, 'checkpoint': json.loads(checkpoint.read_bytes()),
+            'accepted_registration': base64.b64encode(actor['proof'].read_bytes()).decode(),
+        }, 'Operator')
+        require(status == 200 and response['durability'] == 'witness-database-and-external-anchor-readback',
+                'witness registration was not durable')
+    request, decision, receipt, output = [source.root / 'public' / name for name in (
+        'request.json', 'approval.json', 'receipt.json', 'private-output')]
+    command = [str(source.jury), '--json', '--passphrase-stdin', 'read',
+               '--item-id', item['item_id'], '--field-id', field_id,
+               '--checkpoint', str(checkpoint), '--request-out', str(request), '--receipt', str(receipt),
+               '--approval', str(decision), '--wait-seconds', '60', '--allow-insecure-loopback', '--out', str(output)]
+    command += [argument for endpoint in endpoints for argument in ('--witness', endpoint)]
+    child = subprocess.Popen(command, cwd=source.root / 'repo', env=source.environment,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        child.stdin.write(PASSPHRASE + b'\n')
+        child.stdin.close()
+        child.stdin = None
+        deadline = time.monotonic() + 60
+        while not request.exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(.05)
+        if not request.exists():
+            child.kill()
+            stdout, stderr = child.communicate(timeout=5)
+            raise RuntimeError('foreground request was not published: ' +
+                               shared['safe_diagnostics'](stdout + stderr))
+        approval['approve'](remote, request, decision, expected_role='BODY')
+        stdout, stderr = child.communicate(timeout=90)
+        require(child.returncode == 0, 'remote approval did not authorize read: ' + shared['safe_diagnostics'](stdout + stderr))
+        require(VALUE not in stdout + stderr and PASSPHRASE not in stdout + stderr, 'private data appeared in operation metadata')
+        require(output.read_bytes() == VALUE, 'remote-approved read returned different bytes')
+        source.cli(['receipt', 'verify', receipt, '--checkpoint', checkpoint])
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+    # Publish an authentic later policy through the owner CLI, then update both
+    # roles and prove that an earlier signed artifact cannot roll them back.
+    source.register_witness('ExampleWitnessThree', 3)
+    updated = source.root / 'repo/ExampleUpdated.transfer.json'
+    source.cli(['transfer', 'export', '--out', updated])
+    remote_updated = remote.root / 'public/ExampleUpdated.transfer.json'
+    shutil.copyfile(updated, remote_updated)
+    remote_updated.chmod(0o600)
+    # Repair a rolled-back public snapshot while retaining the role's newer
+    # authenticated state. The next transfer is a strict descendant of both.
+    (remote.root / 'repo/.jury/vault.json').write_bytes(initial_vault)
+    for fixture, names in ((source, ('ExampleApprover', 'ExampleWitnessOne')),
+                           (remote, ('ExampleApprover',))):
+        delivered_updated = updated if fixture is source else remote_updated
+        delivered_original = transfer if fixture is source else remote_transfer
+        for name in names:
+            args = ['--identity', name, 'transfer', 'import', '--in', delivered_updated]
+            before = snapshot(fixture.root)
+            fixture.cli([*args, '--dry-run'])
+            require(snapshot(fixture.root) == before, 'role update preview wrote state')
+            fixture.cli(args)
+            before = snapshot(fixture.root)
+            error = fixture.cli(['--identity', name, 'transfer', 'import', '--in', delivered_original], expected=4)
+            require(error['error']['code'] == 'transfer-behind', 'old signed transfer was not refused as rollback')
+            require(snapshot(fixture.root) == before, 'rollback attempt wrote files')
+            fixture.cli(['--identity', name, 'vault', 'audit', 'verify'])
+
+    # Retained role state must protect first-install recovery when the public
+    # vault file is lost; ancestry comparison cannot rely on that missing file.
+    remote_vault = remote.root / 'repo/.jury/vault.json'
+    expected_vault = remote_vault.read_bytes()
+    remote_vault.unlink()
+    before = snapshot(remote.root)
+    error = remote.cli(remote_args, expected=4)
+    require(error['error']['code'] == 'checkpoint-conflict', 'retained role checkpoint allowed rollback')
+    require(snapshot(remote.root) == before, 'retained-checkpoint refusal wrote files')
+    recover_args = ['--identity', 'ExampleApprover', '--expected-genesis', genesis,
+                    'transfer', 'import', '--in', remote_updated, '--allow-no-access']
+    remote.cli([*recover_args, '--dry-run'])
+    require(snapshot(remote.root) == before, 'retained-state recovery preview wrote files')
+    recovered = remote.cli(recover_args)
+    require(recovered['result'] == 'first-install' and recovered['committed'], 'retained-state recovery did not install')
+    require(remote_vault.read_bytes() == expected_vault, 'retained-state recovery changed the signed vault')
+    remote.cli(['--identity', 'ExampleApprover', 'vault', 'audit', 'verify'])
+
+    offline = source.root / 'offline'
+    offline.mkdir(mode=0o700)
+    backup = offline / 'ExampleVault.backup'
+    recovery_cli(source, ['backup', 'create', '--out', backup,
+                '--approver-identity-file', identity_file(source, 'ExampleApprover'),
+                '--witness-identity-file', identity_file(source, 'ExampleWitnessOne')],
+               [PASSPHRASE] * 3 + [BACKUP_PASSPHRASE] * 2)
+    recovery_cli(source, ['backup', 'verify', '--in', backup], [BACKUP_PASSPHRASE, PASSPHRASE])
+    recovered_identities = source.root / 'recovered-identities'
+    recovered_identities.mkdir(mode=0o700)
+    recovered_vault = source.root / 'recovered-vault'
+    recovered_state = source.root / 'recovered-state'
+    owner_out, approver_out, witness_out = [recovered_identities / name for name in (
+        'ExampleOwner.identity.json', 'ExampleApprover.identity.json', 'ExampleWitness.identity.json')]
+    recovery_cli(source, ['--home', recovered_vault, '--expected-genesis', genesis, 'backup', 'restore', '--in', backup,
+                '--identity-out', owner_out, '--state-out', recovered_state,
+                '--approver-identity-out', approver_out, '--witness-identity-out', witness_out],
+               [BACKUP_PASSPHRASE] + [PASSPHRASE] * 6)
+    prior_environment = source.environment.copy()
+    try:
+        source.environment['JURY_STATE_HOME'] = str(recovered_state)
+        for identity in (owner_out, approver_out, witness_out):
+            source.cli(['--home', recovered_vault, '--identity-file', identity, 'vault', 'audit', 'verify'])
+    finally:
+        source.environment = prior_environment
+    print('Real Linux role onboarding passed: authenticated local and fresh remote imports, read-only previews, genesis and unregistered-role refusal, authenticated updates and rollback refusal, remote human approval, exact witnessed read, verified receipt and three-role backup/restore.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--jury', type=Path, default=ROOT / 'target/release/jury')
+    parser.add_argument('--juryd', type=Path, default=ROOT / 'target/release/juryd')
+    args = parser.parse_args()
+    require(sys.platform == 'linux', 'requires Linux')
+    with tempfile.TemporaryDirectory(prefix='jury-role-source-') as source_dir, tempfile.TemporaryDirectory(prefix='jury-role-remote-') as remote_dir:
+        source = Fixture(Path(source_dir), args.jury.resolve(), args.juryd.resolve())
+        remote = Fixture(Path(remote_dir), args.jury.resolve(), args.juryd.resolve())
+        try:
+            exercise(source, remote)
+        finally:
+            remote.close()
+            source.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception:
+        print(shared['safe_diagnostics'](traceback.format_exc().encode()), file=sys.stderr)
+        sys.exit(1)

@@ -9,9 +9,10 @@ use jury_protocol::vault_v1::PrincipalId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    AdapterError, AdapterErrorKind,
+    AdapterError,
     anchor::MAX_ANCHOR_HTTP_BYTES,
     credentials::{load_digest, validate_private_regular_file},
+    error::ConfigurationConstraint,
 };
 
 const MAX_CONFIG_BYTES: usize = 128 * 1024;
@@ -123,7 +124,7 @@ impl WitnessServiceConfig {
 
     pub fn validate(&self) -> Result<(), AdapterError> {
         if self.schema != 1 {
-            return invalid();
+            return invalid(ConfigurationConstraint::Schema);
         }
         validate_tls(&self.tls, self.listen)?;
         validate_limits(&self.limits)?;
@@ -136,7 +137,7 @@ impl WitnessServiceConfig {
         validate_private_regular_file(&self.operator_credential_file)?;
         validate_private_regular_file(&self.external_anchor.write_credential_file)?;
         jury_filesystem::read_public_file(&self.external_anchor.ca_certificate_file, 1024 * 1024)
-            .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+            .map_err(|_| AdapterError::configuration(ConfigurationConstraint::CaFile))?;
         let IdentityProviderConfig::SoftwareFile {
             identity_file,
             passphrase_file,
@@ -156,7 +157,7 @@ impl WitnessServiceConfig {
         let operator = load_digest(&self.operator_credential_file)?;
         let anchor = load_digest(&self.external_anchor.write_credential_file)?;
         if client == operator || client == anchor || operator == anchor {
-            return invalid();
+            return invalid(ConfigurationConstraint::DistinctFiles);
         }
         validate_separation(self)?;
         Ok(())
@@ -167,7 +168,7 @@ impl WitnessServiceConfig {
     ) -> Result<WitnessDatabaseCommandConfig, AdapterError> {
         let config: Self = load_json(path)?;
         if config.schema != 1 {
-            return invalid();
+            return invalid(ConfigurationConstraint::Schema);
         }
         validate_database_path(&config.database.path)?;
         validate_boundary(&config.database.authority)?;
@@ -187,12 +188,12 @@ impl AnchorServiceConfig {
 
     pub fn validate(&self) -> Result<(), AdapterError> {
         if self.schema != 1 {
-            return invalid();
+            return invalid(ConfigurationConstraint::Schema);
         }
         validate_tls(&self.tls, self.listen)?;
         validate_limits(&self.limits)?;
         if self.limits.maximum_request_bytes != MAX_ANCHOR_HTTP_BYTES {
-            return invalid();
+            return invalid(ConfigurationConstraint::Limits);
         }
         validate_database_path(&self.database.path)?;
         validate_boundary(&self.database.authority)?;
@@ -202,7 +203,7 @@ impl AnchorServiceConfig {
             require_distinct_files(&[&self.write_credential_file, private_key])?;
         }
         if boundary_labels(&self.database.authority).contains(&self.write_authority.as_str()) {
-            return invalid();
+            return invalid(ConfigurationConstraint::AuthoritySeparation);
         }
         Ok(())
     }
@@ -210,7 +211,7 @@ impl AnchorServiceConfig {
     pub fn load_database_command(path: &Path) -> Result<AnchorDatabaseCommandConfig, AdapterError> {
         let config: Self = load_json(path)?;
         if config.schema != 1 {
-            return invalid();
+            return invalid(ConfigurationConstraint::Schema);
         }
         validate_database_path(&config.database.path)?;
         validate_boundary(&config.database.authority)?;
@@ -230,7 +231,7 @@ fn validate_separation(config: &WitnessServiceConfig) -> Result<(), AdapterError
         || config.database.authority.failure_domain
             == config.external_anchor.authority.failure_domain
     {
-        return invalid();
+        return invalid(ConfigurationConstraint::AuthoritySeparation);
     }
     Ok(())
 }
@@ -254,7 +255,7 @@ fn validate_boundary(boundary: &AuthorityBoundary) -> Result<(), AdapterError> {
         validate_label(label)?;
     }
     if boundary_labels(boundary).len() != 4 {
-        return invalid();
+        return invalid(ConfigurationConstraint::AuthorityLabels);
     }
     Ok(())
 }
@@ -265,7 +266,7 @@ fn validate_label(label: &str) -> Result<(), AdapterError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
     {
-        return invalid();
+        return invalid(ConfigurationConstraint::AuthorityLabels);
     }
     Ok(())
 }
@@ -274,11 +275,11 @@ fn validate_tls(tls: &TlsConfig, listen: SocketAddr) -> Result<(), AdapterError>
     match (&tls.certificate_file, &tls.private_key_file) {
         (Some(certificate), Some(private_key)) if !tls.allow_insecure_loopback => {
             jury_filesystem::read_public_file(certificate, 1024 * 1024)
-                .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+                .map_err(|_| AdapterError::configuration(ConfigurationConstraint::Tls))?;
             validate_private_regular_file(private_key)
         }
         (None, None) if tls.allow_insecure_loopback && listen.ip().is_loopback() => Ok(()),
-        _ => invalid(),
+        _ => invalid(ConfigurationConstraint::Tls),
     }
 }
 
@@ -292,7 +293,7 @@ fn validate_limits(limits: &TransportLimits) -> Result<(), AdapterError> {
         || !(100..=60_000).contains(&limits.shutdown_grace_ms)
         || limits.shutdown_grace_ms < limits.request_timeout_ms
     {
-        return invalid();
+        return invalid(ConfigurationConstraint::Limits);
     }
     Ok(())
 }
@@ -312,15 +313,15 @@ fn validate_identity(identity: &IdentityProviderConfig) -> Result<(), AdapterErr
 
 fn validate_database_path(path: &Path) -> Result<(), AdapterError> {
     if !path.is_absolute() || path.file_name().is_none() {
-        return invalid();
+        return invalid(ConfigurationConstraint::DatabasePath);
     }
     let parent = path
         .parent()
-        .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+        .ok_or_else(|| AdapterError::configuration(ConfigurationConstraint::DatabasePath))?;
     let metadata = fs::symlink_metadata(parent)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+        .map_err(|_| AdapterError::configuration(ConfigurationConstraint::DatabasePath))?;
     if !metadata.is_dir() {
-        return invalid();
+        return invalid(ConfigurationConstraint::DatabasePath);
     }
     Ok(())
 }
@@ -330,32 +331,32 @@ fn require_distinct_files(paths: &[&PathBuf]) -> Result<(), AdapterError> {
         .iter()
         .map(|path| {
             fs::canonicalize(path)
-                .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))
+                .map_err(|_| AdapterError::configuration(ConfigurationConstraint::DistinctFiles))
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     if canonical.len() != paths.len() {
-        return invalid();
+        return invalid(ConfigurationConstraint::DistinctFiles);
     }
     Ok(())
 }
 
 fn load_json<T: DeserializeOwned>(path: &Path) -> Result<T, AdapterError> {
     if !path.is_absolute() {
-        return invalid();
+        return invalid(ConfigurationConstraint::Document);
     }
     let metadata = fs::symlink_metadata(path)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+        .map_err(|_| AdapterError::configuration(ConfigurationConstraint::Document))?;
     if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES as u64 {
-        return invalid();
+        return invalid(ConfigurationConstraint::Document);
     }
-    let bytes =
-        fs::read(path).map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))?;
+    let bytes = fs::read(path)
+        .map_err(|_| AdapterError::configuration(ConfigurationConstraint::Document))?;
     serde_json::from_slice(&bytes)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidConfiguration))
+        .map_err(|_| AdapterError::configuration(ConfigurationConstraint::Document))
 }
 
-fn invalid<T>() -> Result<T, AdapterError> {
-    Err(AdapterError::new(AdapterErrorKind::InvalidConfiguration))
+fn invalid<T>(constraint: ConfigurationConstraint) -> Result<T, AdapterError> {
+    Err(AdapterError::configuration(constraint))
 }
 
 #[cfg(test)]

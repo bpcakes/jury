@@ -1,3 +1,6 @@
+mod error;
+pub use error::{CliError, CliErrorKind};
+
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,7 +141,10 @@ impl CommandOutput {
             return;
         }
         if json {
-            println!("{}", self.json_value());
+            let mut value = self.json_value();
+            value["review_status"] = "externally-unreviewed".into();
+            value["real_secrets_supported"] = false.into();
+            println!("{value}");
         } else {
             self.write_human();
         }
@@ -525,7 +531,7 @@ impl CommandOutput {
                 println!("Owner principal: {owner_principal_id}");
                 println!("Local state: {local_state}");
                 println!("Durability: {durability}");
-                println!("Create an owner backup before storing any real data.");
+                println!("Create an owner backup and practice restoring synthetic test data.");
             }
             Self::VaultStatus {
                 operation,
@@ -703,95 +709,3 @@ impl CommandOutput {
         u8::try_from(portable).unwrap_or(1)
     }
 }
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CliErrorKind {
-    InvalidArguments,
-    UnsupportedPlatform,
-    NotFound,
-    Conflict,
-    InvalidIdentity,
-    AuthenticationFailed,
-    AccessDenied,
-    InvalidVault,
-    ProtectionUnavailable,
-    Filesystem,
-    LocalState,
-    Process,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-pub struct CliError {
-    kind: CliErrorKind,
-    code: &'static str,
-    message: &'static str,
-}
-
-impl CliError {
-    pub(super) const fn new(kind: CliErrorKind, code: &'static str, message: &'static str) -> Self {
-        Self {
-            kind,
-            code,
-            message,
-        }
-    }
-
-    pub(super) const fn kind(self) -> CliErrorKind {
-        self.kind
-    }
-
-    #[cfg(test)]
-    pub(super) const fn code(self) -> &'static str {
-        self.code
-    }
-
-    #[must_use]
-    pub const fn exit_code(self) -> u8 {
-        match self.kind {
-            CliErrorKind::InvalidArguments | CliErrorKind::UnsupportedPlatform => 2,
-            CliErrorKind::NotFound => 3,
-            CliErrorKind::Conflict => 4,
-            CliErrorKind::AuthenticationFailed => 5,
-            CliErrorKind::AccessDenied => 6,
-            CliErrorKind::InvalidIdentity
-            | CliErrorKind::InvalidVault
-            | CliErrorKind::ProtectionUnavailable
-            | CliErrorKind::Filesystem
-            | CliErrorKind::LocalState
-            | CliErrorKind::Process => 1,
-        }
-    }
-
-    pub fn write(self, json: bool) {
-        if json {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "ok": false,
-                    "error": {"code": self.code, "message": self.message},
-                    "maturity": "pre-alpha"
-                })
-            );
-        } else {
-            eprintln!("jury: {} ({})", self.message, self.code);
-        }
-    }
-}
-
-impl fmt::Debug for CliError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CliError")
-            .field("kind", &self.kind)
-            .field("code", &self.code)
-            .finish()
-    }
-}
-
-impl fmt::Display for CliError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl std::error::Error for CliError {}

@@ -1,4 +1,7 @@
 use super::*;
+use jury_protocol::vault_v1::MIN_CONCEALED_VALUE_BYTES;
+
+mod descriptor_access;
 
 pub(super) fn item_create(
     cli: &Cli,
@@ -50,16 +53,6 @@ pub(super) fn item_create(
     if !context.policy.is_owner(&context.identity.principal_id()) {
         return Err(access_denied());
     }
-    if all_admin_items(&context)?
-        .iter()
-        .any(|item| item.descriptor.name() == arguments.item)
-    {
-        return Err(CliError::new(
-            CliErrorKind::Conflict,
-            "duplicate-item-name",
-            "an active item already uses the selected name",
-        ));
-    }
     if grants
         .iter()
         .any(|grant| grant.principal_id == context.identity.principal_id())
@@ -104,6 +97,7 @@ pub(super) fn item_create(
             &inventory,
         )
         .map_err(|error| map_item_error(error.kind()))?;
+    descriptor_access::check_new_item_name(&context, arguments, protection)?;
     let plan = VaultMutationPlan::prepare_item_batch(
         &context.vault,
         &context.catalog.witness_policies,
@@ -174,15 +168,15 @@ pub(super) fn field_set(
 ) -> Result<CommandOutput, CliError> {
     FieldSelector::parse(arguments.item.clone(), arguments.field.clone())
         .map_err(|_| invalid_field_selector())?;
-    if !arguments.value_stdin {
+    if !arguments.value_stdin && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(CliError::new(
             CliErrorKind::InvalidArguments,
             "field-input-opt-in-required",
-            "field values must be supplied with --value-stdin",
+            "piped field values require --value-stdin; terminal entry is hidden",
         ));
     }
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let value = read_bounded_standard_input(MAX_FIELD_VALUE_BYTES)?;
+    let value = field_input::capture(MAX_FIELD_VALUE_BYTES)?;
     let field_value = ItemFieldValue::new(value.as_slice().to_vec()).map_err(|_| {
         CliError::new(
             CliErrorKind::InvalidArguments,
@@ -201,19 +195,32 @@ pub(super) fn field_set(
     let mut state = open_item_body(&context, &accessible, Capability::Write)?;
     let timestamp = timestamp_ms()?;
     let mut creator = ItemCreator::new(protection);
-    match state
+    let field_index = state
         .fields
-        .binary_search_by(|field| field.name.as_bytes().cmp(arguments.field.as_bytes()))
-    {
+        .binary_search_by(|field| field.name.as_bytes().cmp(arguments.field.as_bytes()));
+    let kind = if arguments.concealed {
+        ItemFieldKind::Concealed
+    } else if arguments.unconcealed {
+        ItemFieldKind::Text
+    } else {
+        match field_index {
+            Ok(index) => state.fields[index].kind,
+            Err(_) => ItemFieldKind::Concealed,
+        }
+    };
+    if kind == ItemFieldKind::Concealed && field_value.len() < MIN_CONCEALED_VALUE_BYTES {
+        return Err(CliError::new(
+            CliErrorKind::InvalidArguments,
+            "concealed-field-too-short",
+            "concealed fields require at least four bytes; use --unconcealed only for values allowed in child output",
+        ));
+    }
+    match field_index {
         Ok(index) => {
             let field = &mut state.fields[index];
             field.value = field_value;
             field.decoded_length = decoded_length;
-            field.kind = if arguments.concealed {
-                ItemFieldKind::Concealed
-            } else {
-                ItemFieldKind::Text
-            };
+            field.kind = kind;
             field.updated_at_ms = timestamp;
         }
         Err(index) => {
@@ -232,11 +239,7 @@ pub(super) fn field_set(
                     field_id,
                     value: field_value,
                     decoded_length,
-                    kind: if arguments.concealed {
-                        ItemFieldKind::Concealed
-                    } else {
-                        ItemFieldKind::Text
-                    },
+                    kind,
                     created_at_ms: timestamp,
                     updated_at_ms: timestamp,
                 },
@@ -416,6 +419,7 @@ pub(super) fn field_read(
             authority: "direct-unilateral",
         }
     } else {
+        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: direct-unilateral");
         let mut output = std::io::stdout().lock();
         output

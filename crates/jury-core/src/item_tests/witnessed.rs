@@ -24,7 +24,8 @@ fn witnessed_only_automatic_foreground_session_is_revision_scoped()
     witness_policy.operation_rules[0].approval_threshold = 0;
     witness_policy.operation_rules[0].automatic_read_targets = vec![AutomaticReadTarget {
         item_id: expected_item_id,
-        field_id: None,
+        content_role: ContentRole::Body,
+        field_id: Some(FieldId::from_bytes([0x44; 32])?),
     }];
     witness_policy.review_label_set_digest = owner_review_label_set_digest(&[])?;
 
@@ -76,7 +77,15 @@ fn witnessed_only_automatic_foreground_session_is_revision_scoped()
     let descriptor = ItemDescriptorV1::new("ExampleWitnessedItem".to_owned())?;
     let state = ItemStateV1 {
         plaintext_schema: 1,
-        fields: Vec::new(),
+        fields: vec![ItemFieldV1 {
+            name: "ExampleField".to_owned(),
+            field_id: FieldId::from_bytes([0x44; 32])?,
+            value: ItemFieldValue::new(b"ExampleValue".to_vec())?,
+            decoded_length: 12,
+            kind: ItemFieldKind::Concealed,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        }],
     };
     let mut items = ItemCreator::from_source(IncrementingRandom(0x80), protection);
     let created_item = items.prepare_create(

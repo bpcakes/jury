@@ -240,12 +240,7 @@ pub struct VaultPolicyCheckpointV1 {
     pub genesis_fingerprint: Digest32,
     pub vault_policy_sequence: u64,
     pub vault_policy_hash: Digest32,
-    pub witness_policy_id: WitnessPolicyId,
-    pub witness_policy_revision: u64,
-    pub witness_policy_digest: Digest32,
-    pub witness_set_digest: Digest32,
-    pub approver_set_digest: Digest32,
-    pub review_label_set_digest: Digest32,
+    pub active_witness_policy_set_digest: Digest32,
     pub predecessor_checkpoint_digest: Digest32,
     pub issued_at_ms: u64,
     pub issuer_owner_id: PrincipalId,
@@ -261,12 +256,7 @@ impl VaultPolicyCheckpointV1 {
         output.extend_from_slice(self.genesis_fingerprint.as_bytes());
         output.extend_from_slice(&self.vault_policy_sequence.to_be_bytes());
         output.extend_from_slice(self.vault_policy_hash.as_bytes());
-        output.extend_from_slice(self.witness_policy_id.as_bytes());
-        output.extend_from_slice(&self.witness_policy_revision.to_be_bytes());
-        output.extend_from_slice(self.witness_policy_digest.as_bytes());
-        output.extend_from_slice(self.witness_set_digest.as_bytes());
-        output.extend_from_slice(self.approver_set_digest.as_bytes());
-        output.extend_from_slice(self.review_label_set_digest.as_bytes());
+        output.extend_from_slice(self.active_witness_policy_set_digest.as_bytes());
         output.extend_from_slice(self.predecessor_checkpoint_digest.as_bytes());
         output.extend_from_slice(&self.issued_at_ms.to_be_bytes());
         output.extend_from_slice(self.issuer_owner_id.as_bytes());
@@ -300,7 +290,6 @@ impl VaultPolicyCheckpointV1 {
     pub fn validate_shape(&self) -> Result<(), WitnessProtocolError> {
         if self.schema != 1
             || self.vault_policy_sequence == 0
-            || self.witness_policy_revision == 0
             || self.issued_at_ms == 0
             || self.issuer_key_epoch == 0
         {
@@ -318,8 +307,7 @@ impl fmt::Debug for VaultPolicyCheckpointV1 {
             .debug_struct("VaultPolicyCheckpointV1")
             .field("vault_id", &self.vault_id)
             .field("vault_policy_sequence", &self.vault_policy_sequence)
-            .field("witness_policy_id", &self.witness_policy_id)
-            .field("witness_policy_revision", &self.witness_policy_revision)
+            .field("active_witness_policy_set_digest", &self.active_witness_policy_set_digest)
             .field("signature", &"[REDACTED]")
             .finish()
     }
@@ -513,4 +501,17 @@ impl WitnessResponseV1 {
         }
         Ok(output)
     }
+}
+
+/// Hash the canonical, strictly sorted set of policies referenced by current slots.
+pub fn active_witness_policy_set_digest(policies: &[Digest32]) -> Result<Digest32, WitnessProtocolError> {
+    if policies.len() > crate::vault_v1::MAX_CURRENT_SLOTS
+        || policies.iter().any(|value| value.as_bytes() == &[0; 32])
+        || !strictly_sorted_unique(policies, |left, right| left < right)
+    {
+        return Err(invalid_format());
+    }
+    let mut output = jce("jury-witness-v1/active-policy-set/hash");
+    list_fixed(&mut output, policies, |output, value| output.extend_from_slice(value.as_bytes()))?;
+    Ok(digest(&output))
 }

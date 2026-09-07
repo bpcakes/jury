@@ -319,7 +319,7 @@ fn direct_item_state_exposes_authority_and_suppresses_a_quorum_claim() -> AnyRes
 }
 
 #[test]
-fn replay_accepts_legacy_item_without_every_implicit_owner_slot() -> AnyResult {
+fn replay_rejects_signed_item_without_every_implicit_owner_slot() -> AnyResult {
     let (owner, mut created) = created_policy()?;
     let next_owner = TestSigner::new(0x22, 0x32, PrincipalKind::Human)?;
     let owner_added = prepare_with_test_signer(
@@ -371,10 +371,11 @@ fn replay_accepts_legacy_item_without_every_implicit_owner_slot() -> AnyResult {
         PolicyErrorKind::IncompleteRotation
     );
 
-    // This revision models bytes produced before implicit owner-slot
-    // completion became a new-write invariant. It remains fully signed and
-    // state-hash checked; only its historical construction rule differs.
-    let mut legacy_state = apply_operations(&owner_added.state, 2, &operations)?;
+    assert_eq!(replay_policy(&created.journal), Ok(owner_added.state.clone()));
+
+    // Keep the signature and state hash valid: replay must reject the same
+    // missing owner slots as construction, even for old scratch revisions.
+    let legacy_state = apply_operations(&owner_added.state, 2, &operations)?;
     let mut legacy_revision = SignedPolicyRevisionV1 {
         vault_id: owner_added.state.vault_id(),
         sequence: 2,
@@ -386,12 +387,20 @@ fn replay_accepts_legacy_item_without_every_implicit_owner_slot() -> AnyResult {
         signature: Signature64::new([0; 64]),
     };
     legacy_revision.signature = owner.sign(&legacy_revision.signature_preimage()?)?;
-    legacy_state.terminal_revision_hash = legacy_revision.recomputed_hash()?;
-    legacy_state
-        .revision_hashes
-        .push(legacy_state.terminal_revision_hash.clone());
+    let mut wrong_hash = legacy_revision.clone();
+    wrong_hash.resulting_policy_state_hash = FixedBytes::new([0x7f; 32]);
+    wrong_hash.signature = owner.sign(&wrong_hash.signature_preimage()?)?;
+    let mut corrupt = created.journal.clone();
+    corrupt.revisions.push(wrong_hash);
+    assert!(matches!(
+        replay_policy(&corrupt),
+        Err(error) if error.kind() == PolicyErrorKind::StateHashMismatch
+    ));
     created.journal.revisions.push(legacy_revision);
 
-    assert_eq!(replay_policy(&created.journal), Ok(legacy_state));
+    assert!(matches!(
+        replay_policy(&created.journal),
+        Err(error) if error.kind() == PolicyErrorKind::IncompleteRotation
+    ));
     Ok(())
 }

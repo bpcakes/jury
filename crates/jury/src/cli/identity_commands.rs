@@ -18,8 +18,14 @@ pub(super) fn identity_init(
         HardenedStateRoot::open_or_create_excluding(&identity_root, &repositories, &exclusions)
             .map_err(map_filesystem_error)?;
 
-    let passphrase =
-        secret_input::capture(protection, cli.passphrase_stdin, true).map_err(map_secret_error)?;
+    let passphrase = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        true,
+        "New identity passphrase",
+        environment.new_passphrase(),
+    )
+    .map_err(map_secret_error)?;
     let mut creator = IdentityCreator::new();
     let created = creator
         .create(
@@ -160,10 +166,22 @@ pub(super) fn identity_passphrase_change(
         .map(KdfProfile::from)
         .unwrap_or(identity.header.kdf_profile);
 
-    let old =
-        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
-    let new =
-        secret_input::capture(protection, cli.passphrase_stdin, true).map_err(map_secret_error)?;
+    let old = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        false,
+        "Identity passphrase",
+        environment.identity_passphrase(),
+    )
+    .map_err(map_secret_error)?;
+    let new = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        true,
+        "New identity passphrase",
+        environment.new_passphrase(),
+    )
+    .map_err(map_secret_error)?;
     let replacement = IdentityCreator::new()
         .change_passphrase(
             &identity,
@@ -224,8 +242,14 @@ pub(super) fn unlock_selected_identity(
         .read(&root, &repositories, MAX_IDENTITY_FILE_BYTES)
         .map_err(map_filesystem_error)?;
     let file = IdentityFileV1::parse(&bytes).map_err(|_| invalid_identity())?;
-    let passphrase =
-        secret_input::capture(protection, cli.passphrase_stdin, false).map_err(map_secret_error)?;
+    let passphrase = secret_input::capture_named_or_environment(
+        protection,
+        cli.passphrase_stdin,
+        false,
+        "Identity passphrase",
+        environment.identity_passphrase(),
+    )
+    .map_err(map_secret_error)?;
     let protection_degraded = passphrase.protection_degraded();
     let identity =
         unlock(&file, passphrase.memory()).map_err(|error| map_identity_error(error.kind()))?;

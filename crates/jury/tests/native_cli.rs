@@ -23,11 +23,20 @@ mod native_cli_backup;
 #[path = "native_cli/execution.rs"]
 mod native_cli_execution;
 
+#[path = "native_cli/field_redaction.rs"]
+mod native_cli_field_redaction;
+
+#[path = "native_cli/diagnostics.rs"]
+mod native_cli_diagnostics;
+
 #[path = "native_cli/main_flow.rs"]
 mod native_cli_main_flow;
 
 #[path = "native_cli/plaintext.rs"]
 mod native_cli_plaintext;
+
+#[path = "native_cli/passphrase_input.rs"]
+mod native_cli_passphrase_input;
 
 #[path = "native_cli/transfer.rs"]
 mod native_cli_transfer;

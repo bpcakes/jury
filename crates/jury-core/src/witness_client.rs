@@ -1,5 +1,7 @@
 //! Endpoint-side construction of exact, request-session-bound witness requests.
 
+mod presentation;
+
 use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
@@ -23,10 +25,7 @@ use crate::{
     crypto::{self, CryptoError},
     domain::Capability,
     identity::VaultPrincipalIdentity,
-    policy::{
-        DescriptorStatus, PolicyState, WitnessOperation, core_operation,
-        protocol_platform_assurance,
-    },
+    policy::{DescriptorStatus, PolicyState, core_operation, protocol_platform_assurance},
     witness_approval::{ApprovalReviewInput, validate_policy_authenticated_presentation},
     witness_engine::{
         validate_checkpoint_public, validate_public_request, validate_request_cancellation,
@@ -160,13 +159,89 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
         item_id: ItemId,
         field_id: FieldId,
     ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
+        self.create_read_target(context, item_id, Some(field_id))
+    }
+
+    /// Authorizes one descriptor under the existing read-stdout operation.
+    /// Automatic policies must explicitly contain a descriptor target; a body
+    /// field target alone never grants access to the private item name.
+    pub fn create_descriptor_read_stdout(
+        &mut self,
+        context: WitnessRequestContext<'_>,
+        item_id: ItemId,
+    ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
+        self.create_read_target(context, item_id, None)
+    }
+
+    fn create_read_target(
+        &mut self,
+        context: WitnessRequestContext<'_>,
+        item_id: ItemId,
+        field_id: Option<FieldId>,
+    ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
+        let role = if field_id.is_some() {
+            ContentRole::Body
+        } else {
+            ContentRole::Descriptor
+        };
+        self.create_single_target(
+            context,
+            item_id,
+            role,
+            field_id,
+            OperationContextV1::ReadStdout,
+        )
+    }
+
+    /// Authorizes one current descriptor or body for an explicit owner change.
+    /// The returned session cannot authorize another role, item or owner intent.
+    pub fn create_owner_change(
+        &mut self,
+        context: WitnessRequestContext<'_>,
+        item_id: ItemId,
+        content_role: ContentRole,
+        change: jury_protocol::witness_v1::OwnerChangeKindV1,
+        target_principal_id: jury_protocol::vault_v1::PrincipalId,
+    ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
+        let next_vault_policy_sequence = context
+            .policy
+            .sequence()
+            .checked_add(1)
+            .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::InvalidInput))?;
+        self.create_single_target(
+            context,
+            item_id,
+            content_role,
+            None,
+            OperationContextV1::OwnerChange {
+                change,
+                target_principal_id,
+                next_vault_policy_sequence,
+            },
+        )
+    }
+
+    fn create_single_target(
+        &mut self,
+        context: WitnessRequestContext<'_>,
+        item_id: ItemId,
+        content_role: ContentRole,
+        field_id: Option<FieldId>,
+        operation_context: OperationContextV1,
+    ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
+        let subject_kind = if field_id.is_some() {
+            PresentationSubjectV1::Field
+        } else {
+            PresentationSubjectV1::Item
+        };
+        let operation = operation_context.operation();
         let policy = context.policy;
         let checkpoint = context.checkpoint;
         let requester = context.requester;
         let review_labels = &context.review_labels;
         let now_ms = context.now_ms;
         let rule = policy
-            .witness_access_rule(&item_id, WitnessOperation::ReadStdout)
+            .witness_access_rule(&item_id, core_operation(operation))
             .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
         let item = policy
             .item(&item_id)
@@ -179,7 +254,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
                     .slots
                     .iter()
                     .filter(|slot| {
-                        slot.content_role == ContentRole::Body
+                        slot.content_role == content_role
                             && slot.witness_policy_digest == rule.policy_digest
                     })
                     .collect::<Vec<_>>();
@@ -191,7 +266,11 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             })
             .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
         let requested_access_role = policy
-            .access(&item_id, &requester.principal_id(), Capability::Read)
+            .access(
+                &item_id,
+                &requester.principal_id(),
+                crate::witness_validation::operation_capability(operation),
+            )
             .effective_role
             .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::WrongIdentity))?;
         let (presentation, presentation_commitment) = if rule.approval_threshold == 0 {
@@ -200,9 +279,9 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             let label = review_labels
                 .iter()
                 .find(|label| {
-                    label.subject_kind == PresentationSubjectV1::Field
+                    label.subject_kind == subject_kind
                         && label.item_id == Some(item_id)
-                        && label.field_id == Some(field_id)
+                        && label.field_id == field_id
                 })
                 .cloned()
                 .ok_or_else(|| {
@@ -216,9 +295,9 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
                 WitnessRequestError::new(WitnessRequestErrorKind::EntropyUnavailable)
             })?;
             let entry = ApprovalPresentationEntryV1 {
-                subject_kind: PresentationSubjectV1::Field,
+                subject_kind,
                 item_id: Some(item_id),
-                field_id: Some(field_id),
+                field_id,
                 subject_commitment: None,
                 presentation_kind: PresentationKindV1::OwnerReviewLabel,
                 display_bytes: PresentationDisplayBytes::new(
@@ -248,7 +327,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
         let approval_target = ApprovalTargetV1 {
             entries: vec![ApprovalTargetEntryV1 {
                 item_id,
-                field_id: Some(field_id),
+                field_id,
                 presentation_commitment,
             }],
             presentation_digest: presentation_digest.clone(),
@@ -279,8 +358,8 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             witness_policy_digest: slot.witness_policy_digest.clone(),
             requester_principal_id: requester.principal_id(),
             requested_access_role,
-            operation: WitnessOperationV1::ReadStdout,
-            operation_context: OperationContextV1::ReadStdout,
+            operation,
+            operation_context,
             approval_target,
             approval_target_digest,
             executable_identity: None,
@@ -289,7 +368,11 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             environment_injections: Vec::new(),
             stdin_target: None,
             stdin_mode: StdinModeV1::None,
-            output_sink: OutputSinkV1::Stdout,
+            output_sink: if operation == WitnessOperationV1::AdministrativeRekey {
+                OutputSinkV1::None
+            } else {
+                OutputSinkV1::Stdout
+            },
             output_sink_commitment: None,
             platform_assurance: protocol_platform_assurance(rule.required_platform_assurance),
             timeout_ms: 0,
@@ -341,7 +424,9 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             .effective_role
             .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::WrongIdentity))?;
         action.field_ids.sort_unstable();
-        if action.field_ids.is_empty() || action.field_ids.windows(2).any(|pair| pair[0] == pair[1])
+        if action.field_ids.is_empty()
+            || action.field_ids.windows(2).any(|pair| pair[0] == pair[1])
+            || (operation == WitnessOperationV1::ChildStdin && action.field_ids.len() != 1)
         {
             return Err(WitnessRequestError::new(
                 WitnessRequestErrorKind::InvalidInput,
@@ -418,148 +503,6 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
         self.create(context, manifest, presentation)
     }
 
-    fn human_presentation(
-        &mut self,
-        action: &WitnessActionRequest,
-        slot: &WitnessedSlotV1,
-        review_labels: &[OwnerReviewLabelV1],
-    ) -> Result<HumanPresentation, WitnessRequestError> {
-        let mut presentation_entries = Vec::new();
-        let mut approval_entries = Vec::new();
-        let item_entry = self.label_presentation_entry(
-            PresentationSubjectV1::Item,
-            action.item_id,
-            None,
-            slot,
-            review_labels,
-        )?;
-        approval_entries.push(ApprovalTargetEntryV1 {
-            item_id: action.item_id,
-            field_id: None,
-            presentation_commitment: presentation_commitment(&item_entry)?,
-        });
-        presentation_entries.push(item_entry);
-        for field_id in &action.field_ids {
-            let entry = self.label_presentation_entry(
-                PresentationSubjectV1::Field,
-                action.item_id,
-                Some(*field_id),
-                slot,
-                review_labels,
-            )?;
-            approval_entries.push(ApprovalTargetEntryV1 {
-                item_id: action.item_id,
-                field_id: Some(*field_id),
-                presentation_commitment: presentation_commitment(&entry)?,
-            });
-            presentation_entries.push(entry);
-        }
-        let working_directory_commitment = if let Some(display) = &action.working_directory {
-            let entry = self
-                .normalized_presentation_entry(PresentationSubjectV1::WorkingDirectory, display)?;
-            let commitment = entry.subject_commitment.clone();
-            presentation_entries.push(entry);
-            commitment
-        } else {
-            None
-        };
-        let output_sink_commitment = if let Some(display) = &action.output_destination {
-            let entry =
-                self.normalized_presentation_entry(PresentationSubjectV1::OutputSink, display)?;
-            let commitment = entry.subject_commitment.clone();
-            presentation_entries.push(entry);
-            commitment
-        } else {
-            None
-        };
-        Ok((
-            ApprovalPresentationV1 {
-                entries: presentation_entries,
-            },
-            approval_entries,
-            working_directory_commitment,
-            output_sink_commitment,
-        ))
-    }
-
-    fn label_presentation_entry(
-        &mut self,
-        subject_kind: PresentationSubjectV1,
-        item_id: ItemId,
-        field_id: Option<FieldId>,
-        slot: &WitnessedSlotV1,
-        review_labels: &[OwnerReviewLabelV1],
-    ) -> Result<ApprovalPresentationEntryV1, WitnessRequestError> {
-        let label = review_labels
-            .iter()
-            .find(|label| {
-                label.subject_kind == subject_kind
-                    && label.item_id == Some(item_id)
-                    && label.field_id == field_id
-            })
-            .cloned()
-            .ok_or_else(|| {
-                WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation)
-            })?;
-        Ok(ApprovalPresentationEntryV1 {
-            subject_kind,
-            item_id: Some(item_id),
-            field_id,
-            subject_commitment: None,
-            presentation_kind: PresentationKindV1::OwnerReviewLabel,
-            display_bytes: PresentationDisplayBytes::new(label.public_label.as_bytes().to_vec())
-                .map_err(|_| {
-                    WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation)
-                })?,
-            source_revision: Some(slot.revision),
-            source_revision_seal_id: Some(slot.revision_seal_id),
-            owner_review_label: Some(label),
-            blinding_nonce: self.draw_presentation_nonce()?,
-        })
-    }
-
-    fn normalized_presentation_entry(
-        &mut self,
-        subject_kind: PresentationSubjectV1,
-        display: &OperationBytes,
-    ) -> Result<ApprovalPresentationEntryV1, WitnessRequestError> {
-        let blinding_nonce = self.draw_presentation_nonce()?;
-        let subject_commitment =
-            normalized_subject_commitment(subject_kind, blinding_nonce, display.as_bytes())
-                .map_err(|_| {
-                    WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation)
-                })?;
-        Ok(ApprovalPresentationEntryV1 {
-            subject_kind,
-            item_id: None,
-            field_id: None,
-            subject_commitment: Some(subject_commitment),
-            presentation_kind: PresentationKindV1::ExactNormalizedDisplay,
-            display_bytes: PresentationDisplayBytes::new(display.as_bytes().to_vec()).map_err(
-                |_| WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation),
-            )?,
-            source_revision: None,
-            source_revision_seal_id: None,
-            owner_review_label: None,
-            blinding_nonce,
-        })
-    }
-
-    fn draw_presentation_nonce(&mut self) -> Result<PresentationNonce, WitnessRequestError> {
-        for _ in 0..IDENTIFIER_RETRY_ATTEMPTS {
-            let mut nonce_bytes = [0_u8; 32];
-            self.source.fill(&mut nonce_bytes).map_err(|_| {
-                WitnessRequestError::new(WitnessRequestErrorKind::EntropyUnavailable)
-            })?;
-            if let Ok(nonce) = PresentationNonce::from_bytes(nonce_bytes) {
-                return Ok(nonce);
-            }
-        }
-        Err(WitnessRequestError::new(
-            WitnessRequestErrorKind::EntropyUnavailable,
-        ))
-    }
-
     pub fn create(
         &mut self,
         context: WitnessRequestContext<'_>,
@@ -573,8 +516,11 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             review_labels,
             now_ms,
         } = context;
-        let witness_policy = validate_checkpoint_public(policy, checkpoint)
+        validate_checkpoint_public(policy, checkpoint)
             .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
+        let witness_policy = policy
+            .witness_policy(&manifest.witness_policy_digest)
+            .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::StalePolicy))?;
         let requester_descriptor = requester
             .public_descriptor()
             .map_err(|_| WitnessRequestError::new(WitnessRequestErrorKind::ProviderFailure))?;

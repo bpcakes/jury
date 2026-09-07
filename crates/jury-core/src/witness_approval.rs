@@ -284,9 +284,8 @@ pub fn validate_policy_authenticated_presentation<'a>(
     }
     let human = validated.rule.approval_threshold != 0;
     let verified = validate_manifest_presentation(manifest, presentation, human)?;
-    if checkpoint.review_label_set_digest != validated.policy.review_label_set_digest
-        || owner_review_label_set_digest(review_labels).ok().as_ref()
-            != Some(&validated.policy.review_label_set_digest)
+    if owner_review_label_set_digest(review_labels).ok().as_ref()
+        != Some(&validated.policy.review_label_set_digest)
     {
         return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
     }
@@ -372,6 +371,7 @@ fn validate_normalized_subject(
 pub struct CompleteApprovalReview<'a> {
     request: &'a WitnessRequestV1,
     validated: ValidatedApprovalPresentation<'a>,
+    authenticated_item_labels: Vec<&'a OwnerReviewLabelV1>,
     text: String,
 }
 
@@ -384,6 +384,14 @@ impl CompleteApprovalReview<'_> {
     #[must_use]
     pub const fn request(&self) -> &WitnessRequestV1 {
         self.request
+    }
+
+    /// Supplementary owner-signed item labels when the presentation has no
+    /// item entry. All aliases belong to the checkpoint's exact label set;
+    /// callers must display each label's ID and revision with its name.
+    #[must_use]
+    pub fn authenticated_item_labels(&self) -> &[&OwnerReviewLabelV1] {
+        &self.authenticated_item_labels
     }
 
     #[must_use]
@@ -405,6 +413,7 @@ impl fmt::Debug for CompleteApprovalReview<'_> {
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct ApprovalReviewDocument<'a> {
+    authenticated_item_labels: Vec<AuthenticatedItemLabelDisplay<'a>>,
     request: &'a WitnessRequestV1,
     action_manifest: &'a ActionManifestV1,
     presentation: &'a ApprovalPresentationV1,
@@ -419,6 +428,15 @@ struct MeaningfulSubjectDisplay<'a> {
     subject_kind: &'a PresentationSubjectV1,
     item_id: Option<&'a ItemId>,
     field_id: Option<&'a FieldId>,
+    exact_display: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthenticatedItemLabelDisplay<'a> {
+    label_id: &'a LabelId,
+    label_revision: u64,
+    item_id: Option<&'a ItemId>,
     exact_display: &'a str,
 }
 
@@ -476,7 +494,37 @@ pub fn render_complete_approval_review<'a>(
             exact_display: display,
         })
         .collect();
+    let needs_item_labels = validated.is_human()
+        && !presentation
+            .entries
+            .iter()
+            .any(|entry| entry.subject_kind == PresentationSubjectV1::Item);
+    let authenticated_item_labels = input
+        .review_labels
+        .iter()
+        .filter(|label| {
+            needs_item_labels
+                && label.subject_kind == PresentationSubjectV1::Item
+                && label.item_id == Some(request.item_id)
+        })
+        .collect::<Vec<_>>();
+    if needs_item_labels && authenticated_item_labels.is_empty() {
+        return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
+    }
+    let item_label_displays = authenticated_item_labels
+        .iter()
+        .map(|label| {
+            Ok(AuthenticatedItemLabelDisplay {
+                label_id: &label.label_id,
+                label_revision: label.label_revision,
+                item_id: label.item_id.as_ref(),
+                exact_display: std::str::from_utf8(label.public_label.as_bytes())
+                    .map_err(|_| ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope))?,
+            })
+        })
+        .collect::<Result<Vec<_>, ReviewLabelError>>()?;
     let text = serde_json::to_string_pretty(&ApprovalReviewDocument {
+        authenticated_item_labels: item_label_displays,
         request,
         action_manifest: manifest,
         presentation,
@@ -484,11 +532,15 @@ pub fn render_complete_approval_review<'a>(
         meaningful_subjects,
         operation_display: operation_display(manifest),
     })
-    .map_err(|_| ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope))?;
+    .map_err(|_| ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope))?
+    // Preserve a literal owner-supplied ellipsis as a lossless JSON escape,
+    // so it cannot be confused with a renderer's truncation marker.
+    .replace('…', "\\u2026");
     if text.is_empty() || text.contains("…") {
         return Err(ReviewLabelError::new(ReviewLabelErrorKind::InvalidScope));
     }
     Ok(CompleteApprovalReview {
+        authenticated_item_labels,
         request,
         validated,
         text,
@@ -527,7 +579,9 @@ fn operation_display(manifest: &ActionManifestV1) -> OperationDisplay<'_> {
     }
 }
 
-fn exact_byte_display(bytes: &[u8]) -> String {
+/// Render exact operation bytes using printable ASCII and explicit byte escapes.
+#[must_use]
+pub fn exact_byte_display(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut display = String::with_capacity(bytes.len().saturating_mul(4).saturating_add(7));
     display.push_str("bytes\"");

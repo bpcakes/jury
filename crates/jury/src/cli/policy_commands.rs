@@ -33,12 +33,13 @@ pub(super) fn policy_require_witnessed(
     if (automatic
         && (!approver_ids.is_empty()
             || operations.as_slice() != [WitnessOperation::ReadStdout]
-            || arguments.automatic_read_fields.is_empty()
+            || (arguments.automatic_read_fields.is_empty() && !arguments.automatic_descriptor)
             || arguments.review_label.is_some()
             || !arguments.field_review_labels.is_empty()))
         || (!automatic
             && (approver_ids.is_empty()
                 || !arguments.automatic_read_fields.is_empty()
+                || arguments.automatic_descriptor
                 || arguments.review_label.is_none()
                 || (operations.iter().any(|operation| {
                     matches!(
@@ -224,11 +225,19 @@ pub(super) fn policy_require_witnessed(
                 .find(|field| &field.name == field_name)
                 .map(|field| AutomaticReadTarget {
                     item_id: envelope.item_id,
+                    content_role: ContentRole::Body,
                     field_id: Some(field.field_id),
                 })
                 .ok_or_else(invalid_policy_controls)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if arguments.automatic_descriptor || !arguments.automatic_read_fields.is_empty() {
+        automatic_read_targets.push(AutomaticReadTarget {
+            item_id: envelope.item_id,
+            content_role: ContentRole::Descriptor,
+            field_id: None,
+        });
+    }
     automatic_read_targets.sort_unstable();
     if automatic_read_targets
         .windows(2)
@@ -497,6 +506,7 @@ pub(super) fn policy_status(
                         "approval_threshold": rule.approval_threshold,
                         "request_lifetime_ms": rule.allowed_request_lifetime_ms,
                         "workload_bound": true,
+                        "automatic_read_targets": rule.automatic_read_targets,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -556,6 +566,26 @@ pub(super) fn policy_status(
                 item_access_mode(mode)
             ),
             format!("Carries item quorum claim: {carries_quorum_claim}"),
+            format!(
+                "Automatic read targets: {}",
+                witness_policy
+                    .map(|policy| policy
+                        .operation_rules
+                        .iter()
+                        .flat_map(|rule| &rule.automatic_read_targets)
+                        .map(|target| format!(
+                            "{:?} item {} field {}",
+                            target.content_role,
+                            hex(target.item_id.as_bytes()),
+                            target
+                                .field_id
+                                .map_or_else(|| "none".to_owned(), |id| hex(id.as_bytes()))
+                        ))
+                        .collect::<Vec<_>>()
+                        .join("; "))
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or_else(|| "none".to_owned())
+            ),
         ],
     })
 }

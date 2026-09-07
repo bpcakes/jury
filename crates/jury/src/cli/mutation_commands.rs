@@ -224,8 +224,8 @@ pub(super) fn finish_policy_mutation(
     finish_mutation_plan(context, plan, operation, None, dry_run, protection)
 }
 
-pub(super) fn finish_mutation_plan(
-    context: VaultPrincipalContext,
+pub(super) fn finish_mutation_plan<I>(
+    context: PrincipalContext<I>,
     mut plan: VaultMutationPlan,
     operation: &'static str,
     item: Option<String>,
@@ -255,8 +255,8 @@ pub(super) fn finish_mutation_plan(
     ))
 }
 
-pub(super) fn commit_mutation(
-    context: &VaultPrincipalContext,
+pub(super) fn commit_mutation<I>(
+    context: &PrincipalContext<I>,
     plan: &VaultMutationPlan,
     protection: ProtectionPolicy,
 ) -> Result<MutationCommitOutcome, CliError> {

@@ -485,8 +485,7 @@ fn load_witness_state(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(database_unavailable)?;
-    let state: PersistedWitnessState = serde_json::from_slice(&state_json)
-        .map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
+    let state = persisted_json::decode(&state_json).map_err(map_codec_adapter_error)?;
     let generation =
         u64::try_from(generation).map_err(|_| AdapterError::new(AdapterErrorKind::InvalidState))?;
     if state.logical.witness_id != witness_id || state.logical.state_generation != generation {

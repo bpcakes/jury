@@ -1,12 +1,12 @@
 #[derive(Debug, Subcommand)]
 pub enum RequestCommand {
-    /// Create one signed public request artifact for exact review.
+    /// Create a detached public artifact for inspection; it cannot resume an execution session.
     Create(RequestCreateArgs),
     /// Validate and render one complete request artifact.
     Inspect(RequestArtifactArgs),
     /// Report the current local phase of one request artifact.
     Status(RequestArtifactArgs),
-    /// Execute a request while retaining its fresh session key in memory.
+    /// Create and execute a fresh request; keep this process open while another terminal approves it.
     Execute(RequestExecuteArgs),
     /// Sign cancellation intent for one exact request.
     Cancel(RequestCancelArgs),
@@ -35,6 +35,7 @@ pub struct RequestCreateArgs {
     /// Opaque field ID, intended for explicitly configured automatic rules.
     #[arg(long, value_name = "FIELD_ID", conflicts_with = "field")]
     pub field_id: Option<String>,
+    /// Current owner-signed checkpoint JSON accepted by the selected witnesses.
     #[arg(long, value_name = "CHECKPOINT")]
     pub checkpoint: PathBuf,
     #[arg(long, value_name = "FILE")]
@@ -71,6 +72,7 @@ pub struct RequestExecuteArgs {
     /// Opaque field ID, intended for explicitly configured automatic rules.
     #[arg(long, value_name = "FIELD_ID", conflicts_with = "field")]
     pub field_id: Option<String>,
+    /// Current owner-signed checkpoint JSON accepted by the selected witnesses.
     #[arg(long, value_name = "CHECKPOINT")]
     pub checkpoint: PathBuf,
     /// Atomically publish the reviewable request while this process retains its session key.
@@ -83,13 +85,14 @@ pub struct RequestExecuteArgs {
     #[arg(long = "approval", value_name = "FILE")]
     pub approvals: Vec<PathBuf>,
     /// Witness endpoint as WITNESS_ID,BASE_URL,CREDENTIAL_FILE[,CA_CERTIFICATE].
+    /// HTTPS requires the CA certificate; only loopback HTTP omits it.
     #[arg(long = "witness", value_name = "ENDPOINT", required = true)]
     pub witnesses: Vec<String>,
     /// Permit literal-IP loopback HTTP endpoints for local testing.
     #[arg(long)]
     pub allow_insecure_loopback: bool,
-    /// Maximum seconds to wait for the declared approval files.
-    #[arg(long, value_name = "SECONDS", default_value_t = 300)]
+    /// Wait up to 0..=900 seconds for approval files; request expiry may end the wait sooner.
+    #[arg(long, value_name = "SECONDS", default_value_t = 300, value_parser = clap::value_parser!(u64).range(0..=900))]
     pub wait_seconds: u64,
     /// Atomically create a private output file instead of revealing stdout.
     #[arg(long, value_name = "FILE", conflicts_with = "reveal")]
@@ -108,6 +111,7 @@ pub struct RequestCancelArgs {
     #[arg(long, value_name = "FILE")]
     pub out: PathBuf,
     /// Witness endpoint as WITNESS_ID,BASE_URL,CREDENTIAL_FILE[,CA_CERTIFICATE].
+    /// HTTPS requires the CA certificate; only loopback HTTP omits it.
     #[arg(long = "witness", value_name = "ENDPOINT", required = true)]
     pub witnesses: Vec<String>,
     /// Permit literal-IP loopback HTTP endpoints for local testing.
@@ -140,9 +144,6 @@ pub struct ApproveArgs {
 
 #[derive(Debug, Args)]
 pub struct WitnessCheckpointArgs {
-    /// Opaque public identifier of an item using the current witnessed policy.
-    #[arg(long, value_name = "ITEM_ID")]
-    pub item_id: String,
     /// Prior checkpoint in the same chain; omit only for the first checkpoint.
     #[arg(long, value_name = "CHECKPOINT")]
     pub predecessor: Option<PathBuf>,

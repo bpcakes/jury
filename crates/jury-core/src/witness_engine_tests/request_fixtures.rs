@@ -81,23 +81,15 @@ fn fixture_policy(
 
 fn fixture_checkpoint(
     principals: &FixturePrincipals,
-    witness_policy: &WitnessPolicy,
     witness_policy_digest: &Digest32,
 ) -> TestResult<VaultPolicyCheckpointV1> {
-    let (approver_set_digest, witness_set_digest) =
-        witness_policy.active_descriptor_set_digests()?;
     let mut checkpoint = VaultPolicyCheckpointV1 {
         schema: 1,
         vault_id: VaultId::from_bytes([0x01; 32])?,
         genesis_fingerprint: Digest32::new([0x02; 32]),
         vault_policy_sequence: 1,
         vault_policy_hash: Digest32::new([0x72; 32]),
-        witness_policy_id: WitnessPolicyId::from_bytes([0x0a; 32])?,
-        witness_policy_revision: 1,
-        witness_policy_digest: witness_policy_digest.clone(),
-        witness_set_digest,
-        approver_set_digest,
-        review_label_set_digest: witness_policy.review_label_set_digest.clone(),
+        active_witness_policy_set_digest: jury_protocol::witness_v1::active_witness_policy_set_digest(std::slice::from_ref(witness_policy_digest))?,
         predecessor_checkpoint_digest: Digest32::new([0; 32]),
         issued_at_ms: NOW_MS - 5_000,
         issuer_owner_id: principals.owner_descriptor.principal_id,
@@ -288,7 +280,7 @@ fn fixture() -> TestResult<Fixture> {
     let witness_policy = fixture_witness_policy(&principals)?;
     let witness_policy_digest = witness_policy.digest()?;
     let policy = fixture_policy(&principals, &witness_policy, &witness_policy_digest)?;
-    let checkpoint = fixture_checkpoint(&principals, &witness_policy, &witness_policy_digest)?;
+    let checkpoint = fixture_checkpoint(&principals, &witness_policy_digest)?;
     let (manifest, presentation_digest) =
         fixture_manifest(&principals.owner_descriptor, &witness_policy_digest)?;
     let request = fixture_request(&principals, &checkpoint, &manifest, witness_policy_digest)?;
@@ -590,8 +582,6 @@ fn descendant_policy_and_checkpoint_at_sequence(
         .witness_policies
         .insert(next_digest.clone(), next_witness_policy.clone());
 
-    let (approver_set_digest, witness_set_digest) =
-        next_witness_policy.active_descriptor_set_digests()?;
     let owner = fixture.actors.owner.public_descriptor()?;
     let mut checkpoint = VaultPolicyCheckpointV1 {
         schema: 1,
@@ -599,12 +589,7 @@ fn descendant_policy_and_checkpoint_at_sequence(
         genesis_fingerprint: next_policy.genesis_fingerprint().clone(),
         vault_policy_sequence: next_sequence,
         vault_policy_hash: next_policy.terminal_revision_hash().clone(),
-        witness_policy_id: next_witness_policy.witness_policy_id,
-        witness_policy_revision: 2,
-        witness_policy_digest: next_digest,
-        witness_set_digest,
-        approver_set_digest,
-        review_label_set_digest: next_witness_policy.review_label_set_digest,
+        active_witness_policy_set_digest: next_policy.active_witness_policy_set_digest()?,
         predecessor_checkpoint_digest: fixture.checkpoint.digest()?,
         issued_at_ms: NOW_MS,
         issuer_owner_id: owner.principal_id,
