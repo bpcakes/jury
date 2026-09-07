@@ -61,3 +61,74 @@ fn resume_with_concurrent_source_mutation(
     assert_eq!(fs::read(source_path)?, source_bytes);
     Ok(result)
 }
+
+fn refuse_checkpoint_advanced_during_preparation(
+    workflow: &WorkflowContext<'_>,
+    actors: &super::native_cli_additional::PolicyActors,
+    endpoints: [&EngineEndpoint; 2],
+    migration: bool,
+) -> TestResult {
+    let context = &workflow.approval;
+    let artifacts = workflow.artifacts.join("ExampleFreshness");
+    let outputs = workflow.private_output.join("ExampleFreshness");
+    for path in [&artifacts, &outputs] {
+        fs::create_dir(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    let workflow = WorkflowContext {
+        approval: ApprovalRunContext { repository: context.repository, data: context.data,
+            state: context.state, policy: context.policy, approver: context.approver },
+        artifacts: &artifacts, private_output: &outputs, checkpoint: workflow.checkpoint,
+        endpoints: workflow.endpoints,
+    };
+    let source_path = context.repository.join(".jury/vault.json");
+    let source_bytes = fs::read(&source_path)?;
+    let source = VaultFileV1::parse(&source_bytes)?;
+    let plan = artifacts.join("ExampleAccess.json");
+    let approvals = rollover_source_plan(&workflow, source.items[0].item_id, &plan)?;
+    let out = outputs.join("ExampleVault");
+    let offline = outputs.join("ExampleOffline");
+    fs::create_dir(&offline)?;
+    fs::set_permissions(&offline, fs::Permissions::from_mode(0o700))?;
+    let backup = offline.join("ExampleBackup");
+    let transfer = artifacts.join("ExampleTransfer");
+    let registration = outputs.join("ExampleRegistration");
+    let operator = artifacts.join("ExampleOperator.token");
+    fs::write(&operator, OPERATOR_TOKEN)?;
+    fs::set_permissions(&operator, fs::Permissions::from_mode(0o600))?;
+    let mut arguments = rollover_arguments([&out, &backup, &transfer, &registration, &plan], endpoints, &operator)?;
+    select_rollover_command(&mut arguments, migration)?;
+    arguments.push("--adopt-new-lineage".into());
+    let mut child = RolloverChild(Some(jury_command(context.repository, context.data, context.state)
+        .args(&arguments).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?));
+    child.0.as_mut().ok_or("missing child")?.stdin.take().ok_or("missing stdin")?
+        .write_all(format!("{OWNER_PASSPHRASE}\nExampleBackupPassphrase\nExampleBackupPassphrase\n").as_bytes())?;
+    approve_rollover_source(context, &approvals, &mut child)?;
+    wait_for_rollover_journal(&registration.join("journal.json"))?;
+    // Candidate proofs have not been supplied: preparation is deterministically
+    // paused before publication. Mutate a different copy with shared owner state.
+    let clone = outputs.join("ExampleClone");
+    fs::create_dir(&clone)?;
+    fs::set_permissions(&clone, fs::Permissions::from_mode(0o700))?;
+    fs::write(clone.join("vault.json"), &source_bytes)?;
+    fs::set_permissions(clone.join("vault.json"), fs::Permissions::from_mode(0o600))?;
+    let owner = encode_hex(context.policy.owner_ids().next().ok_or("missing owner")?.as_bytes());
+    success_json(run(context.repository, context.data, context.state,
+        &["--json", "--home", clone.to_str().ok_or("invalid home")?, "--passphrase-stdin",
+          "--allow-degraded-protection", "principal", "label", &owner, "--label", "ExampleConcurrentOwner"],
+        format!("{OWNER_PASSPHRASE}\n").as_bytes())?)?;
+    assert_ne!(fs::read(clone.join("vault.json"))?, source_bytes);
+    assert_eq!(fs::read(&source_path)?, source_bytes);
+    let counts = endpoints.map(EngineEndpoint::request_counts);
+    prove_rollover_roles(context, actors, &registration)?;
+    let refused = child.0.take().ok_or("missing child")?.wait_with_output()?;
+    assert_eq!(refused.status.code(), Some(4));
+    assert!(refused.stdout.is_empty());
+    // stderr also includes the public draft-genesis progress line.
+    let error = String::from_utf8(refused.stderr)?;
+    assert!(error.contains("checkpoint-conflict"), "{error}");
+    assert!(!out.exists() && !backup.exists() && !transfer.exists());
+    assert_eq!(endpoints.map(EngineEndpoint::request_counts), counts);
+    assert_eq!(fs::read(source_path)?, source_bytes);
+    Ok(())
+}

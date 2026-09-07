@@ -7,6 +7,8 @@ mod publication;
 mod recovery;
 mod registration;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 pub(super) use governed::exercise_polling_repair;
 
 // Reader-consumed recovery control for J18: a crash between output writes must

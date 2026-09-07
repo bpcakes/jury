@@ -369,15 +369,20 @@ fn exercise_too_late_cancellation(context: &WorkflowContext<'_>) -> TestResult {
 
 #[test]
 fn witnessed_only_default_read_inject_and_execution_complete_after_async_approval() -> TestResult {
-    exercise_witnessed_workflow(false)
+    exercise_witnessed_workflow(false, false)
 }
 
 #[test]
 fn witnessed_suite_migration_uses_recovery_approvals_and_reads_destination() -> TestResult {
-    exercise_witnessed_workflow(true)
+    exercise_witnessed_workflow(true, false)
 }
 
-fn exercise_witnessed_workflow(migration: bool) -> TestResult {
+#[test]
+fn witnessed_rollover_refuses_checkpoint_advance_during_preparation() -> TestResult {
+    exercise_witnessed_workflow(false, true)
+}
+
+fn exercise_witnessed_workflow(migration: bool, freshness_only: bool) -> TestResult {
     let temporary = tempfile::tempdir()?;
     let repository = temporary.path().join("repository");
     let data = temporary.path().join("data");
@@ -512,7 +517,7 @@ fn exercise_witnessed_workflow(migration: bool) -> TestResult {
         checkpoint: &checkpoint_path,
         endpoints: &endpoints,
     };
-    if !migration {
+    if !migration && !freshness_only {
     assert_existing_receipt_prevents_authorization(&workflow)?;
     assert_pending_approval_prevents_spawn(&workflow)?;
     let read_receipt = exercise_witnessed_read(&workflow)?;
@@ -529,8 +534,11 @@ fn exercise_witnessed_workflow(migration: bool) -> TestResult {
     assert_protected_value_not_persisted([&repository, &data, &state, &artifacts])?;
 
     }
-    exercise_witnessed_rollover(&workflow, &actors, [&endpoint_one, &endpoint_two], migration)?;
-
+    if freshness_only {
+        refuse_checkpoint_advanced_during_preparation(&workflow, &actors, [&endpoint_one, &endpoint_two], migration)?;
+    } else {
+        exercise_witnessed_rollover(&workflow, &actors, [&endpoint_one, &endpoint_two], migration)?;
+    }
     endpoint_one.finish()?;
     endpoint_two.finish()?;
     Ok(())

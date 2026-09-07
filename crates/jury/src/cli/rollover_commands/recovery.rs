@@ -176,7 +176,7 @@ pub(super) fn resume(
         registration_checkpoint,
     )?;
     if snapshot.is_none() {
-        let _source_lock = context.state.try_lock().map_err(|_| local_state_error())?;
+        let _source_lock = publication::lock_current_source(context, &source_bytes)?;
         completed::verify_catalog(&state, catalog)?;
         if !registration.verify_saved(&root)? || read_vault(&context.home)? != source_bytes {
             return Err(incomplete_rollover());

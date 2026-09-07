@@ -4,14 +4,7 @@ pub(super) fn publish(request: RolloverPublication<'_>) -> Result<(), CliError> 
     // Source authorization is complete. Lock source before destination and
     // retain both locks across remote registration and durable publication,
     // so ordinary mutations cannot change the adopted snapshot in that window.
-    let _source_lock = request
-        .context
-        .state
-        .try_lock()
-        .map_err(|_| local_state_error())?;
-    if read_vault(&request.context.home)? != request.source_bytes {
-        return Err(checkpoint_conflict());
-    }
+    let _source_lock = lock_current_source(request.context, request.source_bytes)?;
     let name = Path::new(
         request
             .arguments
@@ -140,6 +133,51 @@ pub(super) fn publish(request: RolloverPublication<'_>) -> Result<(), CliError> 
     }
     snapshot.finish(&root, &request)
 }
+
+// A source context is a preparation snapshot, not a freshness guarantee. Other
+// clones share this principal's checkpoint without sharing the source file.
+// Return the lock only after authenticating both under that same lock; callers
+// retain it through publication or completed-output cleanup.
+pub(super) fn lock_current_source<'a>(
+    context: &'a VaultPrincipalContext,
+    source_bytes: &[u8],
+) -> Result<LockedVaultState<'a>, CliError> {
+    let locked = context.state.try_lock().map_err(|_| local_state_error())?;
+    if read_vault(&context.home)? != source_bytes {
+        return Err(checkpoint_conflict());
+    }
+    let principal = context.identity.principal_id();
+    let audit = locked
+        .read(principal.as_bytes(), PrincipalStateFile::Audit)
+        .map_err(map_filesystem_error)?;
+    let checkpoint = locked
+        .read(principal.as_bytes(), PrincipalStateFile::Checkpoint)
+        .map_err(map_filesystem_error)?;
+    let receipts = locked
+        .read(principal.as_bytes(), PrincipalStateFile::Receipts)
+        .map_err(map_filesystem_error)?;
+    let verified = context
+        .local
+        .verify_files(Some(&audit), Some(&checkpoint), Some(&receipts))
+        .map_err(|_| local_state_error())?;
+    let candidate = CheckpointCandidate::from_validated(
+        &context.policy,
+        &context.vault.policy,
+        &context.vault.items,
+    )
+    .map_err(|_| invalid_vault())?;
+    if candidate
+        .relation_to(verified.checkpoint())
+        .map_err(|_| checkpoint_conflict())?
+        == CheckpointRelation::Divergent
+    {
+        return Err(checkpoint_conflict());
+    }
+    Ok(locked)
+}
+
+#[cfg(test)]
+mod tests;
 
 fn prepare_backup(request: &RolloverPublication<'_>) -> Result<PreparedPrivateFile, CliError> {
     let name = Path::new(
