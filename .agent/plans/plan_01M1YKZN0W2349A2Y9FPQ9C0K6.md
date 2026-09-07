@@ -7,8 +7,8 @@ J18 must refuse a source that became stale during preparation, preview valid his
 - [x] Research the four findings and protocol/catalog open questions against current code.
 - [x] Implement source publication freshness guard and regressions (focused authenticated-state tests pass; native pre-publication regression is running).
 - [x] Implement shared active registration-role selection and historical preview regression (four governed core tests pass; native preview regression is awaiting its final rerun).
-- [ ] Commit preparation error arbitration and regressions.
-- [ ] Commit reusable authenticated destination validation and regressions.
+- [x] Implement preparation error arbitration and regressions. Five CLI rollover tests pass, including actual signed witnessed preparation with a valid two-entry Recovery plan, specific label error and zero HTTP connections.
+- [x] Implement reusable authenticated destination validation and regressions. Nineteen core rollover tests pass; expanded historical-current-artifact/signature rejection passes separately.
 - [ ] Run required repository checks and full workspace tests; record actual results and finish J18 if acceptance is satisfied.
 
 ## Surprises & Discoveries
@@ -27,7 +27,7 @@ Return authenticated bootstrap state from existing validation instead of supplyi
 
 ## Outcomes & Retrospective
 
-First slice implements the common source guard. Authenticated-state tests pass for current/stale/divergent source, lock retention, audit tail and corrupted local files. The native race fixture initially used an invalid backup/output boundary; corrected fixture rerun is pending. Remaining slices and final verification are pending. Baseline is 373fef9 (exact HEAD captured by Jig). J18 remains in progress until the fixes and checks actually pass.
+First slice implements the common source guard. Authenticated-state tests pass for current/stale/divergent source, lock retention, audit tail and corrupted local files. The native race fixture initially used an invalid backup/output boundary; corrected fixture rerun is pending. Active-role selection, error arbitration and reusable destination validation are implemented. CLI regression fixture permissions were corrected to satisfy the real file reader. The native freshness fixture now uses the approval helper's reviewed ExampleRollover destination name. Final native reruns and full verification remain pending. Baseline is 373fef9 (exact HEAD captured by Jig). J18 remains in progress until the fixes and checks actually pass.
 
 ## Context and work
 

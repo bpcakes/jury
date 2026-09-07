@@ -151,14 +151,18 @@ impl<'a> RolloverAccess<'a> {
         })
     }
 
-    pub(super) fn finish(&mut self) -> Result<(), CliError> {
-        if let Some(error) = self.error.take() {
+    // Finalization arbitrates the two error layers. A recorded adapter failure
+    // explains the core's generic AccessFailed; unused requests only diagnose
+    // an incomplete access plan when the constructor otherwise succeeded.
+    pub(super) fn finish<T>(self, preparation: Result<T, CliError>) -> Result<T, CliError> {
+        if let Some(error) = self.error {
             return Err(error);
         }
+        let value = preparation?;
         if !self.entries.is_empty() {
             return Err(invalid_plan());
         }
-        Ok(())
+        Ok(value)
     }
 
     pub(super) fn preflight_requests(&self) -> Result<(), CliError> {
@@ -321,3 +325,6 @@ fn invalid_plan() -> CliError {
         "the source policy must permit whole-item Recovery; provide one descriptor/body authorization entry for each governed item without an explicitly selected direct slot, unique absent request/receipt paths, and bounded waits",
     )
 }
+
+#[cfg(test)]
+mod tests;

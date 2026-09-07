@@ -64,8 +64,7 @@ pub(super) fn prepare(
         )
     }
     .map_err(map_rollover_error);
-    provider.finish()?;
-    let mut draft = result?;
+    let mut draft = provider.finish(result)?;
     draft
         .renew_registration_challenges(&context.identity, timestamp_ms()?, 86_400_000)
         .map_err(map_rollover_error)?;
