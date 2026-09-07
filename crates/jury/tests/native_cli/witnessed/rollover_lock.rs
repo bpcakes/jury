@@ -86,7 +86,7 @@ fn refuse_checkpoint_advanced_during_preparation(
     let source = VaultFileV1::parse(&source_bytes)?;
     let plan = artifacts.join("ExampleAccess.json");
     let approvals = rollover_source_plan(&workflow, source.items[0].item_id, &plan)?;
-    let out = outputs.join("ExampleVault");
+    let out = outputs.join("ExampleRollover");
     let offline = outputs.join("ExampleOffline");
     fs::create_dir(&offline)?;
     fs::set_permissions(&offline, fs::Permissions::from_mode(0o700))?;
