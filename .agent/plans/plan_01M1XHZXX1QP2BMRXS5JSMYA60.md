@@ -21,8 +21,9 @@ An owner must be able to create a fresh vault from all current active source sta
 - [x] Implement current-suite rollover core, real Linux CLI dry-run/publication, explicit trust and backup, complete witnessed topology/anchor workflow, source-preservation and failure regressions.
 - [x] Specify a distinct suite, perform primary-source/provider/conformance work, and satisfy applicable J01A/J01B/J19 inputs before new cryptographic runtime code.
 - [x] Implement full distinct-suite migration across read/write, witnesses, transfer, identity compatibility and backups, with real end-to-end and negative tests.
-- [ ] Run required checks and up to three comprehensive review/fix rounds; address all actionable findings.
-- [ ] Close J18 only when both deliverables pass acceptance, flush tracker, commit the reviewed change, review that exact commit, and report remaining findings.
+- [x] Run required checks and all three requested precommit comprehensive review/fix rounds; address their actionable findings.
+- [x] Commit implementation and the mechanical follow-up, review each exact commit, and report remaining findings.
+- [ ] J18 acceptance and closure remain pending remediation of the four postcommit findings below.
 
 ## Surprises & Discoveries
 
@@ -44,6 +45,8 @@ Suite 2 candidate for evaluation is X-Wing/HKDF-SHA256 with HPKE AES-256-GCM (AE
 
 ## Outcomes & Retrospective
 
+
+Current outcome: the requested implementation/commit/review cycle is complete with findings, not J18 acceptance. Implementation commits are `b4ccbbd1432f965056c62a42b6a72466d477880b` and `0ea0db931f21dc0ec76fbf8f57cb2c0cf7b49819`. All required checks pass on that runtime snapshot; J18 remains open for the four postcommit findings recorded at the end. The observations below preserve the earlier development history.
 
 The readiness audit found J18 current in scope and dependency status but not fully executable as written. Both existing suite-1 input gates pass. The master plan and architecture now record the circular-bootstrap defect and require the frozen two-phase construction; its exact canonical projection and byte vectors pass `scripts/check-rollover-inputs`. No destination suite is accepted beyond suite 1.
 
@@ -201,3 +204,14 @@ Core owns validated source-to-destination plans and sealed result types; CLI own
 
 - Implementation committed as `b4ccbbd1432f965056c62a42b6a72466d477880b`; its exact-parent comprehensive review is running in an isolated clean worktree. The postcommit required check found two hard LOC-limit failures that the precommit command had not reported: identity.rs (979) and protocol vault_v1.rs tests (838). No limit or assertion was relaxed. Owned work check 32960 was cancelled with SIGINT and reached terminal exit130; its incomplete test phase is not passing full-suite evidence (64 CLI unit tests had passed before cancellation).
 - A mechanical follow-up moves witness-related identity implementation blocks and two artifact boundary tests to focused child modules. Exact moved-body comparison passes; identity.rs is now 785 lines and protocol test root 743. Full all-target clippy passes 30658, all 11 protocol tests pass 65730, and the complete suite2/conformance gate passes 96891 after adding the moved test file to its exact input inventory. Frozen vectors and algorithms were unchanged. The follow-up will be separately committed and reviewed; final required checks still remain open.
+
+- Final default work check 11273 passed on 0ea0db9. The first full workspace test run passed in receipt_01M1YJ254KD738X2XJJZ10FWB8 (1078.985 seconds), batch receipt_01M1YJ2AYZQBPH1QK544YRFW45; the verify profile run_01M1YJ2BTSTPGV1TYK73CAQN9T also passed, including its second full workspace test run (1069.2 seconds). Verify receipt: receipt_01M1YK32T35Q76YTK1SP4GNNR7. Work evidence and all six gates reported fresh/passed. The source remained unchanged throughout. Jig finished this requested execution/review cycle with outcome reviewed-with-findings and an explicit statement that J18 is not accepted or closed.
+- Exact b4ccbbd review completed with Claude and Codex and parent-verified clean/complete fingerprint `09b55dff477fbb500b11f2b6846bdf1dfa54d5acdb9b5455dbd9c05f76804410`. Claude evidence coverage was limited: 71/73 valid page receipts, missing page-0040 and page-0056 despite its broader reading claim. Codex coverage was static with bounded binding/encoder checks, not Rust/live-provider reruns. These are model reviews, not independent security review.
+- Exact 0ea0db9 follow-up review completed with Claude and Codex and parent-verified clean/complete fingerprint `b7c975dc8582551036b93ce5a23cbc848eb8998b45f937ede9ce7c369f3a6e7e`. Both confirmed faithful code/test extraction and found no introduced functional defect. Claude's hypothetical future unbound-file extraction requires a later deliberate rebind and identifies no current missing input; its pending-receipt observation is resolved by the final required run above. Temporary reviewer checkouts were removed after matching final captures.
+- Rejected main-review compatibility claim: the baseline TransferPublicCatalogV1::validate_entries already refused VaultPrincipal registration proofs, so the claimed previously accepted non-role catalog was unsupported. Registration capsule opens pass the literal 32-byte length; ItemCreate and ItemSlotsReplace are the only slot-bearing policy variants; active endpoint selection derives from current item slots. Identical primitive files are retained deterministic vectors checked by actual provider executions, not independent inputs or independent review.
+
+Remaining postcommit findings (not fixed in this review cycle):
+- High, Codex: crates/jury/src/cli/rollover_commands/publication.rs:7. Publication locks the source and compares its bytes but does not reauthenticate the latest shared principal checkpoint. Another clone can accept N+1 during preparation while the selected source remains N. Revalidate audit/checkpoint/receipts under the source lock before output creation or endpoint registration; add the pre-publication checkpoint-advance regression.
+- Medium, Codex: crates/jury/src/cli/rollover_commands/governed.rs:153. Preview checks retained bootstrap role proofs as if every principal were still active. A valid subsequent governed rollover can fail dry-run after role removal. Filter validation and the proof count through current active principals; add a CLI historical-role-removal regression.
+- Low, Claude and Codex: crates/jury/src/cli/rollover_commands/governed.rs:67. provider.finish() can replace an earlier ReviewLabelLifetime refusal with invalid-rollover-administrative-access when entries were not consumed. Preserve the preparation error while retaining specific provider failures; test the actual CLI diagnostic and zero requests.
+- Low, Claude: crates/jury-core/src/rollover/direct.rs:344. Historical destination verification validates the same full artifact again in verify_direct_destination and repeats bootstrap work. Reuse authenticated state and bootstrap results; the bounded performance cost is not benchmarked.
