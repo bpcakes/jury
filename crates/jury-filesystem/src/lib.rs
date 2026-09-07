@@ -9,6 +9,7 @@ mod identity_selection;
 mod local_state;
 mod lock;
 mod path_separation;
+mod platform;
 mod private_input;
 mod private_output;
 mod repository;

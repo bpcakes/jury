@@ -45,7 +45,7 @@ pub fn resolve_linux_state_root(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (jury_state_home, xdg_state_home, user_home);
-        return Err(StatePathError::Unsupported);
+        Err(StatePathError::Unsupported)
     }
     #[cfg(target_os = "linux")]
     {
@@ -69,6 +69,7 @@ pub fn resolve_state_root_from_environment() -> Result<PathBuf, StatePathError> 
     resolve_linux_state_root(jury.as_deref(), xdg.as_deref(), home.as_deref())
 }
 
+#[cfg(target_os = "linux")]
 fn validate_resolved_path(path: PathBuf) -> Result<PathBuf, StatePathError> {
     if !path.is_absolute() {
         return Err(StatePathError::NotAbsolute);

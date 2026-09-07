@@ -42,9 +42,17 @@ pub struct ExclusiveStateLock {
 
 impl ExclusiveStateLock {
     pub fn try_acquire(root: &HardenedStateRoot, public_name: &Path) -> Result<Self, LockError> {
+        Self::try_acquire_with_sync(root, public_name, crate::platform::sync_file)
+    }
+
+    fn try_acquire_with_sync(
+        root: &HardenedStateRoot,
+        public_name: &Path,
+        sync: impl FnOnce(&cap_std::fs::File) -> std::io::Result<()>,
+    ) -> Result<Self, LockError> {
         #[cfg(not(unix))]
         {
-            let _ = (root, public_name);
+            let _ = (root, public_name, sync);
             return Err(LockError::Unsupported);
         }
         #[cfg(unix)]
@@ -58,6 +66,8 @@ impl ExclusiveStateLock {
                         _ => LockError::Io,
                     }
                 })?;
+            crate::platform::validate_private_directory(&root.root.dir, FilesystemOperation::Lock)
+                .map_err(|_| LockError::Io)?;
             let parent = root.root.dir.try_clone().map_err(|_| LockError::Io)?;
             let mut options = OpenOptions::new();
             options
@@ -72,17 +82,21 @@ impl ExclusiveStateLock {
                     LockError::Io
                 }
             })?;
-            let metadata = file.metadata().map_err(|_| LockError::Io)?;
+            let lock = Self { parent, name, file };
+            let metadata = lock.file.metadata().map_err(|_| LockError::Io)?;
             if !metadata.is_file()
                 || metadata.nlink() != 1
                 || metadata.permissions().mode() & 0o077 != 0
                 || cap_std::fs::MetadataExt::uid(&metadata) != rustix::process::geteuid().as_raw()
             {
-                let _ = parent.remove_file(&name);
                 return Err(LockError::Io);
             }
-            file.sync_all().map_err(|_| LockError::Io)?;
-            Ok(Self { parent, name, file })
+            if crate::platform::validate_acl(&lock.file, FilesystemOperation::Lock).is_err()
+                || sync(&lock.file).is_err()
+            {
+                return Err(LockError::Io);
+            }
+            Ok(lock)
         }
     }
 }
@@ -112,5 +126,48 @@ impl Drop for ExclusiveStateLock {
         {
             let _ = self.parent.remove_file(&self.name);
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_acquisition_preserves_a_replacement_lock() -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+        let mut replacement = None;
+        let failed = ExclusiveStateLock::try_acquire_with_sync(&root, Path::new("lock"), |_| {
+            root.root.dir.rename("lock", &root.root.dir, "displaced")?;
+            replacement = Some(
+                ExclusiveStateLock::try_acquire(&root, Path::new("lock"))
+                    .map_err(std::io::Error::other)?,
+            );
+            Err(std::io::Error::other("injected sync failure"))
+        });
+        assert!(matches!(failed, Err(LockError::Io)));
+        assert!(root.private_child_exists(Path::new("lock"))?);
+        assert!(matches!(
+            ExclusiveStateLock::try_acquire(&root, Path::new("lock")),
+            Err(LockError::Busy)
+        ));
+        drop(replacement);
+        assert!(!root.private_child_exists(Path::new("lock"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_sync_removes_the_original_lock_and_allows_retry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+        let failed = ExclusiveStateLock::try_acquire_with_sync(&root, Path::new("lock"), |_| {
+            Err(std::io::Error::other("injected sync failure"))
+        });
+        assert!(matches!(failed, Err(LockError::Io)));
+        assert!(!root.private_child_exists(Path::new("lock"))?);
+        ExclusiveStateLock::try_acquire(&root, Path::new("lock"))?;
+        Ok(())
     }
 }

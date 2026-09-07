@@ -1,19 +1,21 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io::Write;
 use std::path::Path;
 
-use cap_fs_ext::{FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
-use cap_std::fs::{Dir, OpenOptions};
+use cap_fs_ext::MetadataExt;
+use cap_std::fs::Dir;
 #[cfg(unix)]
-use cap_std::fs::{OpenOptionsExt, PermissionsExt};
+use cap_std::fs::PermissionsExt;
 use jury_protected::ProtectedMemory;
 
 use crate::capability::{RegularFileSnapshot, single_component};
+
+mod prepare;
 use crate::{
     FilesystemError, FilesystemErrorKind, FilesystemOperation, HardenedStateRoot,
     RepositoryLocation,
 };
+use prepare::write_prepared;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PublicationPolicy {
@@ -86,6 +88,7 @@ pub struct PreparedPrivateFile {
     destination: OsString,
     temporary: OsString,
     temporary_identity: RegularFileSnapshot,
+    file: cap_std::fs::File,
     expected: DestinationState,
     replace: bool,
     byte_len: usize,
@@ -256,6 +259,8 @@ impl PreparedPrivateFile {
         mut self,
         parent_sync: impl FnOnce(&Dir) -> std::io::Result<()>,
     ) -> Result<PublicationOutcome, FilesystemError> {
+        crate::platform::validate_acl(&self.file, FilesystemOperation::Publish)?;
+        crate::platform::validate_acl(&self.parent, FilesystemOperation::Publish)?;
         validate_expected(&self.parent, &self.destination, self.expected)?;
         validate_temporary(&self.parent, &self.temporary, self.temporary_identity)?;
         if self.replace {
@@ -275,7 +280,7 @@ impl PreparedPrivateFile {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn rename_noreplace(
     parent: &Dir,
     source: &OsStr,
@@ -302,7 +307,7 @@ pub(crate) fn rename_noreplace(
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn rename_noreplace(
     _parent: &Dir,
     _source: &OsStr,
@@ -328,10 +333,8 @@ impl fmt::Debug for PreparedPrivateFile {
 
 impl Drop for PreparedPrivateFile {
     fn drop(&mut self) {
-        if !self.published
-            && validate_temporary(&self.parent, &self.temporary, self.temporary_identity).is_ok()
-        {
-            let _ = self.parent.remove_file(&self.temporary);
+        if !self.published {
+            remove_owned_temporary(&self.parent, &self.temporary, &self.file);
         }
     }
 }
@@ -495,97 +498,6 @@ fn validate_existing_visibility(
     }
 }
 
-fn write_prepared(
-    parent: Dir,
-    destination: OsString,
-    contents: PreparedContents<'_>,
-    expected: DestinationState,
-    replace: bool,
-    visibility: FileVisibility,
-) -> Result<PreparedPrivateFile, FilesystemError> {
-    #[cfg(not(unix))]
-    {
-        let _ = (parent, destination, contents, expected, replace, visibility);
-        return Err(FilesystemError::new(
-            FilesystemOperation::Prepare,
-            FilesystemErrorKind::Unsupported,
-        ));
-    }
-
-    #[cfg(unix)]
-    {
-        let temporary = temporary_name()?;
-        let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .mode(match visibility {
-                FileVisibility::OwnerOnly => 0o600,
-                FileVisibility::PublicEncryptedArtifact => 0o644,
-            })
-            .follow(FollowSymlinks::No);
-        let mut file = parent.open_with(&temporary, &options).map_err(|_| {
-            FilesystemError::new(FilesystemOperation::Prepare, FilesystemErrorKind::Io)
-        })?;
-        let wrote_all = match contents {
-            PreparedContents::Protected(contents) => {
-                matches!(contents.expose(|bytes| file.write_all(bytes)), Ok(Ok(())))
-            }
-            PreparedContents::Public(contents) => file.write_all(contents).is_ok(),
-        };
-        if !wrote_all {
-            let _ = parent.remove_file(&temporary);
-            return Err(FilesystemError::new(
-                FilesystemOperation::Prepare,
-                FilesystemErrorKind::Io,
-            ));
-        }
-        let metadata = match file.metadata() {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                let _ = parent.remove_file(&temporary);
-                return Err(FilesystemError::new(
-                    FilesystemOperation::Prepare,
-                    FilesystemErrorKind::Io,
-                ));
-            }
-        };
-        let mode = metadata.permissions().mode();
-        let permissions_invalid = match visibility {
-            FileVisibility::OwnerOnly => mode & 0o077 != 0,
-            FileVisibility::PublicEncryptedArtifact => mode & 0o022 != 0,
-        };
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || permissions_invalid
-            || cap_std::fs::MetadataExt::uid(&metadata) != rustix::process::geteuid().as_raw()
-        {
-            let _ = parent.remove_file(&temporary);
-            return Err(FilesystemError::new(
-                FilesystemOperation::Prepare,
-                FilesystemErrorKind::Permission,
-            ));
-        }
-        if file.sync_all().is_err() {
-            let _ = parent.remove_file(&temporary);
-            return Err(FilesystemError::new(
-                FilesystemOperation::Prepare,
-                FilesystemErrorKind::Io,
-            ));
-        }
-        Ok(PreparedPrivateFile {
-            parent,
-            destination,
-            temporary,
-            temporary_identity: RegularFileSnapshot::from_metadata(&metadata),
-            expected,
-            replace,
-            byte_len: contents.len(),
-            published: false,
-        })
-    }
-}
-
 fn destination_state(
     parent: &Dir,
     name: &OsStr,
@@ -595,9 +507,9 @@ fn destination_state(
         Ok(metadata) if metadata.is_file() && metadata.nlink() == 1 => {
             #[cfg(unix)]
             {
-                Ok(DestinationState::Existing(
-                    RegularFileSnapshot::from_metadata(&metadata),
-                ))
+                let snapshot = RegularFileSnapshot::from_metadata(&metadata);
+                validate_destination_acl(parent, name, snapshot, operation)?;
+                Ok(DestinationState::Existing(snapshot))
             }
             #[cfg(not(unix))]
             {
@@ -671,8 +583,76 @@ fn temporary_name() -> Result<OsString, FilesystemError> {
 }
 
 fn sync_parent(parent: &Dir) -> std::io::Result<()> {
-    parent.open(".")?.sync_all()
+    crate::platform::sync_parent(parent)
 }
 
 #[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests;
+
+fn validate_destination_acl(
+    parent: &Dir,
+    name: &OsStr,
+    expected: RegularFileSnapshot,
+    operation: FilesystemOperation,
+) -> Result<(), FilesystemError> {
+    #[cfg(target_os = "macos")]
+    {
+        use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+        let mut options = cap_std::fs::OpenOptions::new();
+        use cap_std::fs::OpenOptionsExt;
+        options
+            .read(true)
+            .follow(FollowSymlinks::No)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed());
+        let file = parent
+            .open_with(name, &options)
+            .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+        let observed = file
+            .metadata()
+            .map_err(|_| FilesystemError::new(operation, FilesystemErrorKind::Io))?;
+        if !observed.is_file()
+            || observed.nlink() != 1
+            || RegularFileSnapshot::from_metadata(&observed) != expected
+        {
+            return Err(FilesystemError::new(
+                operation,
+                FilesystemErrorKind::IdentityChanged,
+            ));
+        }
+        crate::platform::validate_acl(&file, operation)?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (parent, name, expected, operation);
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_prepared(
+    _parent: Dir,
+    _destination: OsString,
+    _contents: PreparedContents<'_>,
+    _expected: DestinationState,
+    _replace: bool,
+    _visibility: FileVisibility,
+) -> Result<PreparedPrivateFile, FilesystemError> {
+    Err(FilesystemError::new(
+        FilesystemOperation::Prepare,
+        FilesystemErrorKind::Unsupported,
+    ))
+}
+
+fn remove_owned_temporary(parent: &Dir, name: &OsStr, file: &cap_std::fs::File) {
+    use crate::capability::FileIdentity;
+    // Cleanup asks whether we still own this inode, not whether its contents
+    // or ACL stayed unchanged. Keep the descriptor alive to prevent inode reuse.
+    let (Ok(held), Ok(named)) = (file.metadata(), parent.symlink_metadata(name)) else {
+        return;
+    };
+    if named.is_file() && FileIdentity::from_metadata(&held) == FileIdentity::from_metadata(&named)
+    {
+        let _ = parent.remove_file(name);
+    }
+}

@@ -16,6 +16,7 @@ pub(crate) fn read(
     name: &Path,
     maximum_bytes: usize,
 ) -> Result<Vec<u8>, FilesystemError> {
+    crate::platform::validate_private_directory(&root.root.dir, FilesystemOperation::Read)?;
     read_from_dir(&root.root.dir, name, maximum_bytes)
 }
 
@@ -124,6 +125,7 @@ fn read_with_permissions(
                 FilesystemErrorKind::Capacity,
             ));
         }
+        crate::platform::validate_acl(directory, FilesystemOperation::Read)?;
         let name = single_component(name, FilesystemOperation::Read)?;
         let before = directory.symlink_metadata(&name).map_err(|error| {
             let kind = if error.kind() == std::io::ErrorKind::NotFound {
@@ -145,6 +147,7 @@ fn read_with_permissions(
             FilesystemError::new(FilesystemOperation::Read, FilesystemErrorKind::Io)
         })?;
         validate_metadata(&opened, maximum_bytes, permissions)?;
+        crate::platform::validate_acl(&file, FilesystemOperation::Read)?;
         if RegularFileSnapshot::from_metadata(&opened) != expected {
             return Err(FilesystemError::new(
                 FilesystemOperation::Read,

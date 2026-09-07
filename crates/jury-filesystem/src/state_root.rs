@@ -191,13 +191,9 @@ impl HardenedStateRoot {
                     };
                     FilesystemError::new(FilesystemOperation::OpenStateRoot, kind)
                 })?;
-            self.root
-                .dir
-                .open(".")
-                .and_then(|dir| dir.sync_all())
-                .map_err(|_| {
-                    FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
-                })?;
+            crate::platform::sync_parent(&self.root.dir).map_err(|_| {
+                FilesystemError::new(FilesystemOperation::SyncParent, FilesystemErrorKind::Io)
+            })?;
             self.open_private_child(Path::new(&name))
         }
     }
@@ -282,7 +278,7 @@ impl HardenedStateRoot {
             name,
             quarantine_name,
             expected,
-            &mut |directory| directory.open(".").and_then(|parent| parent.sync_all()),
+            &mut crate::platform::sync_parent,
         )
     }
 
@@ -372,6 +368,7 @@ fn validate_root(
     repositories: &[&RepositoryLocation],
     excluded_paths: &[&Path],
 ) -> Result<(), FilesystemError> {
+    crate::platform::validate_private_directory(&root.dir, FilesystemOperation::OpenStateRoot)?;
     let metadata = root.dir.dir_metadata().map_err(|_| {
         FilesystemError::new(FilesystemOperation::OpenStateRoot, FilesystemErrorKind::Io)
     })?;

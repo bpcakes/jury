@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Run M02 against owned native images, including a refused non-APFS volume."""
+
+import os
+from pathlib import Path
+import platform
+import subprocess
+import tempfile
+
+
+def main():
+    if platform.system() != "Darwin":
+        raise SystemExit("M02 image acceptance requires native macOS")
+    repository = Path(__file__).resolve().parent.parent
+    with tempfile.TemporaryDirectory(prefix="jury-m02-volumes-") as scratch:
+        root = Path(scratch)
+        for mode, filesystem in [
+            ("sensitive", "Case-sensitive APFS"),
+            ("insensitive", "APFS"),
+            ("unsupported", "HFS+"),
+        ]:
+            image = root / f"{mode}.dmg"
+            mount = root / mode
+            mount.mkdir()
+            subprocess.run([
+                "hdiutil", "create", "-size", "128m", "-fs", filesystem,
+                "-volname", "ExampleVault", "-ov", str(image),
+            ], check=True)
+            subprocess.run([
+                "hdiutil", "attach", "-nobrowse", "-owners", "on",
+                "-mountpoint", str(mount), str(image),
+            ], check=True)
+            try:
+                fixtures = mount / "fixtures"
+                fixtures.mkdir(mode=0o700)
+                environment = os.environ.copy()
+                command = ["cargo", "test", "--locked", "-p", "jury-filesystem"]
+                if mode == "unsupported":
+                    environment["JURY_M02_UNSUPPORTED_ROOT"] = str(fixtures)
+                    command += ["--test", "macos_boundaries", "--", "--ignored", "--exact",
+                                "unsupported_volume_refuses_private_root_and_publication"]
+                else:
+                    environment.update(TMPDIR=str(fixtures), JURY_M02_CASE_MODE=mode)
+                    command += ["--all-targets", "--", "--test-threads=1"]
+                subprocess.run(command, cwd=repository, env=environment, check=True)
+            finally:
+                # Only detach this invocation's mount; never force-unmount a device.
+                subprocess.run(["hdiutil", "detach", str(mount)], check=True)
+
+
+if __name__ == "__main__":
+    main()

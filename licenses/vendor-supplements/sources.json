@@ -134,5 +134,13 @@
     "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111",
     "url": "https://raw.githubusercontent.com/r-efi/r-efi/7e1b0322d31d625f81a5656096330934f9cd835d/AUTHORS",
     "version": "6.0.0"
+  },
+  {
+    "file": "calcifer-macos-acl-0.1.0/LICENSE",
+    "package": "calcifer-macos-acl",
+    "revision_source": "crate-vcs-info",
+    "sha256": "b8c7478dfcdcae0ca7cc5b4c1d0232e7ef0deca0ddc0a199cbdc2889bfa2cd37",
+    "url": "https://raw.githubusercontent.com/kazu-42/calcifer/24a15cc4f7c46802d93d2f9cc93e45e1d5a5313e/LICENSE",
+    "version": "0.1.0"
   }
 ]

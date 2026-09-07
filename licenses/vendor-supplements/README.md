@@ -13,3 +13,6 @@ that revision produced the Android archive. `r-efi` carries its MIT terms and
 attributions in `AUTHORS`, so that file is retained intact. These supplemental
 files can be removed when the corresponding locked packages carry complete
 license material themselves or leave the distribution.
+
+The `calcifer-macos-acl` 0.1.0 supplement retains the exact crate revision's
+workspace MIT license, omitted from the packaged member crate.

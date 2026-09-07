@@ -30,6 +30,7 @@ fn protected(bytes: &[u8]) -> Result<ProtectedMemory, Box<dyn Error>> {
     )?)
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn linux_state_root_precedence_is_exact_and_absolute() -> Result<(), Box<dyn Error>> {
     assert_eq!(
@@ -223,4 +224,13 @@ fn containment_and_tuple_link_attacks_fail_closed() -> Result<(), Box<dyn Error>
     .ok_or("tuple symlink was accepted")?;
     assert_eq!(error.kind(), FilesystemErrorKind::LinkOrWrongType);
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn linux_resolver_refuses_other_platforms_even_with_an_override() {
+    assert_eq!(
+        resolve_linux_state_root(Some(OsStr::new("/ExampleOverride")), None, None),
+        Err(StatePathError::Unsupported)
+    );
 }

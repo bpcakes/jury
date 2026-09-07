@@ -1,7 +1,7 @@
 use super::*;
 use jury_protected::ProtectionPolicy;
 use std::os::unix::fs::PermissionsExt as _;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
     os::unix::process::ExitStatusExt as _,
     path::PathBuf,
@@ -10,21 +10,21 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const J25_CRASH_ROOT: &str = "JURY_J25_CRASH_ROOT";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const J25_CRASH_MARKER: &str = "JURY_J25_CRASH_MARKER";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const J25_CRASH_STAGE: &str = "JURY_J25_CRASH_STAGE";
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn hold_for_sigkill() -> ! {
     loop {
         thread::park();
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 #[ignore = "subprocess fixture for abrupt_publication_is_always_complete_and_retryable"]
 fn j25_sigkill_publication_probe() -> Result<(), Box<dyn std::error::Error>> {
@@ -64,7 +64,7 @@ fn j25_sigkill_publication_probe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_crash_marker(
     child: &mut Child,
     marker: &Path,
@@ -82,7 +82,7 @@ fn wait_for_crash_marker(
     Err("publication crash probe did not reach its selected boundary".into())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn abrupt_publication_is_always_complete_and_retryable() -> Result<(), Box<dyn std::error::Error>> {
     const PROBE_TEST: &str = "private_output::tests::j25_sigkill_publication_probe";
@@ -271,5 +271,110 @@ fn visibility_validation_uses_the_retained_destination_snapshot()
         validate_expected(&state.root.dir, &name, snapshot),
         Err(error) if error.kind() == FilesystemErrorKind::IdentityChanged
     ));
+    Ok(())
+}
+
+#[test]
+fn competing_publishers_have_exactly_one_complete_winner() -> Result<(), Box<dyn std::error::Error>>
+{
+    use std::sync::Barrier;
+    let temporary = tempfile::tempdir()?;
+    let state = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+    let barrier = Barrier::new(2);
+    let mut prepared = Vec::new();
+    for bytes in [b"ExampleFirst".as_slice(), b"ExampleSecond".as_slice()] {
+        prepared.push((
+            PreparedPrivateFile::prepare_bounded_private_bytes_if_unchanged(
+                state.preview_private_file(Path::new("value.bin"))?,
+                bytes,
+                128,
+                false,
+            )?,
+            bytes,
+        ));
+    }
+    let results = std::thread::scope(|scope| {
+        let publishers: Vec<_> = prepared
+            .into_iter()
+            .map(|(prepared, bytes)| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    prepared.publish().map(|outcome| (outcome, bytes))
+                })
+            })
+            .collect();
+        publishers
+            .into_iter()
+            .map(|thread| thread.join().map_err(|_| "publisher panicked"))
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    let (outcome, bytes) = results
+        .iter()
+        .find_map(|result| result.as_ref().ok())
+        .ok_or("no winner")?;
+    assert_eq!(*outcome, PublicationOutcome::PublishedAndSynced);
+    let loser = results
+        .iter()
+        .find_map(|result| result.as_ref().err())
+        .ok_or("no loser")?;
+    assert!(matches!(
+        loser.kind(),
+        FilesystemErrorKind::AlreadyExists | FilesystemErrorKind::IdentityChanged
+    ));
+    assert_eq!(
+        state.read_private_file(Path::new("value.bin"), 128)?,
+        *bytes
+    );
+    assert_eq!(state.root.dir.entries()?.count(), 1);
+    Ok(())
+}
+
+#[test]
+fn temporary_substitution_is_refused_and_drop_preserves_the_substitute()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let state = HardenedStateRoot::open_or_create(&temporary.path().join("state"), &[])?;
+    let prepared = PreparedPrivateFile::prepare_bounded_private_bytes_if_unchanged(
+        state.preview_private_file(Path::new("value.bin"))?,
+        b"ExampleSecret",
+        128,
+        false,
+    )?;
+    let name = prepared.temporary.clone();
+    state.root.dir.rename(&name, &state.root.dir, "original")?;
+    state.root.dir.write(&name, b"ExampleSubstitute")?;
+    assert_eq!(
+        prepared.publish().err().ok_or("expected refusal")?.kind(),
+        FilesystemErrorKind::IdentityChanged
+    );
+    assert_eq!(state.root.dir.read(&name)?, b"ExampleSubstitute");
+    assert!(!state.private_child_exists(Path::new("value.bin"))?);
+    Ok(())
+}
+
+#[test]
+fn retained_parent_rename_does_not_redirect_publication() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temporary = tempfile::tempdir()?;
+    let original = temporary.path().join("state");
+    let renamed = temporary.path().join("renamed");
+    let state = HardenedStateRoot::open_or_create(&original, &[])?;
+    let prepared = PreparedPrivateFile::prepare_bounded_private_bytes_if_unchanged(
+        state.preview_private_file(Path::new("value.bin"))?,
+        b"ExampleSecret",
+        128,
+        false,
+    )?;
+    std::fs::rename(&original, &renamed)?;
+    std::fs::create_dir(&original)?;
+    assert_eq!(prepared.publish()?, PublicationOutcome::PublishedAndSynced);
+    assert_eq!(
+        state.read_private_file(Path::new("value.bin"), 128)?,
+        b"ExampleSecret"
+    );
+    assert_eq!(std::fs::read(renamed.join("value.bin"))?, b"ExampleSecret");
+    assert!(!original.join("value.bin").exists());
     Ok(())
 }
