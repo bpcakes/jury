@@ -31,6 +31,8 @@ api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --al
 api_fmt_command = '''if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\n' 'No Cargo.toml found; skipping cargo fmt.'; fi'''
 api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
 api_test_locked_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi'''
+api_test_cli_locked_command = 'cargo test --locked -p jury'
+api_test_libraries_locked_command = 'cargo test --locked --workspace --exclude jury'
 repo_bootstrap_command = '''if [ -f Cargo.toml ]; then cargo fetch; else printf '%s\n' 'No Cargo.toml found; skipping cargo bootstrap.'; fi; if [ -f web/package.json ]; then (cd web && bun install); fi'''
 
 [dev]
@@ -260,6 +262,82 @@ kind = "command"
 
 [repository.actions.target]
 action = "test-locked"
+component = "api"
+
+[[repository.actions]]
+description = "Run all Jury CLI crate tests using the locked dependency graph."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = []
+
+[repository.actions.runner]
+command = "api_test_cli_locked_command"
+kind = "command"
+
+[repository.actions.target]
+action = "test-cli-locked"
+component = "api"
+
+[[repository.actions]]
+description = "Run every workspace crate except the Jury CLI using the locked dependency graph."
+effects = [
+    "read_only",
+    "process",
+]
+inputs = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "**/Cargo.toml",
+    "**/Cargo.lock",
+    "**/*.rs",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "**/rust-toolchain",
+    "**/rust-toolchain.toml",
+    ".cargo/**",
+    "**/.cargo/**",
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+]
+intent = "check"
+legacy_aliases = []
+
+[repository.actions.runner]
+command = "api_test_libraries_locked_command"
+kind = "command"
+
+[repository.actions.target]
+action = "test-libraries-locked"
 component = "api"
 
 [[repository.actions]]

@@ -153,8 +153,10 @@ jobs:
       - name: Run clippy
         run: scripts/jig check api:clippy
 
-  test:
-    name: scripts/jig check api:test-locked
+  # Complementary package selections preserve the complete workspace suite.
+  # Separate runners keep each command within the existing 30-minute bound.
+  test-libraries:
+    name: scripts/jig check api:test-libraries-locked
     runs-on: "ubuntu-latest"
     defaults:
       run:
@@ -170,8 +172,28 @@ jobs:
           rustflags: ""
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Run locked Rust tests
-        run: scripts/jig check api:test-locked
+      - name: Run locked library tests
+        run: scripts/jig check api:test-libraries-locked
+
+  test:
+    name: scripts/jig check api:test-cli-locked
+    runs-on: "ubuntu-latest"
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Run locked CLI crate tests
+        run: scripts/jig check api:test-cli-locked
       - name: Build the native CLI and witness daemon
         run: cargo build --locked --release -p jury -p jury-witness
       - name: Exercise exact field references and hidden terminal input

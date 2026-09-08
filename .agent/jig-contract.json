@@ -7,6 +7,8 @@
   "api_fmt_command",
   "api_test_command",
   "api_test_locked_command",
+  "api_test_cli_locked_command",
+  "api_test_libraries_locked_command",
   "repo_bootstrap_command"
 ],
   "tools": [
@@ -297,6 +299,82 @@
     },
     "target": {
       "action": "test-locked",
+      "component": "api"
+    }
+  },
+  {
+    "description": "Run all Jury CLI crate tests using the locked dependency graph.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [],
+    "runner": {
+      "command": "api_test_cli_locked_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "test-cli-locked",
+      "component": "api"
+    }
+  },
+  {
+    "description": "Run every workspace crate except the Jury CLI using the locked dependency graph.",
+    "effects": [
+      "read_only",
+      "process"
+    ],
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "**/Cargo.toml",
+      "**/Cargo.lock",
+      "**/*.rs",
+      "rust-toolchain",
+      "rust-toolchain.toml",
+      "**/rust-toolchain",
+      "**/rust-toolchain.toml",
+      ".cargo/**",
+      "**/.cargo/**",
+      "rustfmt.toml",
+      ".rustfmt.toml",
+      "**/rustfmt.toml",
+      "**/.rustfmt.toml",
+      "clippy.toml",
+      ".clippy.toml",
+      "**/clippy.toml",
+      "**/.clippy.toml"
+    ],
+    "intent": "check",
+    "legacy_aliases": [],
+    "runner": {
+      "command": "api_test_libraries_locked_command",
+      "kind": "command"
+    },
+    "target": {
+      "action": "test-libraries-locked",
       "component": "api"
     }
   },
