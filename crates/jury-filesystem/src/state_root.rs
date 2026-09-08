@@ -290,9 +290,11 @@ impl HardenedStateRoot {
         name: &Path,
         quarantine_name: &Path,
     ) -> Result<PrivateFileCleanupOutcome, FilesystemError> {
-        self.confirm_private_cleanup_absent_with_sync(name, quarantine_name, &mut |directory| {
-            directory.open(".").and_then(|parent| parent.sync_all())
-        })
+        self.confirm_private_cleanup_absent_with_sync(
+            name,
+            quarantine_name,
+            &mut crate::platform::sync_parent,
+        )
     }
 
     fn confirm_private_cleanup_absent_with_sync(
@@ -549,6 +551,32 @@ mod tests {
             root.confirm_private_cleanup_absent(Path::new("../ExampleMarker"), quarantine)
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_cleanup_absence_uses_retained_parent_after_rename()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let original = temporary.path().join("private");
+        let retained = temporary.path().join("retained");
+        let root = HardenedStateRoot::open_or_create(&original, &[])?;
+        std::fs::rename(&original, &retained)?;
+        let replacement = HardenedStateRoot::open_or_create(&original, &[])?;
+        let name = Path::new("ExampleMarker");
+        let quarantine = Path::new("ExampleQuarantine");
+        replacement.root.dir.write(name, b"ExampleReplacement")?;
+
+        assert_eq!(
+            root.confirm_private_cleanup_absent(name, quarantine)?,
+            PrivateFileCleanupOutcome::RemovedAndSynced
+        );
+        assert_eq!(
+            replacement.confirm_private_cleanup_absent(name, quarantine)?,
+            PrivateFileCleanupOutcome::Retained
+        );
+        assert_eq!(replacement.root.dir.read(name)?, b"ExampleReplacement");
+        assert!(!retained.join(name).exists());
         Ok(())
     }
 
