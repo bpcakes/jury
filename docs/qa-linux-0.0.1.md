@@ -1,5 +1,283 @@
 # Linux 0.0.1 QA and UX audit
 
+## QA-20–QA-23 repairs, 2026-09-08
+
+Pulled `origin/main` with a fast-forward to
+`635f0785ee3cc54febc6ad2ebf4bb1bc68babb0a`, preserving the local audit. Fresh
+binaries from that exact commit reproduced all four findings before repair.
+
+- **QA-20:** the maintainer explicitly included rollover and suite migration in
+  Linux 0.0.1. README, master plan, downstream scope notes and the release tracker
+  now agree. Completed J18 belongs to the release epic and blocks J26; its full
+  direct/governed rollover and migration acceptance criteria apply to the final
+  candidate. No cryptographic gate or implementation was changed for this decision.
+- **QA-21:** updated only the missing dependency graph in `fuzz/Cargo.lock`:
+  AES-GCM 0.11.0, GHASH 0.6.0, their existing workspace/HPKE edges and zeroization
+  features. The unchanged `scripts/check-j25-fuzz-smoke` passes its five seed tests
+  and all four targets (protocol, witness, core artifacts and input boundaries),
+  with AddressSanitizer and the existing 10-second/2048-MiB bounds. Before repair
+  it exited 101 under `--locked` without running a target. This is bounded smoke
+  coverage, not exhaustive fuzzing.
+- **QA-22:** `backup drill` now diagnoses `invalid-drill-state-parent` before
+  unlocking when the state parent overlaps the source. Help and recovery examples
+  explain the separate existing `0700` parent. The permanent real-process
+  `scripts/check-linux-diagnostics` regression verifies refusal without outputs
+  or source-vault changes, then changes only the state path and verifies restored
+  audit and exact field bytes. The complete diagnostics suite passes.
+- **QA-23:** unsafe/unreadable TLS certificates have their own diagnostic,
+  including `0644`/`0600` and no group/world write permission. The self-hosted
+  regression runs both actual service commands with a `0664` certificate, checks
+  refusal without exposing its path, then changes only its mode to `0644` and
+  completes the live HTTPS lifecycle. Self-hosting documentation includes these
+  requirements; private-key and certificate validation remain enforced.
+
+Verification used newly built `target/release/jury` and `target/release/juryd`.
+The existing 56-command exploratory journey also passed, including direct
+rollover, suite migration, backup recovery and restored field reads. One new
+Python regression initially assumed an optional environment key existed; that
+fixture error was corrected without changing its assertions. The offline Cargo
+metadata command resolved the lockfile but could not fetch an uncached macOS-only
+dependency; the subsequent unchanged Linux fuzz gate completed successfully.
+
+These changes resolve the four findings below. They do not publish 0.0.1 or
+replace final J26 candidate verification: the private reporting contact, signing
+identity, fresh package and exact source/build binding remain release work. The
+older package hashes and failed audit receipts below remain historical evidence,
+not evidence for the repaired artifact. Jury remains externally unreviewed
+pre-alpha software and must not be used with real secrets.
+
+## Historical candidate audit, 2026-09-08 (superseded by repairs)
+
+**Release recommendation: hold 0.0.1.** The exercised Linux functionality
+passed, but the new candidate ships two capabilities explicitly deferred from
+0.0.1, and the required bounded fuzz check cannot start with its checked-in
+lockfile. QA-20 and QA-21 block J26. QA-22 and QA-23 are smaller recovery-path
+and TLS-diagnostic UX issues.
+A private security-reporting contact and release-signing identity also remain
+unconfigured. Jury remains externally unreviewed pre-alpha software and must
+not be used with real secrets.
+
+This audit serves the release maintainer deciding J26 readiness. It addresses
+observed release-scope drift, stale verification dependencies, and misleading
+recovery-path diagnostics. Supersede this section after those findings are
+resolved and the replacement candidate is tested. No application code,
+repository test assertions, lockfiles, cryptographic inputs, or release scope were changed by
+this audit. No release was signed or published.
+
+### QA-20 — P2: the 0.0.1 package ships deferred lineage operations
+
+Tracked as `jury-qv4.6.4`, blocking J26.
+
+The extracted package reports `jury 0.0.1`, and `jury vault --help` advertises
+both `rollover` and `migrate-suite`. With a freshly initialized synthetic direct
+vault, an authenticated owner, a separate backup passphrase, and existing
+private output parents, these commands actually succeed:
+
+```sh
+jury vault rollover --out "$EXAMPLE_ROOT/destinations/ExampleRollover" \
+  --backup-out "$EXAMPLE_ROOT/backups/ExampleRollover.backup" \
+  --transfer-out "$EXAMPLE_ROOT/transfers/ExampleRollover.transfer" \
+  --adopt-new-lineage
+jury vault migrate-suite --to 2 \
+  --out "$EXAMPLE_ROOT/destinations/ExampleMigration" \
+  --backup-out "$EXAMPLE_ROOT/backups/ExampleMigration.backup" \
+  --transfer-out "$EXAMPLE_ROOT/transfers/ExampleMigration.transfer" \
+  --adopt-new-lineage
+```
+
+Both exit 0 and report `published: true`, with destination suites 1 and 2.
+This was reproduced with host and packaged binaries, including Debian 12.
+[README Workspace](../README.md#workspace) says both are deferred until after
+0.0.1, and J26 requires deferred executable surfaces to be absent. The normal
+release build includes both variants from
+`crates/jury/src/cli.rs`; they are executable capabilities, not merely stale
+help text.
+
+Before release, either omit these executable surfaces from the 0.0.1 artifact,
+or explicitly revise release scope and apply the full acceptance criteria to
+the newly included paths. Hiding help alone would not reconcile the scope.
+This finding establishes a release-contract mismatch, not a cryptographic
+exploit or a failure of the two direct operations exercised here.
+
+### QA-21 — P2: the required fuzz suite cannot execute
+
+Tracked as `jury-qv4.6.5`, blocking J26.
+
+```sh
+scripts/check-j25-fuzz-smoke
+```
+
+The command exits **101** at its first step:
+
+```text
+error: cannot update the lock file .../fuzz/Cargo.lock because --locked was passed to prevent this
+```
+
+No seed generation or fuzz target runs. Offline Cargo resolution in a disposable
+copy identifies missing `aes-gcm 0.11.0` and `ghash 0.6.0`, new `jury-core` and
+`hpke` dependency edges, and associated `zeroize` features. The repository's
+actual lockfile was left unchanged. Update and review the fuzz lockfile against
+the intended release graph, then rerun the unchanged locked checks and all four
+bounded targets. Do not drop `--locked` or reuse the historical fuzz pass as
+current evidence. The package build succeeding does not satisfy this separate
+release gate.
+
+### QA-22 — P3: backup drill does not explain its state-parent constraint
+
+Tracked as `jury-qv4.3.16`.
+
+With source repository `$EXAMPLE_ROOT/repository`, backup input below
+`$EXAMPLE_ROOT/backups`, and separate private identity/vault output parents,
+this layout uses disjoint absent targets:
+
+```sh
+jury backup drill --in "$EXAMPLE_ROOT/backups/ExampleVault.backup" \
+  --vault-out "$EXAMPLE_ROOT/destinations/ExampleDrill" \
+  --identity-out "$EXAMPLE_ROOT/restored-identities/ExampleOwner.identity" \
+  --state-out "$EXAMPLE_ROOT/ExampleAbsentState"
+```
+
+It exits **2**, `private-state-overlap`, saying that private identity or local
+state overlaps the selected vault home. Neither output is published. Changing
+only `--state-out` to
+`$EXAMPLE_ROOT/restored-state-parent/ExampleState`, with that separate parent
+already mode 0700, succeeds. The packaged CLI reproduced both outcomes.
+
+`backup_commands/restore/targets.rs` opens the state **parent** with source-vault
+exclusions. The recovery guide emphasizes identity-parent separation but does
+not explain this state-parent requirement. Explain the constraint in help and
+the guide and give an actionable diagnostic, while retaining source exclusion
+and refusal-before-publication behavior. Recovery itself works with the
+separate-parent layout; the exploratory pass also verified the recovered field's
+exact bytes and its authenticated audit.
+
+### Exercised behavior and evidence
+
+Source baseline: `cd8eeac24a27ec9f7e983c4f63ce49edd7f9f61c`, clean before this
+audit's documentation and tracker updates. Host: unprivileged Linux x86_64,
+Pop!_OS 24.04, glibc 2.39, Rust 1.97.1. Package: two offline pinned Rust 1.97.0
+builds with matching binaries, tested as an unprivileged user on Debian 12,
+glibc 2.36, with external networking disabled. Only synthetic data was used.
+
+- All **ten distinct existing CLI/PTY journeys** passed on host release binaries
+  and again on the extracted package in Debian 12: witness lifecycle, approval
+  review, descriptor access, role onboarding/recovery, shared and disjoint
+  policies, diagnostics, owner changes, input surfaces, and public labels.
+  These are repeated runs of the same journeys, not independent reviews.
+- The exploratory driver completed **55 command invocations**, including
+  positive and negative controls: setup, listing, binary field input and exact
+  mode-0600 reads, overwrite/symlink refusal, explicit reveal and JSON refusal,
+  wrong authentication, dry-run immutability, concealed-value redaction, child
+  exit 7 propagation, NUL environment refusal before child startup, timeout,
+  privacy cover, history/audit, backup creation/verification/drill, exact
+  recovered bytes, absent-target enforcement, offline transfer inspection,
+  import preview/idempotency/strict advance/rollback refusal, both lineage
+  operations, and field removal. It passed against host and packaged binaries.
+- Every one of the **81 reachable jury help surfaces** returned successfully;
+  malformed commands/options returned exit 2 and JSON parse errors when requested.
+  Packaged install, PATH lookup from `/` without Jig, both 0.0.1 versions,
+  help, and removal passed.
+- A real HTTPS lifecycle used a synthetic CA and separately signed server
+  certificate on both CLI-to-witness and witness-to-anchor links. It verified
+  exact reads, receipts, persistent replay after restart, cancellation, and
+  actual CLI rejection of an untrusted CA without plaintext or a success receipt.
+- The nine release-helper tests, four witness-gate verifier tests, unchanged
+  direct/witness input gates, alternate-provider conformance (27 positive and
+  87 negative BoringSSL cases, two Argon2 cases), and all 46 J25 measurement
+  cases passed. Measurements are single-host samples, not latency guarantees.
+- The scoped exact-needle leak check detected its seeded control and found
+  zero actual hits within its declared surfaces. It does not prove universal
+  secret absence. Current dependency auditing examined 350 dependencies and
+  reported zero vulnerabilities and zero warnings.
+
+### QA-23 — P3: unsafe certificate permissions get a misleading TLS error
+
+Tracked as `jury-qv4.4.12`.
+
+With an existing CA-signed server certificate at mode **0664**, an existing
+mode-0600 private key, and both absolute paths configured, packaged `juryd`
+refuses startup with:
+
+```text
+configure both TLS certificate and private key files, or explicitly select insecure loopback with a loopback listen address
+```
+
+Changing only the certificate mode to 0600 lets the same real HTTPS lifecycle
+pass. Refusal of a group-writable certificate is appropriate; the diagnostic
+incorrectly directs the operator toward missing TLS fields or insecure mode.
+`crates/jury-witness/src/config.rs::validate_tls` maps every public-certificate
+read failure to that generic configuration error. Distinguish unsafe or
+unreadable certificate files, and document accepted public-certificate modes
+without relaxing their checks.
+
+### Test-driver corrections and limits
+
+The first temporary exploratory driver incorrectly assumed nonzero child exits
+put `run` JSON on stderr; Jury correctly returns its child result on stdout.
+A separate drill probe also tried to print a nonexistent top-level `committed`
+key after a successful command; its corrected control checked actual published
+files. Neither was an application defect. A transfer probe encountered a
+pre-existing malformed `/tmp/.git`; repeating the complete journey below a
+clean `/var/tmp` root succeeded. That unrelated directory was not altered.
+
+The HTTPS driver initially used a self-signed CA certificate as the server leaf,
+then a group-writable signed leaf, and initially changed the negative request
+from its authorized `read-stdout` action to an unauthorized private-file action.
+The final driver used a separate signed leaf, safe permissions, and the same
+signed action with only the trust root changed. It retained the original
+lifecycle assertions and bounded readiness wait, retrying HTTP 503 only while
+waiting for readiness. All final positive and negative controls passed on the
+packaged binaries, including Debian 12. The certificate-permission diagnostic
+was separately reproduced with an explicit 0664 control for QA-23.
+
+Local drivers and selected logs are retained under ignored
+`target/qa-20260908/`; they are disposable audit aids and not shipped commands.
+The installed systemd units were checked as packaged files; this pass did not
+provision separate production service accounts/hosts, exercise real signing, or
+establish independent security review. No macOS, Windows, ARM, or TUI support
+is implied. The incomplete fuzz check remains a release blocker despite the
+other passing checks.
+
+### Exact unsigned candidate
+
+Candidate directory: `target/linux-release/0.0.1-qa-20260908`.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `jury` | `dd85eb5482b000a67e57b11f21758e33235796f53e71df9cf7aef7ad4f2c907a` |
+| `juryd` | `06357a713baf842c852b1c936fbe951b50c5b3b3ed6fd3fa851a7c30cb451972` |
+| `SHA256SUMS` | `8e66ba0a6a0b5caf36e93dba12d5bf9dc0c0f1130ff9c605caf33dc459c31fd8` |
+
+The build and a separate verifier invocation matched source/artifacts before
+this audit's documentation updates. These locally computed hashes identify the
+tested unsigned candidate; they do not authenticate a publisher. The audit and
+status-document changes, as well as subsequent fixes, require a new source and
+artifact binding before publication. Keep J26 open.
+
+### Workspace verification and audit disposition
+
+`cargo test --workspace`, invoked through `scripts/jig check test`, completed
+with **exit 0** after approximately 19.6 minutes. Formatting and Clippy also
+passed. Rollover and suite-2 input checks passed, including their supplemental
+provider checks; that does not resolve their release-scope mismatch.
+
+The enclosing Jig test receipt is **failed**, not green: this audit updated
+`.beads/issues.jsonl` during the read-only run, changing its worktree fingerprint.
+The raw test exit and the harness failure are both retained in
+`receipt_01M2033Z2QGC6W1W9E9T1B4FQY`. I stopped an already launched redundant
+`work check` process instead of completing another full test run just for a
+green administrative receipt. That interrupted run is not a pass.
+`work finish` refused closure because the verification gate was missing and
+contract/LOC receipts were stale; the audit plan remains open with this reason.
+No gate was weakened or bypassed.
+
+Anti-ceremony disposition: the requested QA is delivered with findings; no
+product fix is claimed. Tracker edits during verification and the redundant
+retry were my sequencing mistakes. Future final verification should follow
+tracker/report edits. The failed fuzz gate and J26 blockers remain open; prior
+or correlated passes are not substituted for them. No independent review is
+claimed.
+
 ## Repair and renewed QA, 2026-09-06
 
 **Final result: the repaired native implementation passed all ten packaged

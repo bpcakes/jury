@@ -42,12 +42,15 @@ Neither mode prevents an authorized endpoint or child from retaining plaintext.
 
 ## Start here
 
-Version **0.0.1 is not published**. The committed implementation passed the
-[Linux CLI QA](docs/qa-linux-0.0.1.md): ten real-process journeys using native
-x86_64 binaries on Debian 12 (glibc 2.36), including witnessed access and
-recovery. Passing those checks does not establish security for real secrets.
-Publication still requires a private reporting contact, a release-signing
-identity, and a candidate bound to the final source and documentation.
+Version **0.0.1 is not published**. The [2026-09-08 Linux CLI audit](docs/qa-linux-0.0.1.md)
+passed ten packaged CLI journeys on Debian 12 (glibc 2.36), including witnessed
+access and recovery. Its four follow-up findings are addressed: rollover and
+suite migration are explicitly included in 0.0.1, the repaired fuzz lockfile
+passes the bounded suite, and recovery/TLS diagnostics explain the required
+filesystem layout and permissions. Passing the exercised paths does not establish
+security for real secrets. Publication still requires a private reporting
+contact, a release-signing identity, and a freshly verified candidate bound to
+the final source and documentation.
 
 To build and install both commands from source:
 
@@ -371,9 +374,9 @@ integration remains separate in
 The first `0.x` release targets Linux through the `jury` CLI and a self-hosted
 `juryd`. The active scope defers macOS, Windows, the `jury-tui`,
 hardware-backed identity protectors, managed-service topology, semantic Git
-merge, and runtime lineage rollover or suite migration. J18 rollover and suite
-migration are follow-up capabilities for a release after 0.0.1. The development
-checkout has direct and governed `jury vault rollover` flows with fresh backup,
+merge, and Jig-vault import. J18 rollover and suite migration are included in
+Linux 0.0.1 and gate the final release candidate. The implementation has direct
+and governed `jury vault rollover` flows with fresh backup,
 transfer, explicit local adoption and exact-candidate recovery. Historical
 bootstrap validation retains the original role proofs, policies and labels.
 The checkout also implements explicit `jury vault migrate-suite --to 2`, using

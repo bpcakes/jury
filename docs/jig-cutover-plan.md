@@ -119,8 +119,9 @@ Jury owns:
 - transfer, backup, restore, and recovery;
 - the Linux Jury CLI.
 
-Jig-vault import, a Jury TUI, and rollover remain separately deferred Jury
-scopes. This downstream plan cannot activate them by implication.
+Jig-vault import and a Jury TUI remain separately deferred Jury scopes.
+This downstream plan cannot activate them by implication. Jury rollover and
+suite migration are included in its Linux 0.0.1 scope under J18.
 
 Jig owns:
 
@@ -662,7 +663,7 @@ The completed Jig-v3 retirement map is:
 | B17 | `jury-qv4.3.2`, `jury-qv4.4.3`, `jury-qv4.4.5`, `jury-qv4.6.2` | `jig-sh-z3u.2`–`jig-sh-z3u.9` | Native/server contract plus staged Jig cutover |
 | B18 | `jury-qv4.6.1` | — | Expanded adversarial corpus and measured budgets |
 | B19 | `jury-qv4.6.1`, `jury-qv4.6.2` | `jig-sh-z3u.7`–`jig-sh-z3u.9` | Jury assurance/release plus Jig dogfood/removal |
-| B20 | `jury-qv4.2.10`; deferred `jury-qv4.2.14` | — | J11 refuses at hard caps; rollover/suite migration require later scope |
+| B20 | `jury-qv4.2.10`; `jury-qv4.2.14` | — | J11 refuses at hard caps; explicit rollover/suite migration ship under J18 in Linux 0.0.1 |
 
 The Jury master plan contains each outcome's rationale, design contract, scope,
 required tests, acceptance criteria, live dependencies, legacy baseline where

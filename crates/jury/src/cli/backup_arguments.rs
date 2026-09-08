@@ -86,7 +86,8 @@ pub struct BackupDrillArgs {
     /// Create the restored owner identity at this absent absolute path.
     #[arg(long, value_name = "ABSENT_PATH")]
     pub identity_out: PathBuf,
-    /// Install drill-local state below this separate absent state root.
+    /// Install drill-local state at an absent root whose existing private parent
+    /// (mode 0700) is separate from the source vault home or worktree.
     #[arg(long, value_name = "ABSENT_PATH")]
     pub state_out: PathBuf,
     /// Create an included approver identity at this absent absolute path.

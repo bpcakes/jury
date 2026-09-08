@@ -36,12 +36,12 @@ repository verification passed; the retained result is described in
 `docs/qa-linux-0.0.1.md`. J26 publication remains open for the reporting channel,
 signing identity, and a candidate bound to the intended release source.
 
-J18 is reopened as active follow-up work. The scheduling assumption is a release
-after 0.0.1, so it remains outside the current release epic and does not gate
-J26. Both rollover and suite migration remain required. The development checkout
-has tested direct and governed rollover and native suite-migration paths;
-final repository verification and reviews remain unfinished. Rollover preserves
-the current suite. The distinct AES-256-GCM HPKE suite 2 passed its supplemental
+The maintainer explicitly included J18 rollover and suite migration in Linux
+0.0.1 on 2026-09-08 (QA-20). Both implemented deliverables now gate J26 and
+belong to the current release epic. Direct and governed rollover and native
+suite-migration acceptance passed under J18; the final release candidate must
+include those paths in its fresh verification and source/build binding.
+Rollover preserves the current suite. The distinct AES-256-GCM HPKE suite 2 passed its supplemental
 construction/provider/conformance gate before runtime adoption. Another
 implementation of suite 1 does not supply a second suite.
 
@@ -78,9 +78,9 @@ elsewhere in this document.
   a fresh solo verification pass. J26 binds the exact post-J25 source, verifier,
   build inputs, and release artifacts after a fresh solo release-candidate
   verification pass. Neither gate is independent review or certification.
-- The current release has 27 active outcomes: J01A, J01B, J02-J14, J16, J17,
+- The current release has 28 active outcomes: J01A, J01B, J02-J14, J16-J18,
   J19A-J19C, J19-J23, J25, and J26. J18 runtime rollover and suite migration
-  are active follow-up work for a release after 0.0.1. J15 compatibility and
+  are included in Linux 0.0.1. J15 compatibility and
   J24 TUI work remain deferred post-`0.x`. Hardware-backed
   identity protectors, managed-service topology, semantic Git merge, and
   Windows support are also deferred. These are excluded from active readiness
@@ -258,8 +258,7 @@ Jury v1 excludes:
 - Windows support in the first `0.x`;
 - a TUI, Jig migration, hardware-backed identity protectors, or managed-service
   deployment topology;
-- semantic Git diff/merge, automatic reconciliation of divergent artifacts, or
-  runtime history rollover and suite migration;
+- semantic Git diff/merge or automatic reconciliation of divergent artifacts;
 - a courtroom metaphor in protocol or implementation types.
 
 ### 0.7 Repository architecture
@@ -1509,8 +1508,7 @@ The first Jury v1 release does not attempt to provide:
 - SSO, SCIM, OIDC, LDAP, or directory synchronization in the core milestone;
 - Windows support, a TUI, managed-service deployment topology, hardware-backed
   identity protectors, or Jig migration;
-- semantic Git merge, automatic divergent-artifact reconciliation, runtime
-  lineage rollover, or suite migration;
+- semantic Git merge or automatic divergent-artifact reconciliation;
 - expiring *stored grants*; witnessed requests themselves are short-lived;
 - IP or device-posture conditions beyond explicitly bound workload evidence;
 - a remotely authoritative history for the portable vault artifact;
@@ -2911,9 +2909,8 @@ validated destination or evidence of witnessed readiness. The byte-exact
 bootstrap projection must pass the applicable construction gate before runtime
 use; the existing reserved bridge preimage alone does not specify it.
 
-Both attestation shapes are reserved format inputs for deferred J15 work and
-the J18 follow-up release.
-The first `0.x` runtime creates neither one.
+The Jig source-migration attestation remains reserved for deferred J15 work.
+The J18 rollover bridge and bootstrap manifest are active Linux 0.0.1 inputs.
 
 The owner self-signature provides integrity, not third-party identity proof.
 
@@ -3173,14 +3170,15 @@ documented backup implications, and an explicit plan amendment.
 Every mutation preflight computes its resulting policy, item-proof, slot, item,
 and total encoded-size counts before writing. A mutation that would cross a hard
 cap fails with the typed `CapacityExhausted` error before any shared or local
-mutation. It reports the exhausted dimension and that the first `0.x` cannot
-advance this lineage; it never advertises an unimplemented rollover command.
+mutation. It reports the exhausted dimension. Advancing the exhausted lineage
+requires explicit owner-authorized rollover into a new lineage; it never
+prunes history or silently rolls over.
 
-### 11.13 Authenticated history rollover (planned after 0.0.1)
+### 11.13 Authenticated history rollover (Linux 0.0.1)
 
-This section reserves the future design consumed by J18. The first `0.x` has no
-rollover or suite-migration runtime path and relies on the fail-closed capacity
-preflight in section 11.12.
+J18 provides explicit rollover and suite-migration runtime paths in Linux
+0.0.1. Ordinary mutations retain the fail-closed capacity preflight in section
+11.12; rollover creates an absent destination even when the source is at its cap.
 
 Jury V1 does not prune or rewrite a vault's signed policy or item-proof ancestry in
 place. An explicit owner-only rollover creates a new Jury v1 lineage in an absent
@@ -4308,9 +4306,10 @@ jury history status
 ```
 
 `history status` is the stable spelling for the public capacity fields also
-shown by `vault status`. The first `0.x` exposes no history rollover or suite
-migration command. At a hard cap it refuses mutation before writing and directs
-the operator to retain the lineage until a future migration path is available.
+shown by `vault status`. Linux 0.0.1 exposes `jury vault rollover` and
+`jury vault migrate-suite --to 2`. At a hard cap ordinary mutations refuse
+before writing. Rollover and migration require an explicit owner-authorized
+operation, an absent destination, a fresh backup, and new-lineage trust.
 
 ### 16.12 JSON stability
 
@@ -5215,8 +5214,8 @@ Add these Jury v1 invariants.
   state can reopen an already released revision but cannot open a later seal
   without fresh authorization under the J19 compromise assumptions.
 - Each lineage authenticates exactly one suite; no negotiation, fallback, or
-  mixed active suite exists. Reserved suite-migration records do not create an
-  active runtime path in the first `0.x`.
+  mixed active suite exists. J18 suite migration validates and re-encrypts into
+  a new lineage; it never upgrades retained old copies.
 - Write-only role changes never claim cryptographic read revocation.
 - Every decrypted item descriptor is exactly the canonical fixed-size encoding;
   descriptor ciphertext length never varies with the private item name.
@@ -5384,9 +5383,9 @@ Include fixtures for:
 - policy fork.
 - principal replacement that retains one old key slot, misses one inherited
   role, or skips one required item rotation;
-- reserved rollover bridge with a changed source ID, genesis fingerprint,
-  terminal revision, rollover ID, or owner signature; the runtime still rejects
-  creation of such a record.
+- rollover bridge with a changed source ID, genesis fingerprint,
+  terminal revision, rollover ID, or owner signature; the runtime rejects
+  tampered bridges and accepts only an authenticated new-lineage transaction.
 - a retained historical artifact that remains decryptable after later compromise
   of its then-authorized recipient key, paired with an assertion that passphrase
   change does not alter that result and principal replacement protects only the
@@ -5748,8 +5747,9 @@ one atomic `principal replace`; never advise editing keys inside a registered
 descriptor. Owner replacement requires a different remaining owner.
 
 Document capacity operations: monitor public policy, proof, and encoded-size
-headroom; preflight every mutation; and stop before a hard cap. The first `0.x`
-does not provide a rollover or suite-migration escape path and must say so.
+headroom; preflight every mutation; and refuse ordinary mutation at a hard cap.
+Document explicit J18 rollover and suite migration, including absent destinations,
+new-lineage trust, fresh backups and redistribution, and retained old-copy exposure.
 
 ### 23.6 Hosted-provider guidance
 
@@ -5819,9 +5819,8 @@ J19 + J20 + J21 -> J23 receipts + witness operations
 
 J11 + J14 + J16 + J17 + J20 + J21 + J22 + J23
   -> J25 adversarial corpus + benchmarks
-J22 + J23 + J25 -> J26 experimental witnessed release
-
-Active follow-up after 0.0.1: J11 + J16 + J17 + J23 -> J18 rollover + suite migration
+J11 + J16 + J17 + J23 -> J18 rollover + suite migration
+J18 + J22 + J23 + J25 -> J26 experimental witnessed release
 Deferred post-0.x only: J03 + J05 + J06 + J07 + J09 + J10 -> J15 compatibility
                        J10 + J13 + J16 + J17 + J18 + J22 + J23 -> J24 TUI
 Deferred optional external review: J19B -> J19R reviewer engagement
@@ -5839,11 +5838,11 @@ The active implementation tasks through J25 have completed their task-local
 acceptance checks. J01A/J01B and J19 are accepted construction-input gates;
 J19A is no longer blocked on primitive work. The dependency edges above explain
 the implementation order and remain relevant if an input must be reopened.
-Follow-up and deferred branches have no edge back into the 0.0.1 release path.
+Deferred branches have no edge back into the 0.0.1 release path; J18 now does.
 J26 retains the final source/build binding and publication work.
 
 J26 is the active release join and is not allowed to hide incomplete active
-children. J19-J23 and J25 remain mandatory release dependencies. J15, J18, J24,
+children. J18-J23 and J25 remain mandatory release dependencies. J15, J24,
 and the external-review tasks J19R/J19D/J19E are future work, not active release
 gates.
 
@@ -5852,14 +5851,14 @@ gates.
 | Existing track | Concrete descendants |
 | --- | --- |
 | Cryptographic requirements | J01A, J01B |
-| Portable vault and identity | J02-J11, J16-J17 |
+| Portable vault and identity | J02-J11, J16-J18 |
 | CLI and execution | J12-J14 |
 | Witnessed authority and `juryd` | J19A-J19C, J19-J23 |
 | Deferred witnessed access TUI | J24 |
 | Release | J25-J26 |
 
-J18 is open standalone work for a release after 0.0.1. J15 and J24 remain
-deferred standalone post-`0.x` outcomes. J19R/J19D and J19E remain deferred
+J18 is completed implementation work in the active release epic and gates J26.
+J15 and J24 remain deferred standalone post-`0.x` outcomes. J19R/J19D and J19E remain deferred
 standalone optional external-review outcomes. None is a descendant of the
 current Jury release epic; all are excluded from its readiness and estimate
 rollups. J15 may be reactivated only after J26 under a separately approved
@@ -6117,7 +6116,7 @@ accidental omission.
 | B17 config, status, contract, guidance | Changed | J13, J21, J23, J26, Jig D02-D09 | Jury owns native/server contracts and docs; Jig owns adapter discovery, rollout, deprecation, and removal. |
 | B18 adversarial corpus and budgets | Covered | J25 | The corpus expands to witness, server, receipt, cancellation, and database boundaries. |
 | B19 integration and release | Changed | J25, J26, Jig D07-D09 | Jury release assurance and Jig cutover/dogfood are separate, evidence-gated outcomes. |
-| B20 capacity and rollover | Changed | J11, J18 | J11 actively refuses mutations at hard caps; J18 rollover and suite migration are open follow-up work after 0.0.1. |
+| B20 capacity and rollover | Changed | J11, J18 | J11 refuses mutations at hard caps; J18 explicit rollover and suite migration are included in Linux 0.0.1. |
 
 The Jig tracker may close B01-B20 and their parent as superseded only after the
 live Jury Beads contain the task contracts below, the live dependency graph
@@ -6959,7 +6958,7 @@ Scope:
 - preflight all rotations, slots, signatures, bounds, and output size;
 - compute every resulting count and encoded size before mutation, return a typed
   `CapacityExhausted` error at any hard cap, and publish neither shared nor local
-  state on refusal; the first `0.x` has no rollover fallback;
+  state on refusal; rollover is a separate explicit J18 operation, never a fallback;
 - append audit intent, publish one artifact, and advance checkpoint;
 - under the shared cross-worktree lock, re-open and compare the current
   `.jury/vault.json` digest and ancestry to the loaded preview before replacing
@@ -7129,8 +7128,8 @@ Acceptance:
 - inside a Git worktree, the default shared artifact is committed .jury/vault.json while identities and local state remain outside Git;
 - native CLI help does not imply Jig ownership or whole-product cryptographic review.
 - native CLI help advertises Linux, rejects unsupported platforms, and
-  does not advertise TUI, hardware protectors, managed service, semantic merge,
-  rollover, or suite migration.
+  does not advertise TUI, hardware protectors, managed service, or semantic merge.
+  Explicit rollover and suite migration are included under J18.
 
 Dependencies: J03, J10, J11.
 
@@ -7301,7 +7300,7 @@ Acceptance:
 
 Dependencies: J05, J06, J07, J09, J10.
 
-Unblocks: J25 and follow-up J18. J24 only if its deferred scope is activated.
+Unblocks: J25 and J18. J24 only if its deferred scope is activated.
 
 ### J17 — Deliver owner backup, restore, and recovery drills
 
@@ -7371,17 +7370,17 @@ Acceptance:
 
 Dependencies: J04, J07, J09, J10.
 
-Unblocks: J25 and follow-up J18. J24 only if its deferred scope is activated.
+Unblocks: J25 and J18. J24 only if its deferred scope is activated.
 
 ### J18 — Implement authenticated rollover and suite migration
 
 Release status:
 
-J18 was reopened on 2026-09-07 as active follow-up work, targeting a release
-after 0.0.1 under the stated scheduling assumption. Its J11/J16/J17/J23
-dependencies are complete. It stays outside the current release epic and does
-not block J25 or J26. J11 owns the implemented capacity preflight and fails
-before mutation at a hard cap.
+J18 was reopened on 2026-09-07 and both deliverables are implemented. The
+maintainer included them in Linux 0.0.1 on 2026-09-08 (QA-20), superseding the
+earlier follow-up scheduling assumption. J18 belongs to the active release
+epic and blocks J26. Its J11/J16/J17/J23 dependencies are complete. J11 retains
+capacity preflight and fails before ordinary mutation at a hard cap.
 
 Implement rollover with the current suite first. Suite migration remains a
 required deliverable, but a distinct destination suite must be selected,
@@ -7478,7 +7477,7 @@ Acceptance:
 
 Dependencies: J11, J16, J17, J23.
 
-Unblocks: deferred J24 only.
+Unblocks: J26 and deferred J24.
 
 ### J19A-J19C — Freeze the witnessed construction corpus
 
@@ -8173,7 +8172,7 @@ Acceptance:
 
 Dependencies: J19, J20, J21.
 
-Unblocks: J22, J25, J26, and follow-up J18. J24 only if its deferred scope is
+Unblocks: J22, J25, J26, and J18. J24 only if its deferred scope is
 activated.
 
 ### J24 — Deliver the witnessed access-aware CLI-backed TUI
@@ -8424,7 +8423,7 @@ A fresh operator can verify, build, configure witnessed governance, self-host,
 run, back up, and recover the experimental witnessed-access release on Linux
 while understanding that Jury is externally unreviewed pre-alpha software and
 is not suitable for real secrets. macOS and Windows support, J15 compatibility,
-J19R/J19D/J19E external-review work, J18 rollover/suite migration, J24 TUI work,
+J19R/J19D/J19E external-review work, J24 TUI work,
 hardware identity protectors, managed topology, and semantic merge are not
 advertised as shipped.
 
@@ -8463,8 +8462,8 @@ Scope:
 - document the exact J01A HNDL and PQ-authenticity decisions, that HNDL does not
   survive later private-key theft or protect already decrypted revisions, that
   re-encryption cannot revoke retained old-lineage copies, and that
-  FIPS-validated deployment is not claimed; disclose that the first `0.x` has
-  no runtime suite migration or rollover path;
+  FIPS-validated deployment is not claimed; exercise direct and governed
+  rollover and suite migration under their complete J18 acceptance criteria;
 - state prominently that no independent professional security review was
   performed and that J19R/J19D/J19E remain deferred optional work;
 - self-review the exact candidate in a fresh pass, report it honestly as
@@ -8520,11 +8519,13 @@ Acceptance:
 - the complete generic dogfood lifecycle and real witnessed recovery rehearsal
   are recorded against the exact self-reviewed release candidate;
 - J15 compatibility is neither required nor advertised as included;
-- J18 rollover/suite migration, J24 TUI, hardware identity protectors, managed
+- J18 rollover and suite migration pass their complete acceptance criteria
+  against the exact Linux candidate, including governed access and recovery;
+- J24 TUI, hardware identity protectors, managed
   service, semantic merge, and Windows support are neither required nor
   advertised as included.
 
-Dependencies: J22, J23, J25.
+Dependencies: J18, J22, J23, J25.
 
 Unblocks: the experimental Jury `0.x` witnessed-access release.
 

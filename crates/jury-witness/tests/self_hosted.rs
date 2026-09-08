@@ -145,6 +145,12 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         &witness_config,
     )?;
     assert_initial_audit(executable, &witness_config, fixture.path())?;
+    assert_unsafe_tls_certificate_refused(
+        executable,
+        &certificate,
+        &anchor_config,
+        &witness_config,
+    )?;
     let mut anchor =
         ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &anchor_config)?;
     let certificate_bytes = fs::read(&certificate)?;
@@ -504,6 +510,64 @@ fn write_json(path: &Path, value: &serde_json::Value) -> TestResult {
 fn write_file(path: &Path, bytes: &[u8], mode: u32) -> TestResult {
     fs::write(path, bytes)?;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    Ok(())
+}
+
+fn assert_unsafe_tls_certificate_refused(
+    executable: &str,
+    certificate: &Path,
+    anchor_config: &Path,
+    witness_config: &Path,
+) -> TestResult {
+    // Both TLS paths are configured: diagnose the unsafe certificate itself.
+    // Changing only its mode back to 0644 must allow the real HTTPS lifecycle below.
+    fs::set_permissions(certificate, fs::Permissions::from_mode(0o664))?;
+    for (arguments, config) in [
+        (vec!["anchor", "serve", "--config"], anchor_config),
+        (vec!["serve", "--config"], witness_config),
+    ] {
+        let mut process = ProcessGuard {
+            child: Command::new(executable)
+                .args(arguments)
+                .arg(config)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = process.child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                return Err("unsafe TLS certificate was not refused before serving".into());
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        assert!(!status.success());
+        let mut stdout = Vec::new();
+        process
+            .child
+            .stdout
+            .take()
+            .ok_or("missing stdout")?
+            .read_to_end(&mut stdout)?;
+        assert!(stdout.is_empty());
+        let mut diagnostic = String::new();
+        process
+            .child
+            .stderr
+            .take()
+            .ok_or("missing stderr")?
+            .read_to_string(&mut diagnostic)?;
+        assert!(diagnostic.contains("TLS certificate"));
+        assert!(diagnostic.contains("no group/world write permission"));
+        assert!(diagnostic.contains("mode 0644 or 0600"));
+        assert!(!diagnostic.contains("configure both TLS"));
+        assert!(!diagnostic.contains(certificate.to_str().ok_or("non-UTF8 fixture")?));
+    }
+    fs::set_permissions(certificate, fs::Permissions::from_mode(0o644))?;
     Ok(())
 }
 

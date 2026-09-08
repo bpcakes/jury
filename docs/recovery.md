@@ -15,6 +15,11 @@ data. Their parent directories must already exist and satisfy Jury's private
 ownership and mode checks (use `0700` directories and `0600` private files).
 Identity parent directories must be separate from the vault, backup input and
 state paths; choosing different leaf names under a shared parent is insufficient.
+For `backup drill`, the `--state-out` root must be absent and its existing
+parent must also be separate from the source vault home or Git worktree.
+For example, when `/absolute` contains the source, use
+`/absolute/drill-state-parent/ExampleState` below a separate `0700` directory;
+`/absolute/ExampleState` is refused even though that leaf does not exist.
 For initial vault setup, use the repository README. For role registration and
 fresh remote imports, follow the [operator walkthrough](witness-operator-walkthrough.md).
 Service databases and external anchors have their own
@@ -187,11 +192,11 @@ $ jury --home /absolute/source-vault/ExampleVault \
     backup drill --in /absolute/offline/ExampleVault.backup \
     --vault-out /absolute/drill-vault/ExampleVaultDrill \
     --identity-out /absolute/drill-identity/ExampleDrillOwner.identity \
-    --state-out /absolute/drill-state
-$ JURY_STATE_HOME=/absolute/drill-state jury --home /absolute/drill-vault/ExampleVaultDrill \
+    --state-out /absolute/drill-state-parent/ExampleState
+$ JURY_STATE_HOME=/absolute/drill-state-parent/ExampleState jury --home /absolute/drill-vault/ExampleVaultDrill \
     --identity-file /absolute/drill-identity/ExampleDrillOwner.identity \
     vault status
-$ JURY_STATE_HOME=/absolute/drill-state jury --home /absolute/drill-vault/ExampleVaultDrill \
+$ JURY_STATE_HOME=/absolute/drill-state-parent/ExampleState jury --home /absolute/drill-vault/ExampleVaultDrill \
     --identity-file /absolute/drill-identity/ExampleDrillOwner.identity \
     vault audit verify
 ```
@@ -206,7 +211,7 @@ generic direct test field such as `ExampleRecoveryItem.ExampleRecoveryField`,
 also read it through a controlled private-file sink:
 
 ```console
-$ JURY_STATE_HOME=/absolute/drill-state jury --home /absolute/drill-vault/ExampleVaultDrill \
+$ JURY_STATE_HOME=/absolute/drill-state-parent/ExampleState jury --home /absolute/drill-vault/ExampleVaultDrill \
     --identity-file /absolute/drill-identity/ExampleDrillOwner.identity \
     read ExampleRecoveryItem ExampleRecoveryField --direct \
     --out /absolute/drill-output/ExampleRecoveryValue.txt

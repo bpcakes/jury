@@ -54,7 +54,25 @@ pub(super) fn validate_restore_path_layout(layout: RestorePathLayout<'_>) -> Res
     validate_path_separation(&boundaries).map_err(|error| match error.kind() {
         FilesystemErrorKind::Containment | FilesystemErrorKind::Alias => invalid_restore_target(),
         _ => map_filesystem_error(error),
-    })
+    })?;
+    if let Some(source_home) = layout.source_home {
+        let parent = layout
+            .state_root
+            .parent()
+            .ok_or_else(invalid_restore_target)?;
+        let repositories = source_home.repository().into_iter().collect::<Vec<_>>();
+        let excluded_paths = source_home.detached_path().into_iter().collect::<Vec<_>>();
+        HardenedStateRoot::open_existing_excluding(parent, &repositories, &excluded_paths)
+            .map_err(|error| match error.kind() {
+                FilesystemErrorKind::Containment | FilesystemErrorKind::Alias => CliError::new(
+                    CliErrorKind::InvalidArguments,
+                    "invalid-drill-state-parent",
+                    "the --state-out parent overlaps the source vault home or worktree; choose an absent state root below a separate existing private directory (mode 0700)",
+                ),
+                _ => map_filesystem_error(error),
+            })?;
+    }
+    Ok(())
 }
 
 pub(super) fn restore_repository_refs<'a>(
