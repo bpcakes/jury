@@ -274,8 +274,9 @@ fn validate_label(label: &str) -> Result<(), AdapterError> {
 fn validate_tls(tls: &TlsConfig, listen: SocketAddr) -> Result<(), AdapterError> {
     match (&tls.certificate_file, &tls.private_key_file) {
         (Some(certificate), Some(private_key)) if !tls.allow_insecure_loopback => {
-            jury_filesystem::read_public_file(certificate, 1024 * 1024)
-                .map_err(|_| AdapterError::configuration(ConfigurationConstraint::Tls))?;
+            jury_filesystem::read_public_file(certificate, 1024 * 1024).map_err(|_| {
+                AdapterError::configuration(ConfigurationConstraint::TlsCertificate)
+            })?;
             validate_private_regular_file(private_key)
         }
         (None, None) if tls.allow_insecure_loopback && listen.ip().is_loopback() => Ok(()),

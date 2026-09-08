@@ -21,6 +21,7 @@ pub(crate) enum ConfigurationConstraint {
     Document,
     Schema,
     Tls,
+    TlsCertificate,
     Limits,
     DatabasePath,
     AuthorityLabels,
@@ -40,6 +41,9 @@ impl ConfigurationConstraint {
             Self::Schema => "configuration schema must be 1",
             Self::Tls => {
                 "configure both TLS certificate and private key files, or explicitly select insecure loopback with a loopback listen address"
+            }
+            Self::TlsCertificate => {
+                "TLS certificate must be readable at an absolute path, owned by the current user, a regular file with one hard link and no group/world write permission (use mode 0644 or 0600), no larger than 1 MiB; symlinks are not allowed"
             }
             Self::Limits => {
                 "transport limits are outside supported bounds: request bytes 1024..=18874368, concurrency 1..=1024, rate 1..=10000, burst between rate and 100000, timeouts 100..=60000 ms with shutdown grace at least request timeout; anchor request bytes must be 1048576"

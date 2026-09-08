@@ -473,6 +473,14 @@ fn git(repository: &Path, arguments: &[&str]) -> TestResult<Output> {
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("HOME", repository)
         .env("XDG_CONFIG_HOME", repository)
+        // A fixture commit must finish its maintenance before the Jury snapshot.
+        // Keep maintenance enabled, but do not leave a detached Git writer behind.
+        .args([
+            "-c",
+            "maintenance.autoDetach=false",
+            "-c",
+            "gc.autoDetach=false",
+        ])
         .args(arguments)
         .output()?;
     if !output.status.success() {
@@ -541,6 +549,15 @@ fn assert_forged_git_metadata_and_merge_output_grant_no_transfer_authority(
     let repository = temporary.join("forged-git-metadata");
     fs::create_dir(&repository)?;
     git(&repository, &["init", "--quiet"])?;
+    // Require real maintenance work so the fixture also checks its completion.
+    git(
+        &repository,
+        &["config", "maintenance.commit-graph.enabled", "true"],
+    )?;
+    git(
+        &repository,
+        &["config", "maintenance.commit-graph.auto", "-1"],
+    )?;
     git(&repository, &["config", "user.name", "ExampleForger"])?;
     git(
         &repository,
@@ -594,6 +611,11 @@ fn assert_forged_git_metadata_and_merge_output_grant_no_transfer_authority(
         ],
     )?;
     let commit = git(&repository, &["cat-file", "-p", "HEAD"])?;
+    assert!(
+        repository
+            .join(".git/objects/info/commit-graphs/commit-graph-chain")
+            .is_file()
+    );
     let commit = String::from_utf8(commit.stdout)?;
     assert!(commit.contains("author ExampleForger <example-forger@example.invalid>"));
     assert!(commit.contains("gpgsig -----BEGIN PGP SIGNATURE-----"));

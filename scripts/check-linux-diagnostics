@@ -54,6 +54,43 @@ def exercise(f):
             'drill source boundary omitted from diagnostic')
     require(not forbidden.exists(), 'invalid drill created output')
 
+    backup = directory/'ExampleVault.backup'
+    backup_passphrase = b'ExampleBackupPassphrase\n'
+    f.cli(['backup', 'create', '--out', backup], backup_passphrase*2)
+    vault_out = f.root/'restore-vault/ExampleDrill'
+    identity_out = f.root/'restore-identity/ExampleDrill.identity'
+    state_out = f.root/'absent-drill-state'
+    drill = ['backup', 'drill', '--in', backup, '--vault-out', vault_out,
+             '--identity-out', identity_out, '--state-out', state_out]
+    source_before = (f.root/'repo/.jury/vault.json').read_bytes()
+    result = f.cli(drill, expected=2)
+    require(result['error']['code'] == 'invalid-drill-state-parent'
+            and '--state-out parent' in result['error']['message']
+            and 'mode 0700' in result['error']['message'], 'drill state parent omitted next action')
+    require(not any(path.exists() for path in (vault_out, identity_out, state_out)),
+            'invalid drill state parent published output')
+    require((f.root/'repo/.jury/vault.json').read_bytes() == source_before,
+            'invalid drill state parent changed source')
+    # Change only the state output to an absent child of a separate private parent.
+    state_out = f.root/'restore-state/ExampleState'
+    drill[-1] = state_out
+    f.cli(drill, backup_passphrase+(s['PASSPHRASE']+b'\n')*2)
+    previous_state = f.environment.get('JURY_STATE_HOME')
+    f.environment['JURY_STATE_HOME'] = str(state_out)
+    try:
+        restored = ['--home', vault_out, '--identity-file', identity_out]
+        f.cli([*restored, 'vault', 'audit', 'verify'])
+        restored_value = directory/'restored-value'
+        f.cli([*restored, 'read', '--direct', 'ExampleItem', 'ExampleField', '--out', restored_value])
+        require(restored_value.read_bytes() == s['VALUE'], 'drill restored incorrect field bytes')
+    finally:
+        if previous_state is None:
+            f.environment.pop('JURY_STATE_HOME', None)
+        else:
+            f.environment['JURY_STATE_HOME'] = previous_state
+    require((f.root/'repo/.jury/vault.json').read_bytes() == source_before,
+            'successful drill changed source vault')
+
     config = json.loads((ROOT/'deploy/juryd/witness.example.json').read_bytes())
     config['database']['path'] = str(directory/'Example.sqlite3')
     for name, change, expected in [

@@ -9,6 +9,16 @@ development vaults and identities instead of migrating them.
 
 ## Current status
 
+The 2026-09-08 audit findings QA-20 through QA-23 are addressed after pulling
+upstream `635f078`. The maintainer explicitly included J18 rollover and suite
+migration in Linux 0.0.1; both now gate J26 under their full acceptance criteria.
+The repaired fuzz lockfile passes the unchanged seed tests and four bounded fuzz
+targets. Real CLI checks verify the backup-drill state-parent diagnostic and
+successful recovery, and both TLS services now explain unsafe certificate files.
+The repair evidence and historical candidate hashes are in
+`docs/qa-linux-0.0.1.md` in the source checkout. These repairs require a new bound
+release candidate; the earlier `cd8eeac` package is not the repaired artifact.
+
 The native implementation committed as `16ab899` passed the 2026-09-06 Linux
 QA: ten packaged CLI journeys on Debian 12, installation/removal, HTTPS,
 workspace checks and the bounded adversarial checks. The detailed historical

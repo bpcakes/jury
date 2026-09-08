@@ -78,7 +78,11 @@ adapter that signs and returns an already request-session-encrypted
 contribution without exporting private keys or plaintext shares; this release
 does not ship a vendor HSM plugin or a `juryd` HSM configuration value.
 
-Provision separate TLS identities for the witness and anchor hosts. Provision
+Provision separate TLS identities for the witness and anchor hosts. Public TLS
+certificate files must be readable at absolute paths, owned by the service user,
+regular files with one hard link, no larger than 1 MiB, and not group/world
+writable. Use mode `0644` or `0600`; mode `0664` is refused. Symlinks are refused.
+Keep TLS private keys at mode `0600` under the private-input rules below. Provision
 three unrelated witness-side bearer credentials (client, operator, and anchor
 write), each 32–256 ASCII alphanumeric, `-`, or `_` bytes. Copy the same anchor
 write value to an independently owned file on the anchor host. Private inputs

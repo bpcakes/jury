@@ -1,0 +1,1 @@
+Consumer: maintainers landing the QA-20 through QA-23 repair. Reproduce the observed hosted Git maintenance.lock snapshot race, make fixture maintenance complete before snapshots without weakening assertions, investigate the prior file-budget failure, then commit and push the fixes and verify all remote workflows on the exact commit. Archive this plan after remote checks pass.
