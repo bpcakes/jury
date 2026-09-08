@@ -1,0 +1,107 @@
+schema = "jury-suite2-inputs-v1"
+status = "accepted-for-implementation"
+consumer = "J18"
+pre_alpha = true
+independently_reviewed = false
+defect_class = "algorithm/context/provider drift and partial migration"
+supersession_condition = "Retire with suite 2 while preserving retained-artifact verification inputs."
+hpke_revision = "57b14d8f156da78be61b23203b962b0985561831"
+boringssl_revision = "a074f282d026a0ebbed7c9efef5a0cf63f72338d"
+provider_graph_sha256 = "b30a1e536aecadacb59fb69630888535b8511fbc97b890eebd8813cafae72aaa"
+boringssl_library_sha256 = "ad7c39b6c41e92bda059698c15b55dae42088707426378bd4ed85ffd9e06e47b"
+
+[suite]
+id = 2
+hpke_mode = 0
+kem = 25722
+kdf = 1
+hpke_aead = 2
+storage_aead = 31
+
+[boringssl_sources]
+"crypto/hpke/hpke.cc" = "7091b36d845bfdbb754dad5b0cf3840403b25488bb23a649f9fcb3948d084696"
+"crypto/xwing/xwing.cc" = "b8c2374da36f5a65fbd5207025d766266241bf9854806a604aa0ce5e1fd1b4cf"
+"crypto/fipsmodule/aes/gcm.cc.inc" = "4361638efd93056df8e4ac49aa515f0973a90444bc9dbe37872cf4184bb2b194"
+"crypto/fipsmodule/aes/gcm_nohw.cc.inc" = "cf16e1c1e71e2ff3e68bb4c2585741ab45b33dc6fc666f67d213a49a923065d5"
+"crypto/fipsmodule/cipher/e_aes.cc.inc" = "a8926df52a0f14e722eb06bf154265a76ac85d8eb3bb2dfe0f75951a8875d4d9"
+"include/openssl/hpke.h" = "f5f945e66c6950aa5d8ccf055c41d464e2f97d97fd6bfca3ee6898798dce03b5"
+
+[[bindings]]
+path = "conformance/suite-2/Cargo.lock"
+sha256 = "c4a4043f5d21f0b1678f24d149628c29e8e3c6e3f45608850eb11bac5b7dd420"
+
+[[bindings]]
+path = "conformance/suite-2/Cargo.toml"
+sha256 = "932185a4f0dee1bbff1b4f6d0b26f4a71bb5bf66eb4e9a731a9df5c1dbf08960"
+
+[[bindings]]
+path = "conformance/suite-2/alternate/boringssl_runner.cc"
+sha256 = "d39dbfa4cc132a467666795eec3cf9ee235aa3b89064a2146e5d6ca606fc31b2"
+
+[[bindings]]
+path = "conformance/suite-2/context-vectors.json"
+sha256 = "1e1e0e72e23b48aefb092e3eb4ab26ee90bda0fad8f6be1355f7d9a5fca3f6f7"
+
+[[bindings]]
+path = "conformance/suite-2/contexts.py"
+sha256 = "1039176c8f3f1725545c7e29e6e808371c16c4c646c812e7da29ae994698459a"
+
+[[bindings]]
+path = "conformance/suite-2/primitive-alternate.json"
+sha256 = "20ebf2714e3725055ced72aaa10af645352bae16bd4ee0a425be2fb7b1591ff5"
+
+[[bindings]]
+path = "conformance/suite-2/primitive-vectors.json"
+sha256 = "20ebf2714e3725055ced72aaa10af645352bae16bd4ee0a425be2fb7b1591ff5"
+
+[[bindings]]
+path = "conformance/suite-2/src/bin/contexts.rs"
+sha256 = "732758d1b0deae0b34d4c8475e4c5c57478bbd52e2f2e23e97c97ffb8ec9843f"
+
+[[bindings]]
+path = "conformance/suite-2/src/bin/primitives.rs"
+sha256 = "5323f7c323295f6f37de9b20565a77048e07fbeeaed531c2579d265165fd2f3b"
+
+[[bindings]]
+path = "conformance/suite-2/verify-primitives.py"
+sha256 = "cf5ef154d429e6535aee54987edf65db8d58fc9d25db399c7b71babba9958de9"
+
+[[bindings]]
+path = "crates/jury-protocol/src/hpke_context.rs"
+sha256 = "01930fc805d720f300aa257d5889e2fc0ca56affc554ed6feedfff5d02353777"
+
+[[bindings]]
+path = "crates/jury-protocol/src/vault_v1/preimage.rs"
+sha256 = "6178eb899bbbb52bd5fa1c26b4e03223517e41b506275782797e516da1986c5b"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/vault_v1.rs"
+sha256 = "9a0fd6e1940f33d2575cc6fce464c16fab06ae3d205f9e615d0d98cf234c3ab9"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/vault_v1/suite2.rs"
+sha256 = "e2c25ee468bfcd094ea3e36f193c1e728c4f6b8b874b4827442c87db15f54d00"
+
+[[bindings]]
+path = "docs/security/jury-rollover-v1-gate.toml"
+sha256 = "dace43880757c89da20cc78bf7abc2638c280f6d39a1cada1e7f74aa5dac1028"
+
+[[bindings]]
+path = "docs/security/jury-v2-provider-evidence.md"
+sha256 = "1e0dfcf8d7eee242abf89baac12e381c6b3c99ba42d2950a82775da5c3816a44"
+
+[[bindings]]
+path = "docs/security/jury-v2-suite.md"
+sha256 = "1504c5aefaab2185376d166a2bd627e492aa72be1ace6d86c4a5bf8734fc1fc4"
+
+[[bindings]]
+path = "scripts/check-suite2-inputs"
+sha256 = "d26bbeb63f805524aff652c2bde677c7447db6b707fa61e2b25ef206bf380317"
+
+[[bindings]]
+path = "scripts/test-suite2-inputs.py"
+sha256 = "2fa9bf12faf955c620e20d786a38ce07fdbe502813e4800a6e06403bad8004ee"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/vault_v1/bounds.rs"
+sha256 = "5e83372ddadfca6def3d4d638a3e548f6bc22ae1e93e22e3c2b99f112ca8ad3b"

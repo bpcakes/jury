@@ -5,6 +5,13 @@
 > secrets and must not be used with real credentials, customer identifiers, or
 > private operational details.
 
+`juryd` exposes a JSON API over HTTPS, with separate client and operator bearer
+credentials. It is started and maintained through its command-line interface;
+there is no browser dashboard. The [endpoint table](#transport-and-health-contract)
+lists the implemented routes. The
+[operator walkthrough](witness-operator-walkthrough.md) connects actor registration,
+service provisioning, policy distribution, and a real approved read.
+
 `juryd` is a standalone Linux witness service. Its correctness path uses only
 the in-repository witness engine, SQLite, HTTP/1.1, and Rustls. It has no Jig,
 managed-service, or proprietary runtime dependency.
@@ -40,18 +47,27 @@ pre-alpha system protects secrets.
 
 ## Build and provision
 
-Build the operator CLI and daemon from the checked-out source:
+Install the two native binaries using the [Linux guide](linux-release.md), or
+build from the full checked-out source with Git, Rust/Cargo, and a C/C++ toolchain:
 
 ```console
 $ cargo build --locked --release -p jury --bin jury -p jury-witness --bin juryd
 $ target/release/juryd --help
 ```
 
-Create a witness identity at an absolute path owned by the eventual `juryd`
-user. The command prompts twice for a passphrase:
+The commands below assume both binaries are on `PATH`. Create the `juryd` and
+`juryd-anchor` service accounts on their respective hosts, plus private
+configuration and state directories owned by each account (mode `0700`).
+Use mode `0600` for private files. The example systemd units expect binaries
+at `/usr/local/bin/juryd`; adjust `ExecStart` if you install elsewhere. Choose a
+system location readable by the service account: the units set `ProtectHome=yes`,
+so a user's `~/.local/bin` installation is not accessible to them.
+
+Create the witness identity as the eventual `juryd` user after creating its
+private state directory. The command prompts twice for a passphrase:
 
 ```console
-$ target/release/jury identity init --kind witness \
+$ sudo -u juryd -- jury identity init --kind witness \
     --identity-file /var/lib/juryd/ExampleWitness.identity.json
 ```
 
@@ -124,6 +140,12 @@ execution. The anchor database also has one serialized owner thread; public
 readiness performs a real bounded repository read without blocking a Tokio
 worker. `shutdown_grace_ms` must be at least `request_timeout_ms`, so accepted
 work cannot extend shutdown by a fresh series of per-step timeouts.
+
+POST request bodies use `Content-Type: application/json`. Client and operator
+routes require `Authorization: Bearer ...` using their respective credentials.
+Transport authentication does not replace signed policy or approval checks.
+Use the walkthrough's file-based operator helper to keep credentials out of
+command arguments; `jury` handles the client request protocol.
 
 Witness endpoints are:
 
@@ -287,26 +309,32 @@ synchronized, or globally fresh afterward.
 
 ## Witness key rotation, retirement, and recovery
 
-Signing-key, contribution-key, membership, threshold, or share-index changes
-are full prospective rotations. Create and register a fresh witness identity,
-then rerun `jury policy require witnessed` for each governed item with the exact
-next witness set. The mutation creates a new item key epoch, descriptor and body
-seals, shares, and capsules. Distribute the next policy/checkpoint and wait for
-the required per-witness acknowledgements before relying on it. Retain old
-public policy material, checkpoints, descriptors, and receipts so historical
-receipt signatures remain verifiable. Old private keys may still open old
-capsules retained in history; rotation does not erase that exposure.
+The current CLI can establish witnessed authority while the owner still has
+direct access to an item. Once the policy makes it witnessed-only,
+`jury policy require witnessed` cannot reopen its descriptor/body for another
+policy change; it has no governed rekey input and returns `item-unavailable`.
+It is not a witness replacement or label-renewal command. Owner changes have
+their own supported [administrative-access flow](owner-changes.md), which
+preserves the configured witness membership.
 
-Do not replace the key file underneath an active witness identity or initialize
-an empty database for its old ID. A same-identity restore is valid only with the
-exact protected identity, replay/checkpoint database, and matching external
-anchor described above. If that continuity cannot be proved, recovery uses a
-new witness ID, a new initial registration and anchor, an owner-signed
-`WitnessRecoveryV1` statement, and the complete owner-signed
-`WitnessPolicyRotationV1` item reseal. The old ID is retired from the next active
-policy. Missing quorum makes the item unavailable; recovery never lowers the
-threshold, resets replay/checkpoint state, synthesizes a share, or adds a direct
-slot.
+For same-identity service recovery, retain and restore the exact witness
+identity, replay/checkpoint database, and matching external anchor using the
+procedure above. Do not replace the key file under an active identity or
+initialize an empty database for its old ID. A mismatch keeps readiness false;
+a lost quorum leaves the item unavailable.
+
+The frozen protocol defines prospective signing/contribution-key rotations,
+witness retirement, `WitnessRecoveryV1`, and `WitnessPolicyRotationV1` records.
+These require a new witnessed policy, exact item reseal, and the appropriate
+signed history; the protocol types are not an end-user CLI recovery procedure.
+This release has no dedicated command for replacing a lost witness in an
+existing witnessed-only item. Do not improvise recovery by editing public
+artifacts, resetting replay/checkpoint state, lowering the threshold, or adding
+a direct slot.
+
+Retain old public policy material, checkpoints, descriptors, and receipts for
+historical verification. Key replacement cannot erase old capsules, plaintext,
+or private keys already retained by an authorized party.
 
 ## Retention, compaction, receipts, and transparency
 

@@ -7,6 +7,22 @@ is the tested runtime baseline. No macOS, Windows, ARM, or TUI artifact is
 included. This is a hard cutover of an unreleased format; recreate synthetic
 development vaults and identities instead of migrating them.
 
+## Current status
+
+The native implementation committed as `16ab899` passed the 2026-09-06 Linux
+QA: ten packaged CLI journeys on Debian 12, installation/removal, HTTPS,
+workspace checks and the bounded adversarial checks. The detailed historical
+record is `docs/qa-linux-0.0.1.md` in the source checkout/archive. The witness
+operator guide also states the current CLI policy replacement and recovery
+limits; passing QA covers the exercised operations, not every protocol-defined
+future operation.
+
+That candidate was local and unsigned. Files under ignored `target/` are not
+release downloads and may have been removed. Changing source, packaged guides,
+provider inputs or the verifier requires a newly bound candidate. The reporting
+channel and signing identity below remain unconfigured; passing QA alone does
+not publish or approve a release.
+
 ## Prepare a local candidate
 
 Use Linux x86_64, Git, Python 3.11.4+, Docker, and Cargo 1.90 or newer.
@@ -68,6 +84,33 @@ distribution. Replace this recipe and binding when a successor release changes
 the supported build or format. Checksums and this local binding establish
 consistency, not publisher identity, independent review, or secret protection.
 
+## Repeat the Linux CLI QA
+
+Run from the full source checkout against the **extracted candidate binaries**.
+The build recipe runs the owner-change journey as a smoke check; the full
+end-user pass consists of these ten journeys. They use synthetic fixtures,
+real processes, private temporary directories and PTYs, and require Python 3,
+Git, `/proc`, and a Linux account able to run the configured memory protections.
+
+```sh
+JURY_BIN=/absolute/extracted/jury-0.0.1-x86_64-unknown-linux-gnu/jury
+JURYD_BIN=/absolute/extracted/jury-0.0.1-x86_64-unknown-linux-gnu/juryd
+for journey in witness-lifecycle approval-review descriptor-access role-onboarding \
+  shared-policies diagnostics owner-changes public-labels; do
+  python3 "scripts/check-linux-$journey" --jury "$JURY_BIN" --juryd "$JURYD_BIN" || exit 1
+done
+python3 scripts/check-linux-shared-policies --disjoint --jury "$JURY_BIN" --juryd "$JURYD_BIN" || exit 1
+python3 scripts/check-linux-input-surfaces --jury "$JURY_BIN" || exit 1
+```
+
+Use Debian 12 as the native package's runtime baseline and run as an
+unprivileged user. Keep stderr and the exit status of every command. The
+loopback journeys exercise HTTP with explicit test opt-in; they do not replace
+a TLS lifecycle using an explicit synthetic CA for both service links, including
+untrusted-certificate refusal. Complete J25 and the repository's required
+verification on the exact release source as well. Do not count an old candidate's
+result as a check of a replacement archive.
+
 ## Release signing and incident handling
 
 Before publication, configure a private security-reporting contact in
@@ -96,18 +139,21 @@ through the configured private channel once it exists.
 
 ## Install and remove
 
-After verifying the release signature and checksums, extract the native archive
-and run these commands inside its directory:
+After verifying the release signature and checksums, run these commands from
+the directory containing the native archive:
 
 ```sh
+tar -xzf jury-0.0.1-x86_64-unknown-linux-gnu.tar.gz
+cd jury-0.0.1-x86_64-unknown-linux-gnu
 install -Dm755 jury ~/.local/bin/jury
 install -Dm755 juryd ~/.local/bin/juryd
+export PATH="$HOME/.local/bin:$PATH"
 jury --version
 jury --help
 juryd --help
 ```
 
-Add `~/.local/bin` to `PATH` if necessary. See the
+Persist the `PATH` addition in your shell configuration if needed. See the
 [witness operator walkthrough](witness-operator-walkthrough.md) for separate
 witness and anchor configuration. Remove the two installed binaries to
 uninstall. Data and identity directories require an explicit separate decision;

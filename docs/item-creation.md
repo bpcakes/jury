@@ -57,7 +57,8 @@ governed items; each individual approval wait remains at most 900 seconds. Unkno
 duplicate IDs, extra/missing entries, and repeated output paths are refused.
 Request and receipt paths must be absent; an existing destination returns
 `already-exists` (exit 4), separately from a malformed plan (exit 2). Approval files may be created while
-the command waits. An automatic whole-item policy needs no approval files.
+the command waits. An automatic descriptor permission needs no approval files; this includes the
+descriptor permission added by `--automatic-read FIELD`.
 `allow_insecure_loopback` defaults to false; it exists only for explicit
 synthetic loopback testing.
 

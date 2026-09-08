@@ -28,6 +28,31 @@ This document, not the snapshot, is Jury's normative plan.
 
 ## 0. How to use this plan
 
+### Current implementation status, 2026-09-07
+
+The Linux CLI and witness implementation through the active J25 checks is
+committed in `16ab899`. The ten packaged end-user QA journeys and final
+repository verification passed; the retained result is described in
+`docs/qa-linux-0.0.1.md`. J26 publication remains open for the reporting channel,
+signing identity, and a candidate bound to the intended release source.
+
+J18 is reopened as active follow-up work. The scheduling assumption is a release
+after 0.0.1, so it remains outside the current release epic and does not gate
+J26. Both rollover and suite migration remain required. The development checkout
+has tested direct and governed rollover and native suite-migration paths;
+final repository verification and reviews remain unfinished. Rollover preserves
+the current suite. The distinct AES-256-GCM HPKE suite 2 passed its supplemental
+construction/provider/conformance gate before runtime adoption. Another
+implementation of suite 1 does not supply a second suite.
+
+This document is the normative design and task sequence, including deferred
+work and protocol capabilities that do not have CLI commands. Use the
+[Linux release guide](linux-release.md) and
+[operator walkthrough](witness-operator-walkthrough.md) for executable procedures.
+In particular, the [operator limits](self-hosting-juryd.md#witness-key-rotation-retirement-and-recovery)
+separate same-identity service restore from protocol-defined witness replacement.
+Historical planning audits below do not supersede those current interface limits.
+
 ### 0.0 Witnessed-first release scope
 
 This section supersedes conflicting direct-only or deferred-witness language
@@ -54,13 +79,14 @@ elsewhere in this document.
   build inputs, and release artifacts after a fresh solo release-candidate
   verification pass. Neither gate is independent review or certification.
 - The current release has 27 active outcomes: J01A, J01B, J02-J14, J16, J17,
-  J19A-J19C, J19-J23, J25, and J26. J15 compatibility, J18 runtime rollover and
-  suite migration, and J24 TUI work are deferred post-`0.x`. Hardware-backed
+  J19A-J19C, J19-J23, J25, and J26. J18 runtime rollover and suite migration
+  are active follow-up work for a release after 0.0.1. J15 compatibility and
+  J24 TUI work remain deferred post-`0.x`. Hardware-backed
   identity protectors, managed-service topology, semantic Git merge, and
   Windows support are also deferred. These are excluded from active readiness
   and estimates and do not gate release. J19R/J19D external construction review
   and J19E external implementation/build review remain deferred optional future
-  work. J18 or J24 may be activated only through an explicit post-`0.x` scope
+  work. J24 may be activated only through an explicit post-`0.x` scope
   revision. J19R/J19D/J19E additionally require a qualified reviewer and actual
   budget. J26 may not ship by
   excluding, stubbing, or relabeling J19-J23.
@@ -153,6 +179,13 @@ Jury owns five independently versioned surfaces:
 
 The separation matters because the witness service can evolve without rewriting
 the vault, and the Jig adapter can evolve without entering Jury's domain model.
+
+J18 also extends the local audit format to allow an unscoped `Verification`
+event for authenticated rollover publication intent. Earlier binaries reject
+local audit files containing that event. Preserve the pre-rollover source and
+its local home when testing an older binary; downgrading a newly created
+destination home is unsupported. This does not change the scope binding or MAC
+of existing witnessed audit events.
 
 ### 0.5 Product promise
 
@@ -2858,11 +2891,28 @@ fingerprint, terminal source vault revision, rollover ID, and the acting source
 owner's signature over that complete bridge plus the destination vault ID and a
 canonical unsigned bootstrap-manifest digest. The manifest commits the complete
 destination principals, owners, grants, items, and ciphertext metadata created
-by its first policy revision. It excludes all signatures and the genesis
-fingerprint, avoiding a hash/signature cycle. New Jury v1 vaults omit both
-attestations, and a genesis containing both is invalid.
+by its first policy revision. New Jury v1 vaults omit both attestations, and a
+genesis containing both is invalid.
 
-Both attestation shapes are reserved format inputs for deferred J15/J18 work.
+Rollover bootstrap requires two ordered commitments. Before signing genesis,
+the unsigned bootstrap manifest commits the complete public intent and the
+fresh item ciphertext metadata that can be produced independently of genesis.
+For witnessed access it commits fresh policy/slot/seal identifiers, membership
+and keys, operation rules and both quorums. It excludes signatures and all
+genesis-derived values, including witness-policy hashes, share commitments and
+encrypted share capsules. Omitting only the explicit genesis-fingerprint field
+would still be circular: the fingerprint is authenticated inside those capsule
+bytes. After genesis exists, the acting source owner signs the complete first
+policy revision, including the final genesis-bound witness policies, capsules
+and resulting state. Verification must reconstruct the bootstrap commitment,
+authenticate that complete revision and check the source-owner bridge against
+the exact authenticated terminal source policy. A valid bridge alone is not a
+validated destination or evidence of witnessed readiness. The byte-exact
+bootstrap projection must pass the applicable construction gate before runtime
+use; the existing reserved bridge preimage alone does not specify it.
+
+Both attestation shapes are reserved format inputs for deferred J15 work and
+the J18 follow-up release.
 The first `0.x` runtime creates neither one.
 
 The owner self-signature provides integrity, not third-party identity proof.
@@ -3126,7 +3176,7 @@ cap fails with the typed `CapacityExhausted` error before any shared or local
 mutation. It reports the exhausted dimension and that the first `0.x` cannot
 advance this lineage; it never advertises an unimplemented rollover command.
 
-### 11.13 Authenticated history rollover (deferred post-`0.x`)
+### 11.13 Authenticated history rollover (planned after 0.0.1)
 
 This section reserves the future design consumed by J18. The first `0.x` has no
 rollover or suite-migration runtime path and relies on the fail-closed capacity
@@ -3832,6 +3882,13 @@ Every Jury v1 event includes safe metadata for that selected principal:
 - previous MAC and MAC.
 
 Never record field values.
+
+An unscoped verification event records a local check with neither an item nor a
+witness link. A witnessed verification requires both scopes; removing them from
+an existing event invalidates its MAC. Rollover preparation uses an unscoped
+verification operation ID to authenticate its exact publication intent before
+external writes. That event does not assert that publication, registration or
+remote freshness has already succeeded.
 
 Continue recording accessible field references where the selected principal
 already decrypted the item and the action-specific projection permits it.
@@ -5764,9 +5821,9 @@ J11 + J14 + J16 + J17 + J20 + J21 + J22 + J23
   -> J25 adversarial corpus + benchmarks
 J22 + J23 + J25 -> J26 experimental witnessed release
 
+Active follow-up after 0.0.1: J11 + J16 + J17 + J23 -> J18 rollover + suite migration
 Deferred post-0.x only: J03 + J05 + J06 + J07 + J09 + J10 -> J15 compatibility
-                         J11 + J16 + J17 + J23 -> J18 rollover + suite migration
-                         J10 + J13 + J16 + J17 + J18 + J22 + J23 -> J24 TUI
+                       J10 + J13 + J16 + J17 + J18 + J22 + J23 -> J24 TUI
 Deferred optional external review: J19B -> J19R reviewer engagement
                                    J19C + J19R -> J19D construction review
                                    J19D + J25 -> J19E implementation/build review
@@ -5778,11 +5835,12 @@ Every task-local `Unblocks` list below names immediate blocking-edge consumers,
 not merely transitive downstream outcomes. Tracker metadata is the executable
 source for those edges and must remain identical to the task-local list.
 
-J01A and J12 have completed their task-local acceptance checks. J01A unblocks
-J01B, J03, and J05; J12 supplies the process boundary consumed later by J14.
-J19A remains blocked by J01B and J03. J19C feeds the exact-artifact J19 gate
-that blocks the format and witnessed path. Deferred branches have no edge back
-into the active release path.
+The active implementation tasks through J25 have completed their task-local
+acceptance checks. J01A/J01B and J19 are accepted construction-input gates;
+J19A is no longer blocked on primitive work. The dependency edges above explain
+the implementation order and remain relevant if an input must be reopened.
+Follow-up and deferred branches have no edge back into the 0.0.1 release path.
+J26 retains the final source/build binding and publication work.
 
 J26 is the active release join and is not allowed to hide incomplete active
 children. J19-J23 and J25 remain mandatory release dependencies. J15, J18, J24,
@@ -5800,13 +5858,13 @@ gates.
 | Deferred witnessed access TUI | J24 |
 | Release | J25-J26 |
 
-J15, J18, and J24 are deferred standalone post-`0.x` outcomes. J19R/J19D and
-J19E are deferred standalone optional external-review outcomes. None is a
-descendant of the active Jury release epic; all are excluded from active
-readiness and estimate rollups. J15 may be reactivated only after J26 under a
-separately approved post-`0.x` scope. J18 and J24 require an explicit later
-product scope. J19R/J19D/J19E additionally require a qualified reviewer and
-actual budget.
+J18 is open standalone work for a release after 0.0.1. J15 and J24 remain
+deferred standalone post-`0.x` outcomes. J19R/J19D and J19E remain deferred
+standalone optional external-review outcomes. None is a descendant of the
+current Jury release epic; all are excluded from its readiness and estimate
+rollups. J15 may be reactivated only after J26 under a separately approved
+post-`0.x` scope. J24 requires an explicit later product scope.
+J19R/J19D/J19E additionally require a qualified reviewer and actual budget.
 
 ### 24.3 Jury Beads mapping
 
@@ -6059,7 +6117,7 @@ accidental omission.
 | B17 config, status, contract, guidance | Changed | J13, J21, J23, J26, Jig D02-D09 | Jury owns native/server contracts and docs; Jig owns adapter discovery, rollout, deprecation, and removal. |
 | B18 adversarial corpus and budgets | Covered | J25 | The corpus expands to witness, server, receipt, cancellation, and database boundaries. |
 | B19 integration and release | Changed | J25, J26, Jig D07-D09 | Jury release assurance and Jig cutover/dogfood are separate, evidence-gated outcomes. |
-| B20 capacity and rollover | Changed | J11, J18 | J11 actively refuses mutations at hard caps; J18 rollover and suite migration are deferred. |
+| B20 capacity and rollover | Changed | J11, J18 | J11 actively refuses mutations at hard caps; J18 rollover and suite migration are open follow-up work after 0.0.1. |
 
 The Jig tracker may close B01-B20 and their parent as superseded only after the
 live Jury Beads contain the task contracts below, the live dependency graph
@@ -7243,7 +7301,7 @@ Acceptance:
 
 Dependencies: J05, J06, J07, J09, J10.
 
-Unblocks: J25. J18 and J24 only if their deferred scopes are activated.
+Unblocks: J25 and follow-up J18. J24 only if its deferred scope is activated.
 
 ### J17 — Deliver owner backup, restore, and recovery drills
 
@@ -7313,16 +7371,43 @@ Acceptance:
 
 Dependencies: J04, J07, J09, J10.
 
-Unblocks: J25. J18 and J24 only if their deferred scopes are activated.
+Unblocks: J25 and follow-up J18. J24 only if its deferred scope is activated.
 
 ### J18 — Implement authenticated rollover and suite migration
 
 Release status:
 
-J18 is deferred and out of scope for the first `0.x`. J11 owns all active
-capacity preflight and fails before mutation at a hard cap. J18 may be
-reactivated only through an explicit post-`0.x` rollover and suite-migration
-scope; it does not block J25 or J26.
+J18 was reopened on 2026-09-07 as active follow-up work, targeting a release
+after 0.0.1 under the stated scheduling assumption. Its J11/J16/J17/J23
+dependencies are complete. It stays outside the current release epic and does
+not block J25 or J26. J11 owns the implemented capacity preflight and fails
+before mutation at a hard cap.
+
+Implement rollover with the current suite first. Suite migration remains a
+required deliverable, but a distinct destination suite must be selected,
+specified and validated through the applicable J01A/J01B/J19 gates before its
+cryptographic implementation. Do not substitute another provider of suite 1 or
+close J18 for rollover alone. The reserved format records are not an implemented
+runtime or evidence of a completed migration.
+
+The 2026-09-07 implementation-readiness audit found that the reserved bootstrap
+description did not account for the genesis dependency inside witnessed
+capsules. Section 11.3 now requires an explicit two-phase construction. Its
+exact suite-1 encoding and projection are now specified in
+`docs/security/rollover-v1.md` and checked by `scripts/check-rollover-inputs`.
+The separate destination-suite gate remains an implementation prerequisite;
+closed J11/J16/J17/J23 dependencies do not satisfy it. Direct and governed
+rollover, exact-candidate recovery and retained bootstrap verification now pass
+targeted tests, including actual backup restore and witnessed destination reads.
+A real TLS witness/anchor test verifies one endpoint's registration across abrupt
+restarts and refuses a one-sided SQLite restore. Bootstrap v2 preserves separate
+active source-policy revisions and inactive public scopes. The distinct suite-2
+gate passed before its runtime adapter landed in the working tree; direct
+migration and same-suite rollover, governed capsule reconstruction and portable
+transfer tests pass. Native direct backup restore and governed Recovery approvals,
+partial registration recovery, witnessed destination read and backup opening pass.
+The J18 task and checked-in ExecPlan record verification and review status.
+These capabilities remain externally unreviewed pre-alpha software.
 
 Why this task exists:
 
@@ -8088,7 +8173,7 @@ Acceptance:
 
 Dependencies: J19, J20, J21.
 
-Unblocks: J22, J25, and J26. J18 and J24 only if their deferred scopes are
+Unblocks: J22, J25, J26, and follow-up J18. J24 only if its deferred scope is
 activated.
 
 ### J24 — Deliver the witnessed access-aware CLI-backed TUI

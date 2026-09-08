@@ -140,6 +140,7 @@ impl ItemAccessProvider for WitnessedItemAccessProvider<'_> {
 
         let approved = approved.into_values().collect::<Vec<_>>();
         let Some((secret, counted_response_indices)) = reconstruct_revision_secret(
+            request.policy.suite(),
             self.session,
             self.checkpoint,
             self.signed_request,
@@ -200,7 +201,7 @@ fn preflight_witnessed(
     signed: &WitnessRequestV1,
 ) -> Result<(), AccessProviderError> {
     let target = &request.target;
-    if target.suite != SUITE
+    if target.suite != request.policy.suite()
         || target.vault_id != request.policy.vault_id()
         || target.item_id != request.envelope.item_id
         || target.principal_id != signed.requester_principal_id
@@ -258,6 +259,7 @@ fn preflight_witnessed(
 }
 
 fn reconstruct_revision_secret(
+    suite: u16,
     session: &RequestSessionIdentity,
     checkpoint: &VaultPolicyCheckpointV1,
     request: &WitnessRequestV1,
@@ -283,26 +285,22 @@ fn reconstruct_revision_secret(
         else {
             continue;
         };
-        let mut info = jce("jury-witness-v1/contribution/info");
-        info.extend_from_slice(request_digest.as_bytes());
-        info.extend_from_slice(manifest_digest.as_bytes());
-        info.extend_from_slice(contribution.response_id.as_bytes());
-        info.extend_from_slice(response.decision.witness_id.as_bytes());
-        info.extend_from_slice(request.witness_policy_digest.as_bytes());
-        info.extend_from_slice(checkpoint_digest.as_bytes());
-        info.extend_from_slice(contribution.share_commitment.as_bytes());
-        info.push(contribution.share_index);
-        let mut aad = jce("jury-witness-v1/contribution/aad");
-        aad.extend_from_slice(contribution.capsule_set_digest.as_bytes());
-        aad.extend_from_slice(contribution.capsule_context_digest.as_bytes());
-        aad.extend_from_slice(request.request_session_key_fingerprint.as_bytes());
-        aad.extend_from_slice(&request.expires_at_ms.to_be_bytes());
-        let Ok(share) = crypto::open_hpke(
+        let suite = VaultSuite::from_id(suite).ok_or_else(|| AccessProviderError::new(AccessProviderErrorKind::InvalidRequest))?;
+        let context = ContributionHpkeContext {
+            suite, request_digest: request_digest.clone(), action_manifest_digest: manifest_digest.clone(),
+            response_id: contribution.response_id, witness_id: response.decision.witness_id,
+            witness_policy_digest: request.witness_policy_digest.clone(), checkpoint_digest: checkpoint_digest.clone(),
+            share_commitment: contribution.share_commitment.clone(), share_index: contribution.share_index,
+            capsule_set_digest: contribution.capsule_set_digest.clone(), capsule_context_digest: contribution.capsule_context_digest.clone(),
+            session_fingerprint: request.request_session_key_fingerprint.clone(), expires_at_ms: request.expires_at_ms,
+        };
+        let Ok(share) = crypto::open_hpke_for_suite(
+            suite,
             &session.private_key,
             &contribution.encapsulation,
             contribution.ciphertext.as_bytes(),
-            &info,
-            &aad,
+            &context.info_preimage(),
+            &context.aad_preimage(),
             33,
         ) else {
             continue;

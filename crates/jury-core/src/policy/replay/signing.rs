@@ -32,7 +32,7 @@ pub(super) fn create_with_test_signer<R: RandomSource>(
     created_at_ms: u64,
     vault_is_known: impl FnMut(&VaultId) -> bool,
 ) -> Result<CreatedPolicy, PolicyError> {
-    creator.create_with_signer(signer, created_at_ms, vault_is_known)
+    creator.create_with_signer(VaultSuite::Suite1, signer, created_at_ms, vault_is_known)
 }
 
 #[cfg(test)]

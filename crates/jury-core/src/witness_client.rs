@@ -1,6 +1,7 @@
 //! Endpoint-side construction of exact, request-session-bound witness requests.
 
 mod presentation;
+mod recovery;
 
 use std::fmt;
 
@@ -190,6 +191,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             role,
             field_id,
             OperationContextV1::ReadStdout,
+            None,
         )
     }
 
@@ -218,6 +220,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
                 target_principal_id,
                 next_vault_policy_sequence,
             },
+            None,
         )
     }
 
@@ -227,7 +230,8 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
         item_id: ItemId,
         content_role: ContentRole,
         field_id: Option<FieldId>,
-        operation_context: OperationContextV1,
+        mut operation_context: OperationContextV1,
+        output_destination: Option<&OperationBytes>,
     ) -> Result<PreparedWitnessRequest, WitnessRequestError> {
         let subject_kind = if field_id.is_some() {
             PresentationSubjectV1::Field
@@ -273,7 +277,7 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             )
             .effective_role
             .ok_or_else(|| WitnessRequestError::new(WitnessRequestErrorKind::WrongIdentity))?;
-        let (presentation, presentation_commitment) = if rule.approval_threshold == 0 {
+        let (mut presentation, presentation_commitment) = if rule.approval_threshold == 0 {
             (ApprovalPresentationV1::default(), Digest32::new([0; 32]))
         } else {
             let label = review_labels
@@ -320,6 +324,27 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
                 },
                 commitment,
             )
+        };
+        let output_sink_commitment = if let Some(destination) = output_destination {
+            let entry =
+                self.normalized_presentation_entry(PresentationSubjectV1::OutputSink, destination)?;
+            let commitment = entry.subject_commitment.clone().ok_or_else(|| {
+                WitnessRequestError::new(WitnessRequestErrorKind::InvalidPresentation)
+            })?;
+            let OperationContextV1::Recovery {
+                destination_commitment,
+                ..
+            } = &mut operation_context
+            else {
+                return Err(WitnessRequestError::new(
+                    WitnessRequestErrorKind::InvalidInput,
+                ));
+            };
+            *destination_commitment = commitment.clone();
+            presentation.entries.push(entry);
+            Some(commitment)
+        } else {
+            None
         };
         let presentation_digest = presentation
             .digest()
@@ -368,12 +393,12 @@ impl<R: RandomSource> WitnessRequestCreator<R> {
             environment_injections: Vec::new(),
             stdin_target: None,
             stdin_mode: StdinModeV1::None,
-            output_sink: if operation == WitnessOperationV1::AdministrativeRekey {
-                OutputSinkV1::None
-            } else {
-                OutputSinkV1::Stdout
+            output_sink: match operation {
+                WitnessOperationV1::AdministrativeRekey => OutputSinkV1::None,
+                WitnessOperationV1::Recovery => OutputSinkV1::PrivateFile,
+                _ => OutputSinkV1::Stdout,
             },
-            output_sink_commitment: None,
+            output_sink_commitment,
             platform_assurance: protocol_platform_assurance(rule.required_platform_assurance),
             timeout_ms: 0,
             output_limit_bytes: 0,

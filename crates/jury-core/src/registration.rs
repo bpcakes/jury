@@ -24,6 +24,13 @@ use crate::policy::{
     WitnessPolicyDescriptor, signing_key_fingerprint,
 };
 
+mod roles;
+mod rollover;
+mod verification;
+use roles::{create_role_descriptor, validate_role_descriptor};
+pub use rollover::answer_rollover_challenge;
+pub use verification::verify_proof_signatures;
+
 const CHALLENGE_VERSION: u16 = 1;
 const PROOF_VERSION: u16 = 1;
 const MAX_REGISTRATION_ARTIFACT_BYTES: usize = 16 * 1024;
@@ -499,49 +506,20 @@ pub fn verify_proof(
     proof: &RegistrationProofV1,
     now_ms: u64,
 ) -> Result<Digest32, RegistrationError> {
-    challenge.validate_shape()?;
-    if !policy.is_owner(&owner.principal_id())
-        || challenge.owner_principal_id != owner.principal_id()
-        || challenge.vault_id != policy.vault_id()
-        || challenge.genesis_fingerprint != *policy.genesis_fingerprint()
+    if challenge.owner_principal_id != owner.principal_id()
+        || policy
+            .principal(&owner.principal_id())
+            .map(|entry| &entry.descriptor)
+            != Some(
+                &owner.public_descriptor().map_err(|_| {
+                    RegistrationError::new(RegistrationErrorKind::AuthenticationFailed)
+                })?,
+            )
     {
         return Err(RegistrationError::new(RegistrationErrorKind::Unauthorized));
     }
-    if now_ms < challenge.issued_at_ms || now_ms > challenge.expires_at_ms {
-        return Err(RegistrationError::new(RegistrationErrorKind::Expired));
-    }
-    let owner_descriptor = owner
-        .public_descriptor()
-        .map_err(|_| RegistrationError::new(RegistrationErrorKind::AuthenticationFailed))?;
-    crypto::verify_bytes(
-        &owner_descriptor.verification_public_key,
-        &challenge.signed_preimage()?,
-        &challenge.owner_signature,
-    )
-    .map_err(|_| RegistrationError::new(RegistrationErrorKind::AuthenticationFailed))?;
+    let proof_digest = verify_proof_signatures(policy, challenge, proof, now_ms)?;
     let challenge_digest = challenge.digest()?;
-    if proof.version != PROOF_VERSION
-        || proof.challenge != *challenge
-        || proof.challenge_digest != challenge_digest
-        || proof.candidate_principal_id != challenge.candidate_descriptor.principal_id
-        || proof.created_at_ms < challenge.issued_at_ms
-        || proof.created_at_ms > now_ms
-    {
-        return Err(RegistrationError::new(
-            RegistrationErrorKind::InvalidArtifact,
-        ));
-    }
-    validate_role_descriptor(
-        &challenge.candidate_descriptor,
-        &challenge.role_profile,
-        &proof.role_descriptor,
-    )?;
-    crypto::verify_bytes(
-        &challenge.candidate_descriptor.verification_public_key,
-        &proof.signed_preimage()?,
-        &proof.candidate_signature,
-    )
-    .map_err(|_| RegistrationError::new(RegistrationErrorKind::AuthenticationFailed))?;
     let (info, aad) = challenge.capsule_context(2)?;
     let response = owner
         .open_registration_capsule(
@@ -557,7 +535,7 @@ pub fn verify_proof(
             RegistrationErrorKind::AuthenticationFailed,
         ));
     }
-    proof.digest()
+    Ok(proof_digest)
 }
 
 fn validate_descriptor(descriptor: &PrincipalDescriptorV1) -> Result<(), RegistrationError> {
@@ -574,130 +552,6 @@ fn validate_descriptor(descriptor: &PrincipalDescriptorV1) -> Result<(), Registr
         &descriptor.self_signature,
     )
     .map_err(|_| RegistrationError::new(RegistrationErrorKind::InvalidDescriptor))
-}
-
-fn create_role_descriptor(
-    identity: &UnlockedIdentity,
-    principal: &PrincipalDescriptorV1,
-    profile: &RegistrationRoleProfileV1,
-    created_at_ms: u64,
-) -> Result<RegistrationRoleDescriptorV1, RegistrationError> {
-    match profile {
-        RegistrationRoleProfileV1::VaultPrincipal => {
-            Ok(RegistrationRoleDescriptorV1::VaultPrincipal)
-        }
-        RegistrationRoleProfileV1::Approver => {
-            let allowed_operations = vec![
-                WitnessOperation::ReadStdout,
-                WitnessOperation::WritePrivateFile,
-                WitnessOperation::TemplateInjection,
-                WitnessOperation::ChildEnvironment,
-                WitnessOperation::ChildStdin,
-                WitnessOperation::ItemMutation,
-                WitnessOperation::Backup,
-                WitnessOperation::Recovery,
-                WitnessOperation::AdministrativeRekey,
-            ];
-            let mut descriptor = ApproverPolicyDescriptor {
-                schema: 1,
-                approver_id: principal.principal_id,
-                signing_public_key: principal.verification_public_key.clone(),
-                signing_key_fingerprint: signing_key_fingerprint(
-                    2,
-                    &principal.principal_id,
-                    1,
-                    &principal.verification_public_key,
-                ),
-                signing_key_epoch: 1,
-                status: DescriptorStatus::Active,
-                approval_mode: ApprovalMode::Human,
-                allowed_operations,
-                created_at_ms,
-                self_signature: Signature64::new([0; 64]),
-            };
-            descriptor.self_signature = identity
-                .sign_registration_statement(&descriptor.self_signature_preimage().map_err(
-                    |_| RegistrationError::new(RegistrationErrorKind::InvalidDescriptor),
-                )?)
-                .map_err(|_| RegistrationError::new(RegistrationErrorKind::AuthenticationFailed))?;
-            Ok(RegistrationRoleDescriptorV1::Approver { descriptor })
-        }
-        RegistrationRoleProfileV1::Witness { share_index } => {
-            let mut descriptor = WitnessPolicyDescriptor {
-                schema: 1,
-                witness_id: principal.principal_id,
-                share_index: *share_index,
-                signing_public_key: principal.verification_public_key.clone(),
-                signing_key_fingerprint: signing_key_fingerprint(
-                    3,
-                    &principal.principal_id,
-                    1,
-                    &principal.verification_public_key,
-                ),
-                signing_key_epoch: 1,
-                contribution_public_key: principal.recipient_public_key.clone(),
-                contribution_key_fingerprint: recipient_public_key_fingerprint(
-                    &principal.recipient_public_key,
-                ),
-                contribution_key_epoch: 1,
-                status: DescriptorStatus::Active,
-                created_at_ms,
-                self_signature: Signature64::new([0; 64]),
-            };
-            descriptor.self_signature = identity
-                .sign_registration_statement(&descriptor.self_signature_preimage().map_err(
-                    |_| RegistrationError::new(RegistrationErrorKind::InvalidDescriptor),
-                )?)
-                .map_err(|_| RegistrationError::new(RegistrationErrorKind::AuthenticationFailed))?;
-            Ok(RegistrationRoleDescriptorV1::Witness {
-                descriptor: Box::new(descriptor),
-            })
-        }
-    }
-}
-
-fn validate_role_descriptor(
-    principal: &PrincipalDescriptorV1,
-    profile: &RegistrationRoleProfileV1,
-    role: &RegistrationRoleDescriptorV1,
-) -> Result<(), RegistrationError> {
-    let valid = match (profile, role) {
-        (
-            RegistrationRoleProfileV1::VaultPrincipal,
-            RegistrationRoleDescriptorV1::VaultPrincipal,
-        ) => matches!(
-            principal.principal_kind,
-            PrincipalKind::Human | PrincipalKind::Machine
-        ),
-        (
-            RegistrationRoleProfileV1::Approver,
-            RegistrationRoleDescriptorV1::Approver { descriptor },
-        ) => {
-            principal.principal_kind == PrincipalKind::Approver
-                && descriptor.approver_id == principal.principal_id
-                && descriptor.signing_public_key == principal.verification_public_key
-                && descriptor.validate().is_ok()
-        }
-        (
-            RegistrationRoleProfileV1::Witness { share_index },
-            RegistrationRoleDescriptorV1::Witness { descriptor },
-        ) => {
-            principal.principal_kind == PrincipalKind::Witness
-                && descriptor.witness_id == principal.principal_id
-                && descriptor.share_index == *share_index
-                && descriptor.signing_public_key == principal.verification_public_key
-                && descriptor.contribution_public_key == principal.recipient_public_key
-                && descriptor.validate().is_ok()
-        }
-        _ => false,
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err(RegistrationError::new(
-            RegistrationErrorKind::InvalidDescriptor,
-        ))
-    }
 }
 
 fn append_bounded_json(

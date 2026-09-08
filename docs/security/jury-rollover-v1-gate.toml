@@ -1,0 +1,67 @@
+schema = "jury-rollover-inputs-v2"
+status = "accepted-for-implementation"
+checked_at = "2026-09-07"
+suite = 1
+bootstrap_versions = [1, 2]
+supersedes_gate_sha256 = "36768074e446147b3b2e99d7d630d0b7e83a7b7c2b31f401071cdbf0f965548a"
+consumer = "J18"
+pre_alpha = true
+independently_reviewed = false
+defect_class = "circular bootstrap commitment, ambiguous active policy revisions, and exact input drift"
+supersession_condition = "Replace when these rollover formats are superseded or retired; preserve accepted v1 bytes while artifacts remain readable."
+
+[[bindings]]
+path = "conformance/rollover-v1/encoding.py"
+sha256 = "b9595bb059e7fec8318ca786999249c89b3f606cd4519f728795e971f5a7fed9"
+
+[[bindings]]
+path = "conformance/rollover-v1/intent-vectors.json"
+sha256 = "71b5f93ab60410066e92bdc8ce90fb4978e398c806bad33e7b6f70340c937e94"
+
+[[bindings]]
+path = "conformance/rollover-v1/vectors.json"
+sha256 = "d06207d18832198822527045b47e14ba0699a77ffe31af855fd202df9e316d86"
+
+[[bindings]]
+path = "conformance/rollover-v2/encoding.py"
+sha256 = "ec279f987f92dbb4aca01054bc50f554fa19474901c6d3a5880eb44c48b37b15"
+
+[[bindings]]
+path = "conformance/rollover-v2/vectors.json"
+sha256 = "3be924ad7d6bb88c35259c8bd8afa5a53ae3fcae49c8fde35ab2a12df669e6f1"
+
+[[bindings]]
+path = "crates/jury-core/src/rollover/intent.rs"
+sha256 = "6d4aa73d109839bc01c66b17a1b564b00530963e6381f0cce88ee8ac2a29729f"
+
+[[bindings]]
+path = "crates/jury-core/src/rollover/intent_tests.rs"
+sha256 = "b6a546d3a6e7c064934d2a6f98dfa4235953be464f4ecf0dc46529dc83c13851"
+
+[[bindings]]
+path = "crates/jury-protocol/src/rollover_v1.rs"
+sha256 = "7cc595f233b3c8ad5d76c71c8322c05dbd9de94254b01c2cded7dee778f2a14e"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/rollover_v1.rs"
+sha256 = "be72581041f87fa2e396d8ff2262291d74c37085692aaebf99c7808962a5290f"
+
+[[bindings]]
+path = "crates/jury-protocol/tests/rollover_v2.rs"
+sha256 = "1ca7a80f786d10fb863c473097cb3f0569280da005ad904233f7a14c8eaf5146"
+
+[[bindings]]
+path = "docs/security/rollover-v1.md"
+sha256 = "cdddcc7bd72280d18535aea3a92fa2502c18503fb915378e045d79f4da08f392"
+
+[[bindings]]
+path = "docs/security/rollover-v2.md"
+sha256 = "4a1b23cf84c7fff9c7c7e04f4a56e27c024cb4e3f3eb70978f97cde0d67bb0c6"
+
+[[bindings]]
+path = "scripts/check-rollover-inputs"
+sha256 = "5dbf3d24eadc31c53d2df6756b56ed3cd2e657c3597630768b7d1219e02cb85c"
+
+[[bindings]]
+path = "scripts/test-rollover-inputs.py"
+sha256 = "a5bdb7b70dc8b95aabf9a4edad93a03e4fc363b78413227d643181a98bc522b7"

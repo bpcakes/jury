@@ -186,6 +186,11 @@ pub struct PolicyState {
 
 impl PolicyState {
     #[must_use]
+    pub const fn suite(&self) -> u16 {
+        self.suite
+    }
+
+    #[must_use]
     pub const fn vault_id(&self) -> VaultId {
         self.vault_id
     }

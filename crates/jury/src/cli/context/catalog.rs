@@ -105,48 +105,48 @@ impl PolicyCatalogV1 {
         Ok(())
     }
 
+    pub(in crate::cli) fn replay_for_vault(
+        &self,
+        vault: &VaultFileV1,
+    ) -> Result<PolicyState, CliError> {
+        if matches!(
+            &vault.policy.genesis.source_attestation,
+            Some(jury_protocol::vault_v1::SourceAttestationV1::Rollover { .. })
+        ) {
+            self.portable_catalog()?
+                .for_vault_with_policy(vault)
+                .map(|(_, policy)| policy)
+                .map_err(|error| {
+                    if error.kind() == jury_core::transfer::TransferErrorKind::InvalidVault {
+                        invalid_vault()
+                    } else {
+                        map_portable_error(error)
+                    }
+                })
+        } else {
+            replay_policy_with_witness_policies(&vault.policy, &self.witness_policies)
+                .map_err(|_| invalid_vault())
+        }
+    }
+
     pub(in crate::cli) fn transfer_catalog(
         &self,
-        policy: &PolicyState,
+        vault: &VaultFileV1,
     ) -> Result<TransferPublicCatalogV1, CliError> {
-        let mut proofs = self
-            .registration_proofs
-            .iter()
-            .filter(|proof| {
-                policy
-                    .principal(&proof.candidate_principal_id)
-                    .is_some_and(|principal| {
-                        matches!(
-                            principal.descriptor.principal_kind,
-                            PrincipalKind::Approver | PrincipalKind::Witness
-                        )
-                    })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        self.portable_catalog()?
+            .for_vault(vault)
+            .map_err(map_portable_error)
+    }
+
+    fn portable_catalog(&self) -> Result<TransferPublicCatalogV1, CliError> {
+        let mut proofs = self.registration_proofs.clone();
         proofs.sort_by_key(|proof| proof.candidate_principal_id);
-        let required = policy
-            .principals()
-            .filter(|(_, principal)| {
-                matches!(
-                    principal.descriptor.principal_kind,
-                    PrincipalKind::Approver | PrincipalKind::Witness
-                )
-            })
-            .count();
-        if proofs.len() != required {
-            return Err(CliError::new(
-                CliErrorKind::Conflict,
-                "portable-registration-proof-missing",
-                "an active approver or witness lacks portable registration proof evidence",
-            ));
-        }
         TransferPublicCatalogV1::with_review_label_sets(
             proofs,
             self.witness_policies.clone(),
             self.review_label_sets.clone(),
         )
-        .map_err(|_| invalid_policy_catalog())
+        .map_err(map_portable_error)
     }
 
     pub(in crate::cli) fn merge_transfer(
@@ -191,5 +191,17 @@ impl PolicyCatalogV1 {
         });
         self.review_label_sets.sort_by_key(|set| set.digest.clone());
         self.validate()
+    }
+}
+
+fn map_portable_error(error: jury_core::transfer::TransferError) -> CliError {
+    if error.kind() == jury_core::transfer::TransferErrorKind::MissingRegistrationProof {
+        CliError::new(
+            CliErrorKind::Conflict,
+            "portable-registration-proof-missing",
+            "a required active or rollover bootstrap role lacks portable registration proof evidence",
+        )
+    } else {
+        invalid_policy_catalog()
     }
 }

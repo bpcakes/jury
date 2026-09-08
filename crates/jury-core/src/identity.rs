@@ -6,6 +6,7 @@
 use std::fmt;
 
 use jury_protected::{OsRandom, ProtectedMemory, RandomSource};
+use jury_protocol::hpke_context::{ContributionHpkeContext, VaultSuite};
 use jury_protocol::witness_v1::WitnessContributionEnvelopeV1;
 use jury_protocol::{
     identity_v1::{
@@ -35,6 +36,7 @@ const LOCAL_SEED_RANGE: std::ops::Range<usize> = 101..133;
 
 mod error;
 mod recovery;
+mod witness;
 
 pub use error::{IdentityError, IdentityErrorKind};
 pub use recovery::RecoveredIdentity;
@@ -239,6 +241,7 @@ pub(crate) struct ProtectedRevisionSecret {
 
 /// One revision-scoped witness share which has no byte-export API.
 pub(crate) struct ProtectedWitnessShare {
+    suite: VaultSuite,
     pub(crate) bytes: ProtectedMemory,
     witness_id: WirePrincipalId,
     witness_policy_digest: Digest32,
@@ -271,124 +274,6 @@ pub(crate) struct EncryptedWitnessContribution {
     pub session_fingerprint: Digest32,
     pub encapsulation: Encapsulation1120,
     pub ciphertext: ShareCiphertext49,
-}
-
-impl ProtectedRevisionSecret {
-    pub(crate) fn memory(&self) -> &ProtectedMemory {
-        &self.bytes
-    }
-}
-
-impl ProtectedWitnessShare {
-    /// Consumes the share into one request-session encrypted J19 envelope.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the engine uses the injected-randomness variant")
-    )]
-    pub(crate) fn seal_for_request(
-        self,
-        target: &WitnessContributionTarget,
-    ) -> Result<EncryptedWitnessContribution, IdentityError> {
-        self.seal_for_request_with_source(target, &mut OsRandom)
-    }
-
-    pub(crate) fn seal_for_request_with_source(
-        self,
-        target: &WitnessContributionTarget,
-        source: &mut (impl RandomSource + ?Sized),
-    ) -> Result<EncryptedWitnessContribution, IdentityError> {
-        if target.expires_at_ms == 0
-            || target.session_fingerprint
-                != recipient_public_key_fingerprint(&target.session_public_key)
-        {
-            return Err(IdentityError::new(IdentityErrorKind::Format));
-        }
-        let mut info = identity_jce("jury-witness-v1/contribution/info");
-        info.extend_from_slice(target.request_digest.as_bytes());
-        info.extend_from_slice(target.action_manifest_digest.as_bytes());
-        info.extend_from_slice(target.response_id.as_bytes());
-        info.extend_from_slice(self.witness_id.as_bytes());
-        info.extend_from_slice(self.witness_policy_digest.as_bytes());
-        info.extend_from_slice(target.checkpoint_digest.as_bytes());
-        info.extend_from_slice(self.share_commitment.as_bytes());
-        info.push(self.share_index);
-
-        let mut aad = identity_jce("jury-witness-v1/contribution/aad");
-        aad.extend_from_slice(target.capsule_set_digest.as_bytes());
-        aad.extend_from_slice(self.context_digest.as_bytes());
-        aad.extend_from_slice(target.session_fingerprint.as_bytes());
-        aad.extend_from_slice(&target.expires_at_ms.to_be_bytes());
-        let (encapsulation, ciphertext) =
-            crypto::seal_hpke(&target.session_public_key, &self.bytes, &info, &aad, source)
-                .map_err(map_crypto_error)?;
-        Ok(EncryptedWitnessContribution {
-            response_id: target.response_id,
-            share_index: self.share_index,
-            share_commitment: self.share_commitment,
-            context_digest: self.context_digest,
-            capsule_set_digest: target.capsule_set_digest.clone(),
-            session_fingerprint: target.session_fingerprint.clone(),
-            encapsulation,
-            ciphertext: ShareCiphertext49::from_slice(&ciphertext)
-                .map_err(|_| IdentityError::new(IdentityErrorKind::ProviderFailure))?,
-        })
-    }
-}
-
-impl EncryptedWitnessContribution {
-    #[must_use]
-    pub(crate) fn canonical_bytes(&self) -> Vec<u8> {
-        let mut output = Vec::with_capacity(1_332);
-        output.extend_from_slice(&1_u16.to_be_bytes());
-        output.extend_from_slice(self.response_id.as_bytes());
-        output.push(self.share_index);
-        output.extend_from_slice(self.share_commitment.as_bytes());
-        output.extend_from_slice(self.context_digest.as_bytes());
-        output.extend_from_slice(self.capsule_set_digest.as_bytes());
-        output.extend_from_slice(self.session_fingerprint.as_bytes());
-        output.extend_from_slice(self.encapsulation.as_bytes());
-        output.extend_from_slice(self.ciphertext.as_bytes());
-        output
-    }
-
-    #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "covered by the public envelope")
-    )]
-    pub(crate) fn digest(&self) -> Digest32 {
-        let envelope = self.canonical_bytes();
-        let mut preimage = identity_jce("jury-witness-v1/contribution/hash");
-        preimage.extend_from_slice(&(envelope.len() as u32).to_be_bytes());
-        preimage.extend_from_slice(&envelope);
-        Digest32::new(Sha256::digest(preimage).into())
-    }
-
-    pub(crate) fn into_protocol(self) -> WitnessContributionEnvelopeV1 {
-        WitnessContributionEnvelopeV1 {
-            schema: 1,
-            response_id: self.response_id,
-            share_index: self.share_index,
-            share_commitment: self.share_commitment,
-            capsule_context_digest: self.context_digest,
-            capsule_set_digest: self.capsule_set_digest,
-            request_session_key_fingerprint: self.session_fingerprint,
-            encapsulation: self.encapsulation,
-            ciphertext: self.ciphertext,
-        }
-    }
-}
-
-impl fmt::Debug for ProtectedRevisionSecret {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ProtectedRevisionSecret([REDACTED])")
-    }
-}
-
-impl fmt::Debug for ProtectedWitnessShare {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ProtectedWitnessShare([REDACTED])")
-    }
 }
 
 pub enum UnlockedIdentity {
@@ -510,17 +395,18 @@ impl VaultPrincipalIdentity {
         open_registration_capsule(&self.0, encapsulation, ciphertext, info, aad)
     }
 
-    /// Opens one suite-1 direct slot bound to this exact identity.
+    /// Opens one authenticated direct slot bound to this exact identity.
     pub(crate) fn open_direct_slot(
         &self,
         slot: &DirectSlotV1,
     ) -> Result<ProtectedRevisionSecret, IdentityError> {
+        let suite = VaultSuite::from_id(slot.suite)
+            .ok_or_else(|| IdentityError::new(IdentityErrorKind::Format))?;
         if slot.slot_schema != 1
             || slot.slot_algorithm != 1
-            || slot.suite != 1
             || slot.kem != 0x647a
             || slot.kdf != 1
-            || slot.aead != 3
+            || slot.aead != suite.hpke_aead()
             || slot.revision == 0
             || !matches!(
                 slot.item_access_mode,
@@ -536,7 +422,8 @@ impl VaultPrincipalIdentity {
             return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
         }
         let private_seed = payload_component(&self.0.payload, RECIPIENT_SEED_RANGE)?;
-        let bytes = crypto::open_hpke(
+        let bytes = crypto::open_hpke_for_suite(
+            suite,
             &private_seed,
             &slot.encapsulation,
             slot.ciphertext.as_bytes(),
@@ -559,74 +446,6 @@ fn open_registration_capsule(
     let private_seed = payload_component(&secrets.payload, RECIPIENT_SEED_RANGE)?;
     crypto::open_hpke(&private_seed, encapsulation, ciphertext, info, aad, 32)
         .map_err(map_crypto_error)
-}
-
-impl WitnessIdentity {
-    pub(crate) fn sign_validated_decision(
-        &self,
-        preimage: &[u8],
-    ) -> Result<Signature64, IdentityError> {
-        sign_payload_statement(&self.0.payload, preimage)
-    }
-
-    /// Opens one exact J19 revision-scoped share without exporting its bytes.
-    pub(crate) fn open_contribution_share(
-        &self,
-        capsule: &WitnessShareCapsuleV1,
-    ) -> Result<ProtectedWitnessShare, IdentityError> {
-        if capsule.capsule_schema != 1
-            || capsule.protocol != 1
-            || capsule.construction != 1
-            || capsule.revision == 0
-            || !(2..=32).contains(&capsule.member_count)
-            || !(2..=capsule.member_count).contains(&capsule.threshold)
-            || capsule.share_index == 0
-            || capsule.share_index > 32
-            || !matches!(
-                capsule.item_access_mode,
-                ItemAccessMode::WitnessedOnly | ItemAccessMode::Mixed
-            )
-            || capsule.recomputed_context_digest() != capsule.context_digest
-        {
-            return Err(IdentityError::new(IdentityErrorKind::Format));
-        }
-        if capsule.witness_id != self.0.header.principal_id
-            || capsule.contribution_key_fingerprint
-                != recipient_public_key_fingerprint(&self.0.header.recipient_public_key)
-        {
-            return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
-        }
-        let private_seed = payload_component(&self.0.payload, RECIPIENT_SEED_RANGE)?;
-        let share = crypto::open_hpke(
-            &private_seed,
-            &capsule.encapsulation,
-            capsule.ciphertext.as_bytes(),
-            &capsule.info_preimage(),
-            &capsule.aad_preimage(),
-            33,
-        )
-        .map_err(map_crypto_error)?;
-        let commitment_matches = share
-            .expose(|bytes| {
-                let mut preimage = b"jury-witness-v1/share/commitment\0\0\x01".to_vec();
-                preimage.extend_from_slice(capsule.context_digest.as_bytes());
-                preimage.extend_from_slice(bytes);
-                let digest: [u8; 32] = Sha256::digest(preimage).into();
-                bool::from(digest.ct_eq(capsule.share_commitment.as_bytes()))
-            })
-            .map_err(|_| IdentityError::new(IdentityErrorKind::ProtectionUnavailable))?;
-        if !commitment_matches {
-            return Err(IdentityError::new(IdentityErrorKind::AuthenticationFailed));
-        }
-        Ok(ProtectedWitnessShare {
-            bytes: share,
-            witness_id: capsule.witness_id,
-            witness_policy_digest: capsule.witness_policy_digest.clone(),
-            share_commitment: capsule.share_commitment.clone(),
-            share_index: capsule.share_index,
-            context_digest: capsule.context_digest.clone(),
-        })
-    }
 }
 
 impl ApproverIdentity {

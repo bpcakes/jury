@@ -466,8 +466,7 @@ fn load_principal_context_with_passphrase(
         }
         Err(error) => return Err(map_filesystem_error(error)),
     };
-    let policy = replay_policy_with_witness_policies(&vault.policy, &catalog.witness_policies)
-        .map_err(|_| invalid_vault())?;
+    let policy = catalog.replay_for_vault(&vault)?;
     let candidate = CheckpointCandidate::from_validated(&policy, &vault.policy, &vault.items)
         .map_err(|_| invalid_vault())?;
 

@@ -102,7 +102,7 @@ pub(super) fn backup_create(
         UnlockedIdentity::VaultPrincipal(identity) => identity.principal_id(),
     }));
     let local_state_snapshots = read_local_state_snapshots(&context.state, &state_principal_ids)?;
-    let catalog = context.catalog.transfer_catalog(&context.policy)?;
+    let catalog = context.catalog.transfer_catalog(&context.vault)?;
     let backup_passphrase = secret_input::capture_named_or_environment(
         protection,
         cli.passphrase_stdin,
@@ -650,7 +650,7 @@ fn private_output_separation_error() -> CliError {
     )
 }
 
-fn backup_receipt(
+pub(super) fn backup_receipt(
     header: &jury_protocol::backup_v1::BackupHeaderV1,
     coverage: &RecoveryCoverage,
 ) -> BackupReceipt {
@@ -696,7 +696,7 @@ fn role_names_from_mask(mask: u8) -> Vec<&'static str> {
     .collect()
 }
 
-fn invalid_backup() -> CliError {
+pub(super) fn invalid_backup() -> CliError {
     CliError::new(
         CliErrorKind::InvalidVault,
         "invalid-backup",
@@ -704,7 +704,7 @@ fn invalid_backup() -> CliError {
     )
 }
 
-fn map_backup_error(error: jury_core::backup::BackupError) -> CliError {
+pub(super) fn map_backup_error(error: jury_core::backup::BackupError) -> CliError {
     match error.kind() {
         BackupErrorKind::AuthenticationFailed => CliError::new(
             CliErrorKind::AuthenticationFailed,

@@ -274,7 +274,7 @@ pub(super) fn policy_require_witnessed(
         vault_policy_sequence: next_sequence,
         vault_policy_hash: context.policy.terminal_revision_hash().clone(),
         construction: 1,
-        suite: 1,
+        suite: context.policy.suite(),
         approver_descriptors,
         witness_descriptors,
         witness_threshold,

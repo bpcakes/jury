@@ -21,7 +21,7 @@ use super::state::{
 };
 use super::witness::{WitnessPolicy, validate_item_policy_binding};
 
-const SUITE: u16 = 1;
+use jury_protocol::hpke_context::VaultSuite;
 const ZERO_DIGEST: [u8; 32] = [0; 32];
 
 pub struct CreatedPolicy {
@@ -63,10 +63,18 @@ impl<R: RandomSource> PolicyCreator<R> {
         created_at_ms: u64,
         mut vault_is_known: impl FnMut(&VaultId) -> bool,
     ) -> Result<CreatedPolicy, PolicyError> {
+        self.create_for_suite(VaultSuite::Suite1, owner, created_at_ms, &mut vault_is_known)
+    }
+
+    pub(crate) fn create_for_suite(
+        &mut self, suite: VaultSuite, owner: &VaultPrincipalIdentity,
+        created_at_ms: u64, mut vault_is_known: impl FnMut(&VaultId) -> bool,
+    ) -> Result<CreatedPolicy, PolicyError> {
         let descriptor = owner
             .public_descriptor()
             .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidSignature))?;
         self.create_with_signer(
+            suite,
             &IdentityPolicySigner { owner, descriptor },
             created_at_ms,
             &mut vault_is_known,
@@ -87,6 +95,7 @@ impl<R: RandomSource> PolicyCreator<R> {
 
     fn create_with_signer(
         &mut self,
+        suite: VaultSuite,
         signer: &impl PolicySigner,
         created_at_ms: u64,
         mut vault_is_known: impl FnMut(&VaultId) -> bool,
@@ -114,7 +123,7 @@ impl<R: RandomSource> PolicyCreator<R> {
             policy_sequence: 0,
             previous_policy_hash: FixedBytes::new(ZERO_DIGEST),
             created_at_ms,
-            suite: SUITE,
+            suite: suite.id(),
             owner,
             source_attestation: None,
             item_inventory: Vec::<EmptyGenesisEntryV1>::new(),
@@ -216,7 +225,7 @@ pub(super) fn replay_policy_with_catalog(
     let genesis = &journal.genesis;
     if genesis.policy_sequence != 0
         || genesis.previous_policy_hash.as_bytes() != &ZERO_DIGEST
-        || genesis.suite != SUITE
+        || !matches!(genesis.suite, 1 | 2)
         || genesis.owner.principal_kind != PrincipalKind::Human
         || !genesis.item_inventory.is_empty()
         || !genesis.direct_grants.is_empty()
@@ -239,7 +248,7 @@ pub(super) fn replay_policy_with_catalog(
         .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidFormat))?;
     let owner_id = genesis.owner.principal_id;
     let mut state = PolicyState {
-        suite: SUITE,
+        suite: genesis.suite,
         vault_id: genesis.vault_id,
         genesis_fingerprint: genesis_fingerprint.clone(),
         sequence: 0,
@@ -275,7 +284,8 @@ pub(super) fn replay_policy_with_catalog(
             || revision.sequence != sequence
             || revision.previous_revision_hash != state.terminal_revision_hash
             || revision.timestamp_ms < prior_timestamp
-            || revision.operations.is_empty()
+            || (revision.operations.is_empty()
+                && !(index == 0 && genesis.permits_empty_rollover_bootstrap()))
         {
             return Err(PolicyError::new(PolicyErrorKind::InvalidAncestry));
         }
@@ -295,7 +305,14 @@ pub(super) fn replay_policy_with_catalog(
             &revision.signature,
         )
         .map_err(|_| PolicyError::new(PolicyErrorKind::InvalidSignature))?;
-        let mut next = apply_operations(&state, sequence, &revision.operations)?;
+        let mut next = if revision.operations.is_empty() {
+            // The narrowly scoped empty rollover case was checked above.
+            let mut next = state.clone();
+            next.sequence = sequence;
+            next
+        } else {
+            apply_operations(&state, sequence, &revision.operations)?
+        };
         if next.normalized_state_hash()? != revision.resulting_policy_state_hash {
             return Err(PolicyError::new(PolicyErrorKind::StateHashMismatch));
         }
@@ -343,6 +360,13 @@ pub(super) fn apply_operations(
     let mut mutation_keys = BTreeSet::new();
 
     for operation in operations {
+        if let PolicyOperationV1::ItemCreate { direct_slots, witnessed_state, .. }
+            | PolicyOperationV1::ItemSlotsReplace { direct_slots, witnessed_state, .. } = operation
+            && (direct_slots.iter().any(|slot| slot.suite != prior.suite)
+                || witnessed_state.as_ref().is_some_and(|state| state.slots.iter().any(|slot| slot.suite != prior.suite)))
+        {
+            return Err(PolicyError::new(PolicyErrorKind::InvalidFormat));
+        }
         validate_policy_operation_context(
             operation,
             sequence,

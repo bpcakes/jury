@@ -41,6 +41,9 @@ mod native_cli_passphrase_input;
 #[path = "native_cli/transfer.rs"]
 mod native_cli_transfer;
 
+#[path = "native_cli/rollover.rs"]
+mod native_cli_rollover;
+
 #[path = "native_cli/witnessed.rs"]
 mod native_cli_witnessed;
 

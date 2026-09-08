@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Bind J18's cycle-free bootstrap inputs before the constructor consumes them.
+
+Consumer: J18 rollover. Defect: preimage/corpus drift and circular genesis
+commitments. Supersede when this bootstrap version is retired. No certification.
+"""
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+PATHS = {
+    'docs/security/rollover-v1.md',
+    'conformance/rollover-v1/encoding.py',
+    'conformance/rollover-v1/vectors.json',
+    'conformance/rollover-v1/intent-vectors.json',
+    'crates/jury-protocol/src/rollover_v1.rs',
+    'crates/jury-protocol/tests/rollover_v1.rs',
+    'crates/jury-core/src/rollover/intent.rs',
+    'crates/jury-core/src/rollover/intent_tests.rs',
+    'scripts/check-rollover-inputs',
+    'scripts/test-rollover-inputs.py',
+    'docs/security/rollover-v2.md',
+    'conformance/rollover-v2/encoding.py',
+    'conformance/rollover-v2/vectors.json',
+    'crates/jury-protocol/tests/rollover_v2.rs',
+}
+
+# These accepted v1 bytes are compatibility inputs, not regenerable goldens.
+V1_COMPATIBILITY = {
+    'conformance/rollover-v1/encoding.py': 'b9595bb059e7fec8318ca786999249c89b3f606cd4519f728795e971f5a7fed9',
+    'conformance/rollover-v1/intent-vectors.json': '71b5f93ab60410066e92bdc8ce90fb4978e398c806bad33e7b6f70340c937e94',
+    'conformance/rollover-v1/vectors.json': 'd06207d18832198822527045b47e14ba0699a77ffe31af855fd202df9e316d86',
+    'docs/security/rollover-v1.md': 'cdddcc7bd72280d18535aea3a92fa2502c18503fb915378e045d79f4da08f392',
+}
+
+
+def verify_bindings(root, gate):
+    if (gate['schema'] != 'jury-rollover-inputs-v2'
+            or gate['status'] != 'accepted-for-implementation'
+            or gate['suite'] != 1 or gate['independently_reviewed'] is not False
+            or gate['pre_alpha'] is not True or gate['consumer'] != 'J18'
+            or gate['bootstrap_versions'] != [1, 2]
+            or gate['supersedes_gate_sha256'] != '36768074e446147b3b2e99d7d630d0b7e83a7b7c2b31f401071cdbf0f965548a'):
+        raise ValueError('rollover input gate is not accepted')
+    bindings = gate['bindings']
+    if len(bindings) != len(PATHS) or {entry['path'] for entry in bindings} != PATHS:
+        raise ValueError('rollover input inventory differs')
+    for entry in bindings:
+        actual = hashlib.sha256((root / entry['path']).read_bytes()).hexdigest()
+        if actual != entry['sha256']:
+            raise ValueError('rollover input hash differs: ' + entry['path'])
+    for path, expected in V1_COMPATIBILITY.items():
+        if hashlib.sha256((root / path).read_bytes()).hexdigest() != expected:
+            raise ValueError('rollover v1 compatibility hash differs: ' + path)
+
+
+def main():
+    with (ROOT / 'docs/security/jury-rollover-v1-gate.toml').open('rb') as handle:
+        gate = tomllib.load(handle)
+    verify_bindings(ROOT, gate)
+    for command in (
+        ['python3', 'scripts/check-witness-gate'],
+        ['python3', 'conformance/rollover-v1/encoding.py'],
+        ['python3', 'conformance/rollover-v1/encoding.py', '--intent'],
+        ['python3', 'conformance/rollover-v2/encoding.py'],
+        ['python3', 'scripts/test-rollover-inputs.py'],
+        ['cargo', 'test', '-p', 'jury-protocol', '--test', 'rollover_v1', '--test', 'rollover_v2', '--locked'],
+        ['cargo', 'test', '-p', 'jury-core', 'rollover::intent_tests', '--locked'],
+    ):
+        subprocess.run(command, cwd=ROOT, check=True)
+    verify_bindings(ROOT, gate)
+    print('rollover inputs: suite-1 bootstrap v1/v2 bindings and conformance pass; externally unreviewed pre-alpha')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, KeyError, ValueError, subprocess.SubprocessError) as error:
+        print('rollover inputs: ' + str(error), file=sys.stderr)
+        raise SystemExit(1) from error

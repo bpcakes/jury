@@ -24,7 +24,7 @@ pub(super) fn transfer_export(
     }
 
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let catalog = context.catalog.transfer_catalog(&context.policy)?;
+    let catalog = context.catalog.transfer_catalog(&context.vault)?;
     let envelope = TransferCreator::new()
         .create(&context.vault, catalog, &context.identity, timestamp_ms()?)
         .map_err(map_transfer_error)?;
@@ -99,9 +99,7 @@ pub(super) fn transfer_inspect(
     let local = if arguments.against_current {
         let local_bytes = read_vault(&home)?;
         let local = VaultFileV1::parse(&local_bytes).map_err(|_| invalid_vault())?;
-        let catalog = load_policy_catalog_for_vault(environment, &home, &local)?;
-        let policy = replay_policy_with_witness_policies(&local.policy, &catalog.witness_policies)
-            .map_err(|_| invalid_vault())?;
+        let (_, policy) = load_policy_and_catalog_for_vault(environment, &home, &local)?;
         CheckpointCandidate::from_validated(&policy, &local.policy, &local.items)
             .map_err(|_| invalid_vault())?;
         Some(local)
@@ -134,12 +132,7 @@ pub(super) fn transfer_inspect(
                 let incoming_names =
                     accessible_name_map(transfer.vault(), transfer.policy(), &identity)?;
                 let mut names = if let Some(local) = &local {
-                    let catalog = load_policy_catalog_for_vault(environment, &home, local)?;
-                    let policy = replay_policy_with_witness_policies(
-                        &local.policy,
-                        &catalog.witness_policies,
-                    )
-                    .map_err(|_| invalid_vault())?;
+                    let (_, policy) = load_policy_and_catalog_for_vault(environment, &home, local)?;
                     accessible_name_map(local, &policy, &identity)?
                 } else {
                     BTreeMap::new()
@@ -247,10 +240,7 @@ pub(super) fn transfer_import(
     match read_vault(&home) {
         Ok(local_bytes) => {
             let local = VaultFileV1::parse(&local_bytes).map_err(|_| invalid_vault())?;
-            let local_catalog = load_policy_catalog_for_vault(environment, &home, &local)?;
-            let local_policy =
-                replay_policy_with_witness_policies(&local.policy, &local_catalog.witness_policies)
-                    .map_err(|_| invalid_vault())?;
+            let (_, local_policy) = load_policy_and_catalog_for_vault(environment, &home, &local)?;
             CheckpointCandidate::from_validated(&local_policy, &local.policy, &local.items)
                 .map_err(|_| invalid_vault())?;
             VaultMutationPlan::preflight_transfer_import(
@@ -662,7 +652,7 @@ fn relation_label(relation: ArtifactRelation) -> &'static str {
     }
 }
 
-fn map_transfer_error(error: jury_core::transfer::TransferError) -> CliError {
+pub(super) fn map_transfer_error(error: jury_core::transfer::TransferError) -> CliError {
     map_transfer_error_kind(error.kind())
 }
 
@@ -681,11 +671,13 @@ fn map_transfer_error_kind(kind: jury_core::transfer::TransferErrorKind) -> CliE
                 "required transfer protection is unavailable",
             )
         }
-        TransferErrorKind::InvalidCatalog => CliError::new(
-            CliErrorKind::InvalidVault,
-            "invalid-transfer-catalog",
-            "the transfer public policy evidence is invalid",
-        ),
+        TransferErrorKind::InvalidCatalog | TransferErrorKind::MissingRegistrationProof => {
+            CliError::new(
+                CliErrorKind::InvalidVault,
+                "invalid-transfer-catalog",
+                "the transfer public policy evidence is invalid",
+            )
+        }
         TransferErrorKind::CapacityExhausted => CliError::new(
             CliErrorKind::Conflict,
             "transfer-capacity-exhausted",
@@ -707,7 +699,7 @@ fn map_transfer_import_error_kind(kind: jury_core::mutation::MutationErrorKind) 
     }
 }
 
-const fn invalid_transfer() -> CliError {
+pub(super) const fn invalid_transfer() -> CliError {
     CliError::new(
         CliErrorKind::InvalidVault,
         "invalid-transfer",

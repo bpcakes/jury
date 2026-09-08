@@ -1,24 +1,23 @@
+mod hpke;
+
+pub(crate) use self::hpke::{open_hpke, open_hpke_for_suite, seal_hpke, seal_hpke_for_suite};
+
 use std::fmt;
 
+use ::hpke::{Deserializable, Kem, Serializable, kem::XWing, rand_core::SeedableRng};
 use aes_gcm_siv::{Aes256GcmSiv, KeyInit, Nonce, Tag, aead::AeadInOut};
 use argon2::{Algorithm, Argon2, Block, Params, Version};
 use chacha20::ChaCha20Rng;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac as _};
-use hpke::{
-    Deserializable, Kem, OpModeR, OpModeS, Serializable, aead::ChaCha20Poly1305, kdf::HkdfSha256,
-    kem::XWing, rand_core::SeedableRng, single_shot_open, single_shot_seal_with_rng,
-};
 use jury_protected::{
     MemoryErrorKind, ProtectedMemory, ProtectionPolicy, RandomSource, SecretBytes,
     capture_after_process_protection, protected_random,
 };
 use jury_protocol::{
     identity_v1::KdfProfile,
-    vault_v1::{
-        Encapsulation1120, Nonce12, RecipientPublicKey1216, Signature64, VerificationPublicKey32,
-    },
+    vault_v1::{Nonce12, RecipientPublicKey1216, Signature64, VerificationPublicKey32},
 };
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -379,99 +378,6 @@ pub(crate) fn open_secret_bytes(
     })
     .map_err(|_| CryptoError::MemoryProtection)??;
     Ok(plaintext)
-}
-
-pub(crate) fn open_hpke(
-    private_seed: &ProtectedMemory,
-    encapsulation: &Encapsulation1120,
-    ciphertext: &[u8],
-    info: &[u8],
-    aad: &[u8],
-    plaintext_length: usize,
-) -> Result<ProtectedMemory, CryptoError> {
-    let encapsulation =
-        <<XWing as Kem>::EncappedKey as Deserializable>::from_bytes(encapsulation.as_bytes())
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
-    let policy = private_seed.status().policy();
-    let capture = capture_after_process_protection(
-        policy,
-        private_seed.status().clone(),
-        || -> Result<ProtectedMemory, CryptoError> {
-            private_seed
-                .expose(|private_bytes| {
-                    let private =
-                        <<XWing as Kem>::PrivateKey as Deserializable>::from_bytes(private_bytes)
-                            .map_err(|_| CryptoError::AuthenticationFailed)?;
-                    let opened = single_shot_open::<ChaCha20Poly1305, HkdfSha256, XWing>(
-                        &OpModeR::Base,
-                        &private,
-                        &encapsulation,
-                        info,
-                        ciphertext,
-                        aad,
-                    )
-                    .map_err(|_| CryptoError::AuthenticationFailed)?;
-                    let opened = Zeroizing::new(opened);
-                    if opened.len() != plaintext_length {
-                        return Err(CryptoError::AuthenticationFailed);
-                    }
-                    ProtectedMemory::initialize(plaintext_length, policy, |destination| {
-                        destination.copy_from_slice(&opened);
-                        Ok::<usize, ()>(destination.len())
-                    })
-                    .map_err(|_| CryptoError::MemoryProtection)
-                })
-                .map_err(|_| CryptoError::MemoryProtection)?
-        },
-    )
-    .map_err(|_| CryptoError::MemoryProtection)?;
-    capture.value
-}
-
-pub(crate) fn seal_hpke(
-    public_key: &RecipientPublicKey1216,
-    plaintext: &ProtectedMemory,
-    info: &[u8],
-    aad: &[u8],
-    source: &mut (impl RandomSource + ?Sized),
-) -> Result<(Encapsulation1120, Vec<u8>), CryptoError> {
-    let public = <<XWing as Kem>::PublicKey as Deserializable>::from_bytes(public_key.as_bytes())
-        .map_err(|_| CryptoError::ProviderFailure)?;
-    let mut seed = [0_u8; 32];
-    source
-        .fill(&mut seed)
-        .map_err(|_| CryptoError::EntropyUnavailable)?;
-    let mut rng = ChaCha20Rng::from_seed(seed);
-    seed.zeroize();
-    let policy = plaintext.status().policy();
-    let capture = capture_after_process_protection(
-        policy,
-        plaintext.status().clone(),
-        || -> Result<(Encapsulation1120, Vec<u8>), CryptoError> {
-            plaintext
-                .expose(|bytes| {
-                    let (encapsulation, ciphertext) =
-                        single_shot_seal_with_rng::<ChaCha20Poly1305, HkdfSha256, XWing>(
-                            &OpModeS::Base,
-                            &public,
-                            info,
-                            bytes,
-                            aad,
-                            &mut rng,
-                        )
-                        .map_err(|_| CryptoError::ProviderFailure)?;
-                    if ciphertext.len() != bytes.len().saturating_add(16) {
-                        return Err(CryptoError::ProviderFailure);
-                    }
-                    let encapsulation = Encapsulation1120::from_slice(&encapsulation.to_bytes())
-                        .map_err(|_| CryptoError::ProviderFailure)?;
-                    Ok((encapsulation, ciphertext))
-                })
-                .map_err(|_| CryptoError::MemoryProtection)?
-        },
-    )
-    .map_err(|_| CryptoError::MemoryProtection)?;
-    capture.value
 }
 
 #[cfg(test)]

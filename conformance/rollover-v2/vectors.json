@@ -1,0 +1,205 @@
+{
+  "version": 2,
+  "vectors": [
+    {
+      "name": "direct",
+      "manifest": {
+        "version": 2,
+        "destination_suite": 1,
+        "destination_vault_id": "0101010101010101010101010101010101010101010101010101010101010101",
+        "created_at_ms": 1700000000000,
+        "acting_owner_principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+        "principals": [
+          {
+            "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+            "unsigned_descriptor_digest": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+            "display_label": "ExamplePrincipal",
+            "owner": true
+          }
+        ],
+        "items": [
+          {
+            "source_item_id": "0404040404040404040404040404040404040404040404040404040404040404",
+            "destination_item_id": "0505050505050505050505050505050505050505050505050505050505050505",
+            "item_kind": "canonical",
+            "descriptor": {
+              "revision": 1,
+              "revision_seal_id": "0606060606060606060606060606060606060606060606060606060606060606",
+              "nonce": "BwcHBwcHBwcHBwcH",
+              "ciphertext_length": 272,
+              "ciphertext_digest": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+              "plaintext_schema": 1,
+              "key_epoch": 1
+            },
+            "initial_item_revision_hash": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "direct_slot_set_digest": "CgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgo=",
+            "grants": [
+              {
+                "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "role": "owner",
+                "direct": true
+              }
+            ],
+            "witnessed": null
+          }
+        ],
+        "witness_policies": [],
+        "source_suite": 1
+      },
+      "preimage_hex": "6a7572792d76312f726f6c6c6f7665722f626f6f74737472617000000100020001000101010101010101010101010101010101010101010101010101010101010101010000018bcfe568000202020202020202020202020202020202020202020202020202020202020202000000010000005502020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303000000104578616d706c655072696e636970616c0100000001000001110404040404040404040404040404040404040404040404040404040404040404050505050505050505050505050505050505050505050505050505050505050501000000610000000000000001060606060606060606060606060606060606060606060606060606060606060607070707070707070707070700000110080808080808080808080808080808080808080808080808080808080808080801000000000000000109090909090909090909090909090909090909090909090909090909090909090a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0000000100000022020202020202020202020202020202020202020202020202020202020202020203010000000000",
+      "digest_hex": "3a0b9f71ba228caefd5236e7290357311c41f4ae946781c82f1657a52f964f38"
+    },
+    {
+      "name": "governed",
+      "manifest": {
+        "version": 2,
+        "destination_suite": 1,
+        "destination_vault_id": "0101010101010101010101010101010101010101010101010101010101010101",
+        "created_at_ms": 1700000000000,
+        "acting_owner_principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+        "principals": [
+          {
+            "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+            "unsigned_descriptor_digest": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+            "display_label": "ExamplePrincipal",
+            "owner": true
+          }
+        ],
+        "items": [
+          {
+            "source_item_id": "0404040404040404040404040404040404040404040404040404040404040404",
+            "destination_item_id": "0505050505050505050505050505050505050505050505050505050505050505",
+            "item_kind": "canonical",
+            "descriptor": {
+              "revision": 1,
+              "revision_seal_id": "0606060606060606060606060606060606060606060606060606060606060606",
+              "nonce": "BwcHBwcHBwcHBwcH",
+              "ciphertext_length": 272,
+              "ciphertext_digest": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+              "plaintext_schema": 1,
+              "key_epoch": 1
+            },
+            "initial_item_revision_hash": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "direct_slot_set_digest": "3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk=",
+            "grants": [
+              {
+                "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "role": "owner",
+                "direct": false
+              }
+            ],
+            "witnessed": {
+              "policy_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+              "descriptor_slot_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+              "body_slot_id": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+            }
+          }
+        ],
+        "witness_policies": [
+          {
+            "source_policy_id": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+            "destination_policy_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "intent_digest": "Dw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8=",
+            "source_policy_revision": 1
+          }
+        ],
+        "source_suite": 1
+      },
+      "preimage_hex": "6a7572792d76312f726f6c6c6f7665722f626f6f74737472617000000100020001000101010101010101010101010101010101010101010101010101010101010101010000018bcfe568000202020202020202020202020202020202020202020202020202020202020202000000010000005502020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303000000104578616d706c655072696e636970616c010000000100000171040404040404040404040404040404040404040404040404040404040404040405050505050505050505050505050505050505050505050505050505050505050100000061000000000000000106060606060606060606060606060606060606060606060606060606060606060707070707070707070707070000011008080808080808080808080808080808080808080808080808080808080808080100000000000000010909090909090909090909090909090909090909090909090909090909090909df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119000000010000002202020202020202020202020202020202020202020202020202020202020202020300010b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d00000001000000680e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e00000000000000010b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "digest_hex": "bd1abc09dc75db56e122abfb6403840211418c0519fe83c201ad4b446cf9af57"
+    },
+    {
+      "name": "two-active-policy-revisions",
+      "manifest": {
+        "version": 2,
+        "destination_suite": 1,
+        "destination_vault_id": "0101010101010101010101010101010101010101010101010101010101010101",
+        "created_at_ms": 1700000000000,
+        "acting_owner_principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+        "principals": [
+          {
+            "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+            "unsigned_descriptor_digest": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+            "display_label": "ExamplePrincipal",
+            "owner": true
+          }
+        ],
+        "items": [
+          {
+            "source_item_id": "0404040404040404040404040404040404040404040404040404040404040404",
+            "destination_item_id": "0505050505050505050505050505050505050505050505050505050505050505",
+            "item_kind": "canonical",
+            "descriptor": {
+              "revision": 1,
+              "revision_seal_id": "0606060606060606060606060606060606060606060606060606060606060606",
+              "nonce": "BwcHBwcHBwcHBwcH",
+              "ciphertext_length": 272,
+              "ciphertext_digest": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+              "plaintext_schema": 1,
+              "key_epoch": 1
+            },
+            "initial_item_revision_hash": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "direct_slot_set_digest": "3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk=",
+            "grants": [
+              {
+                "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "role": "owner",
+                "direct": false
+              }
+            ],
+            "witnessed": {
+              "policy_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+              "descriptor_slot_id": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+              "body_slot_id": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+            }
+          },
+          {
+            "source_item_id": "8888888888888888888888888888888888888888888888888888888888888888",
+            "destination_item_id": "9999999999999999999999999999999999999999999999999999999999999999",
+            "item_kind": "canonical",
+            "descriptor": {
+              "revision": 1,
+              "revision_seal_id": "0606060606060606060606060606060606060606060606060606060606060606",
+              "nonce": "BwcHBwcHBwcHBwcH",
+              "ciphertext_length": 272,
+              "ciphertext_digest": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg=",
+              "plaintext_schema": 1,
+              "key_epoch": 1
+            },
+            "initial_item_revision_hash": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "direct_slot_set_digest": "3z9hmASpL9tAVxktxD3XSOp3itxSvEmM6AUkwBS4ERk=",
+            "grants": [
+              {
+                "principal_id": "0202020202020202020202020202020202020202020202020202020202020202",
+                "role": "owner",
+                "direct": false
+              }
+            ],
+            "witnessed": {
+              "policy_id": "7777777777777777777777777777777777777777777777777777777777777777",
+              "descriptor_slot_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "body_slot_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          }
+        ],
+        "witness_policies": [
+          {
+            "source_policy_id": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+            "destination_policy_id": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+            "intent_digest": "Dw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8=",
+            "source_policy_revision": 1
+          },
+          {
+            "source_policy_id": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+            "destination_policy_id": "7777777777777777777777777777777777777777777777777777777777777777",
+            "intent_digest": "Dw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8=",
+            "source_policy_revision": 2
+          }
+        ],
+        "source_suite": 1
+      },
+      "preimage_hex": "6a7572792d76312f726f6c6c6f7665722f626f6f74737472617000000100020001000101010101010101010101010101010101010101010101010101010101010101010000018bcfe568000202020202020202020202020202020202020202020202020202020202020202000000010000005502020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303000000104578616d706c655072696e636970616c010000000200000171040404040404040404040404040404040404040404040404040404040404040405050505050505050505050505050505050505050505050505050505050505050100000061000000000000000106060606060606060606060606060606060606060606060606060606060606060707070707070707070707070000011008080808080808080808080808080808080808080808080808080808080808080100000000000000010909090909090909090909090909090909090909090909090909090909090909df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119000000010000002202020202020202020202020202020202020202020202020202020202020202020300010b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d00000171888888888888888888888888888888888888888888888888888888888888888899999999999999999999999999999999999999999999999999999999999999990100000061000000000000000106060606060606060606060606060606060606060606060606060606060606060707070707070707070707070000011008080808080808080808080808080808080808080808080808080808080808080100000000000000010909090909090909090909090909090909090909090909090909090909090909df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119000000010000002202020202020202020202020202020202020202020202020202020202020202020300017777777777777777777777777777777777777777777777777777777777777777aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000002000000680e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e00000000000000010b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000680e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e000000000000000277777777777777777777777777777777777777777777777777777777777777770f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+      "digest_hex": "e15036f911dd1af16ccc4d8c966160abf1fb064eeeddae761e95afcb7464e63a"
+    }
+  ]
+}

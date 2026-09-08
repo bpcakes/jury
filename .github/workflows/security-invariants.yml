@@ -37,6 +37,12 @@ jobs:
         run: python3 scripts/test-witness-gate.py
       - name: Check frozen witnessed construction and conformance
         run: python3 scripts/check-witness-gate
+      - name: Check authenticated rollover construction and conformance
+        run: python3 scripts/check-rollover-inputs
+      - name: Check suite-2 input bindings, provider sources and runtime features
+        run: |
+          python3 scripts/check-suite2-inputs --providers-only
+          python3 scripts/test-suite2-inputs.py
       - name: Run isolated direct cryptographic conformance
         run: cargo test --manifest-path conformance/direct-crypto/Cargo.toml --locked
       - name: Verify exact-revision checkout bootstrap boundary
@@ -77,6 +83,13 @@ jobs:
         env:
           BORINGSSL_ROOT: ${{ github.workspace }}/boringssl
         run: python3 scripts/check-j25-alternate-crypto
+      - name: Run suite-2 conformance against the fresh alternate-provider build
+        run: |
+          mkdir -p target
+          c++ -std=c++17 -O2 -Wall -Wextra -Werror -Iboringssl/include conformance/suite-2/alternate/boringssl_runner.cc boringssl/build/libcrypto.a -lpthread -ldl -o target/suite2-boringssl-consumer
+          python3 conformance/suite-2/verify-primitives.py --runner target/suite2-boringssl-consumer
+          python3 conformance/suite-2/contexts.py --runner target/suite2-boringssl-consumer
+          cargo run --manifest-path conformance/suite-2/Cargo.toml --locked --bin contexts -- conformance/suite-2/context-vectors.json
 
   j25-repository-leak-scan:
     runs-on: ubuntu-latest

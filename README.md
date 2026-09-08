@@ -2,12 +2,12 @@
 
 **A portable secrets vault, exploring fresh approval for each governed open.**
 
-[Architecture](docs/architecture.md) · [Self-hosting](docs/self-hosting-juryd.md) ·
-[Recovery](docs/recovery.md) · [Roadmap](docs/jury-v1-master-plan.md) ·
-[Security](SECURITY.md) · [License](LICENSE.md)
+[Quick start](#try-a-direct-vault) · [Witnessed walkthrough](docs/witness-operator-walkthrough.md) ·
+[Self-hosting](docs/self-hosting-juryd.md) · [Recovery](docs/recovery.md) ·
+[Release status](docs/linux-release.md) · [Security](SECURITY.md)
 
 > [!WARNING]
-> Jury is a pre-alpha repository scaffold. It does not yet protect secrets and
+> Jury is a pre-alpha implementation. It does not yet protect secrets and
 > must not be used with real credentials. It has not received independent
 > whole-product professional security review.
 
@@ -42,28 +42,82 @@ Neither mode prevents an authorized endpoint or child from retaining plaintext.
 
 ## Start here
 
-The active release target is **Linux**, with the Rust `jury` CLI and a
-self-hosted `juryd` witness daemon. macOS, Windows, and the terminal UI are
-deferred. The implementation below is pre-alpha development work, not a claim
-that a reviewed witnessed-access product has shipped.
+Version **0.0.1 is not published**. The committed implementation passed the
+[Linux CLI QA](docs/qa-linux-0.0.1.md): ten real-process journeys using native
+x86_64 binaries on Debian 12 (glibc 2.36), including witnessed access and
+recovery. Passing those checks does not establish security for real secrets.
+Publication still requires a private reporting contact, a release-signing
+identity, and a candidate bound to the final source and documentation.
 
-To build from source and explore the command interface, use Linux with Git,
-a native C/C++ build toolchain, and Rust 1.90 or newer:
+To build and install both commands from source:
 
 ```sh
 git clone https://github.com/bpcakes/jury.git
 cd jury
-cargo run --locked -p jury -- --help
+cargo build --locked --release -p jury -p jury-witness
+install -Dm755 target/release/jury "$HOME/.local/bin/jury"
+install -Dm755 target/release/juryd "$HOME/.local/bin/juryd"
+export PATH="$HOME/.local/bin:$PATH"
+jury --version
+juryd --help
 ```
 
-Use only synthetic values such as `ExampleSecret` when experimenting. The
-commands below illustrate individual operations; witnessed access also needs
-registered principals, policy, checkpoints, and configured witness endpoints.
-See the [self-hosting guide](docs/self-hosting-juryd.md) for witness setup and
-the [recovery guide](docs/recovery.md) for an `ExampleVault` recovery drill.
+Use Linux x86_64 with Git, a native C/C++ build toolchain, and Rust/Cargo. The
+workspace declares Rust 1.90 as its minimum; the release recipe was tested with
+Rust 1.97.0. Both binaries report `0.0.1`. macOS, Windows, ARM release packages,
+and the terminal UI are outside the tested release scope. For reproducible
+packaging and later binary installation, see
+[Linux release preparation](docs/linux-release.md).
 
-For the unsigned 0.0.1 package recipe, tested Linux baseline, installation and
-release requirements, see [Linux release preparation](docs/linux-release.md).
+### Try a direct vault
+
+Use a disposable shell and synthetic values only. This creates a new Git
+repository and keeps its test identities, local state, and output in separate
+directories under one private temporary root:
+
+```sh
+umask 077
+EXAMPLE_ROOT="$(mktemp -d /tmp/ExampleJury.XXXXXX)"
+mkdir -m 700 "$EXAMPLE_ROOT/repository" "$EXAMPLE_ROOT/identities" \
+  "$EXAMPLE_ROOT/state" "$EXAMPLE_ROOT/output"
+export JURY_IDENTITY_HOME="$EXAMPLE_ROOT/identities"
+export JURY_STATE_HOME="$EXAMPLE_ROOT/state"
+git init --quiet "$EXAMPLE_ROOT/repository"
+cd "$EXAMPLE_ROOT/repository"
+jury identity init
+jury vault init
+jury item create ExampleItem --allow-direct
+jury vault field set ExampleItem ExampleField
+jury read --direct ExampleItem ExampleField --out "$EXAMPLE_ROOT/output/value.txt"
+jury vault audit verify
+```
+
+Choose and confirm a test identity passphrase. At the field prompt, type
+`ExampleSecret` and press **Ctrl-D**; Enter would become part of the value.
+The read creates a mode-`0600` file without printing the value. Its destination
+must be absent; use `--overwrite` only when replacing that selected output is
+intentional. The encrypted shared artifact is `repository/.jury/vault.json`;
+identities and local state are outside that repository. Retain the whole test
+root while using the vault. Exit the disposable shell when finished so its
+path overrides do not affect other vaults.
+
+Direct access is unilateral. For approval-governed access, follow the
+[witness operator walkthrough](docs/witness-operator-walkthrough.md) from actor
+registration through two-terminal approval and receipt verification. Configure
+all needed operations before making the item witnessed-only. That conversion
+removes its direct slots; the direct examples above no longer apply to it.
+The [operator guide](docs/self-hosting-juryd.md#witness-key-rotation-retirement-and-recovery)
+states the current policy replacement and recovery limits.
+
+| Next task | Guide |
+| --- | --- |
+| Configure and operate witnesses and anchors | [Self-hosting](docs/self-hosting-juryd.md) |
+| Add items after governing existing descriptors | [Item creation](docs/item-creation.md) |
+| Grant or revoke a vault owner | [Owner changes](docs/owner-changes.md) |
+| Back up, restore, or rehearse recovery | [Recovery](docs/recovery.md) |
+| Use dotted names or arbitrary public review labels | [Reference syntax](docs/naming.md#native-identifier-and-name-profile) |
+| Understand boundaries or planned work | [Architecture](docs/architecture.md), [master plan](docs/jury-v1-master-plan.md) |
+| Develop and verify a change | [Contributing](CONTRIBUTING.md#development) |
 
 ## What the Linux CLI implements
 
@@ -106,74 +160,26 @@ Enter adds a newline to the stored value. Backspace erases one byte on the
 current line; Ctrl-U clears that line. Ctrl-C cancels without saving and restores
 terminal settings. For exact binary bytes, pipe input with `--value-stdin`.
 
-Representative commands:
+### Templates and child processes
 
-For grants and revocations that include witnessed-only items, see
-[changing vault owners](docs/owner-changes.md).
+In the direct example above, create templates using exact `ITEM/FIELD`
+references. Run these commands from the example repository while its identity
+and state overrides are still set:
 
-```console
-$ jury identity init
-$ jury vault init
-$ jury vault status
-$ jury item create ExampleItem --allow-direct
-$ jury vault field set ExampleItem ExampleField --value-stdin
-$ jury principal challenge --from /absolute/path/descriptor.json \
-    --out /absolute/private/path/challenge.json
-$ jury access matrix
-$ jury policy require witnessed --item ExampleItem \
-    --approver PRINCIPAL --approvals 1 \
-    --witness WITNESS_ONE --witness WITNESS_TWO --witness-quorum 2 \
-    --operation read-stdout --operation write-private-file \
-    --operation template-injection --operation child-environment \
-    --review-label ExampleItem \
-    --field-review-label ExampleField=ExampleField --request-lifetime 300
-$ jury witness checkpoint \
-    --output /absolute/public/path/ExampleCheckpoint.json
-$ jury request create --item ExampleItem --field ExampleField \
-    --checkpoint /absolute/public/path/ExampleCheckpoint.json \
-    --out /absolute/public/path/ExampleRequest.json
-$ jury request inspect /absolute/public/path/ExampleRequest.json
-$ jury request status /absolute/public/path/ExampleRequest.json
+```sh
+printf 'value={{ExampleItem/ExampleField}}\n' > "$EXAMPLE_ROOT/output/template.txt"
+jury inject --direct --template "$EXAMPLE_ROOT/output/template.txt" \
+  --out "$EXAMPLE_ROOT/output/rendered.txt"
+printf 'EXAMPLE_VALUE={{ExampleItem/ExampleField}}\n' > "$EXAMPLE_ROOT/output/child.env"
+jury exec --direct --env-file "$EXAMPLE_ROOT/output/child.env" -- \
+  /bin/sh -c 'test -n "$EXAMPLE_VALUE"'
+jury --json run --direct --stdin ExampleItem/ExampleField --timeout 30 -- /usr/bin/wc -c
 ```
 
-For a foreground request, start the governed operation first so its fresh
-request-session receiver remains in memory while approval is collected:
-
-```console
-# Requesting terminal
-$ jury read ExampleItem ExampleField \
-    --checkpoint /absolute/public/path/ExampleCheckpoint.json \
-    --request-out /absolute/public/path/ForegroundRequest.json \
-    --approval /absolute/public/path/ForegroundApproval.json \
-    --witness 'WITNESS_ID,https://127.0.0.1:7443,/absolute/private/client-token,/absolute/public/ca.pem' \
-    --receipt /absolute/public/path/ExampleReceipt.json \
-    --out /absolute/private/path/value.txt
-
-# Separate approver terminal, after ForegroundRequest.json appears
-$ jury --identity ExampleApprover approve /absolute/public/path/ForegroundRequest.json \
-    --out /absolute/public/path/ForegroundApproval.json
-
-# Explicit unilateral operations
-$ jury read ExampleItem ExampleField --direct --out /absolute/private/path/value.txt
-$ jury inject --direct --template template.txt --out /absolute/private/path/rendered.txt
-$ jury exec --direct --env-file /absolute/path/to/example.env -- example-command
-$ jury run --direct --env TOKEN=ExampleItem.ExampleField --timeout 300 -- example-command
-$ jury privacy cover --item ExampleItem
-$ jury vault audit verify
-$ jury history status
-$ jury transfer export --out /absolute/path/ExampleTransfer.json
-$ jury transfer inspect --in /absolute/path/ExampleTransfer.json
-$ jury transfer import --in /absolute/path/ExampleTransfer.json --dry-run
-$ jury transfer status
-$ jury witness policy-material --output /absolute/path/ExamplePolicyMaterial.json
-$ jury witness policy-status \
-    --policy-material /absolute/path/ExamplePolicyMaterial.json \
-    --checkpoint /absolute/path/ExampleCheckpoint.json \
-    --acknowledgement /absolute/path/ExampleWitnessOneAck.json
-$ jury receipt inspect /absolute/path/ExampleReceipt.json
-$ jury receipt verify /absolute/path/ExampleReceipt.json \
-    --checkpoint /absolute/path/ExampleCheckpoint.json
-```
+The child examples check delivery without printing the field: `exec` returns
+the child's exit status and `run` reports its captured byte count. Witnessed
+operations use the same field references plus the checkpoint, approval,
+request/receipt output paths, and exact witness tuples shown in the walkthrough.
 
 Inside a Git worktree, `jury vault init` writes only the encrypted
 `.jury/vault.json` artifact and a fixed `.jury/.gitattributes` merge rule.
@@ -301,10 +307,33 @@ plaintext. Aggregate receipt reason/time remains collector metadata unless an
 authenticated endpoint record covers it. These limitations are especially
 important because Jury is externally unreviewed pre-alpha software.
 
+## Output and exit status
+
+`jury --json` emits structured command results on stdout and one structured
+error on stderr. It is a standalone flag, placed before the child's `--`
+separator. `--help` and `--version` always return text with status 0.
+
+| Operation | Output contract |
+| --- | --- |
+| Metadata commands, including `receipt verify` | Human-readable by default; JSON with `--json` |
+| `read` / `inject` with `--out` | Value only in the private file; result metadata may use JSON |
+| `read` / `inject` with `--reveal` | Raw value on stdout; `--json` is refused |
+| `exec` | Streams child stdout/stderr after configured redaction; `--json` is refused |
+| `run` | Bounded captured child output in the result; supports `--json` |
+| `juryd` | Human-readable CLI output; its HTTP API uses JSON |
+
+For Jury command failures, exit 2 means invalid arguments or unsupported
+platform, 3 means not found, 4 conflict, 5 failed authentication, and 6 denied
+access. Other runtime, storage, protection, and validation failures use 1.
+Handled field-input cancellation uses `128 + signal`. Successful command status
+is 0. `exec` and `run` can propagate a child's nonzero status; distinguish that
+from a Jury error using the command result and stderr. Parser errors never
+echo supplied argument values. Streaming-command notices use stderr.
+
 ## Design constraints
 
 - The portable encrypted vault artifact is the source of truth.
-- Inside a Git worktree, the intended native default is a committed
+- Inside a Git worktree, the native default is a committed
   `.jury/vault.json`. Git transports and versions the encrypted artifact; Jury
   does not trust Git for authorization, integrity, or freshness.
 - Private identities, rollback checkpoints, local audit, recovery material,
@@ -342,9 +371,19 @@ integration remains separate in
 The first `0.x` release targets Linux through the `jury` CLI and a self-hosted
 `juryd`. The active scope defers macOS, Windows, the `jury-tui`,
 hardware-backed identity protectors, managed-service topology, semantic Git
-merge, and runtime lineage rollover or suite migration. Capacity exhaustion
-fails closed before mutation. Divergent Git artifacts require explicit
-operator recovery.
+merge, and runtime lineage rollover or suite migration. J18 rollover and suite
+migration are follow-up capabilities for a release after 0.0.1. The development
+checkout has direct and governed `jury vault rollover` flows with fresh backup,
+transfer, explicit local adoption and exact-candidate recovery. Historical
+bootstrap validation retains the original role proofs, policies and labels.
+The checkout also implements explicit `jury vault migrate-suite --to 2`, using
+AES-256-GCM HPKE under the accepted supplemental input gate. It re-encrypts
+active items into a new lineage and preserves the original copies. Core direct
+and governed migration tests pass, including native backup restore and witnessed
+destination reads. These paths remain externally unreviewed pre-alpha software.
+Capacity exhaustion
+fails closed before mutation. Divergent Git artifacts
+require explicit operator recovery.
 
 | Package | Responsibility |
 | --- | --- |
@@ -352,7 +391,10 @@ operator recovery.
 | `jury-core` | Vault-domain rules and cryptographic orchestration boundaries |
 | `jury-protocol` | Witness request, approval, response, and receipt contracts |
 | `jury-tui` | Deferred terminal-interface scaffold; not shipped in the first `0.x` |
-| `jury-witness` | Transport-independent witness engine and `juryd` adapters |
+| `jury-witness` | `juryd` HTTP, SQLite, identity, and external-anchor adapters |
+| `jury-process` | Linux child delivery, redaction, and process-group cleanup |
+| `jury-filesystem` | Hardened path, file, and atomic-publication operations |
+| `jury-protected` | Bounded protected-memory primitives |
 
 Jury is standalone and must not depend on Jig. Jig may eventually consume Jury
 through its public CLI, library, or protocol interfaces.
@@ -382,16 +424,3 @@ See the [licensing guide](docs/open-source.md), [copyright and third-party
 notice](NOTICE.md), and [contribution requirements](CONTRIBUTING.md). Licensing
 permission does not change Jury's pre-alpha status or make it suitable for real
 secrets.
-
-For a complete synthetic registration and approval journey, follow the
-[Linux witness operator walkthrough](docs/witness-operator-walkthrough.md).
-
-For scripts, `--json` makes command results and parser/domain failures JSON;
-failures are one object on stderr with a nonzero exit status. `--json` is a
-standalone flag and does not accept `=true` or `=false`; malformed `--json=…`
-also selects JSON for its error. Parser failures
-use `invalid-arguments` without echoing supplied values. Place `--json` before
-the `--` child-argument separator. Explicit `--help` and `--version` remain
-human-readable informational output with exit status 0. Plaintext/child stdout
-remains the requested byte stream; notices for those streaming commands use
-stderr. Human-readable metadata commands include their notice on stdout.

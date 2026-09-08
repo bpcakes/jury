@@ -95,6 +95,7 @@ pub use self::argument_values::*;
 pub use self::backup_arguments::*;
 pub use self::dispatch::execute;
 pub use self::output::{CliError, CliErrorKind, CommandOutput, FieldSummary, IdentitySummary};
+pub use self::rollover_arguments::*;
 use self::{
     access_commands::*, backup_commands::*, context::*, environment::*, execution_commands::*,
     identity_commands::*, item_commands::*, mutation_commands::*, policy_commands::*,
@@ -122,6 +123,8 @@ mod policy_commands;
 mod principal_commands;
 mod receipt_commands;
 mod request_commands;
+mod rollover_arguments;
+mod rollover_commands;
 mod support;
 mod template_commands;
 mod transfer_commands;
@@ -308,62 +311,11 @@ pub enum IdentityPassphraseCommand {
     Change(IdentityPassphraseChangeArgs),
 }
 
-#[derive(Debug, Args)]
-pub struct IdentityInitArgs {
-    /// Named identity destination below the identity root.
-    #[arg(long, value_name = "NAME")]
-    pub name: Option<String>,
-
-    #[arg(long, value_enum, default_value_t = PrincipalKindArg::Human)]
-    pub kind: PrincipalKindArg,
-
-    #[arg(long = "kdf-profile", value_enum, default_value_t = KdfProfileArg::Portable)]
-    pub kdf_profile: KdfProfileArg,
-}
-
-#[derive(Debug, Args)]
-pub struct IdentityStatusArgs {
-    /// Named identity below the identity root.
-    #[arg(long, value_name = "NAME")]
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct IdentityPassphraseChangeArgs {
-    /// Select the resulting KDF profile; omission retains the current profile.
-    #[arg(long = "kdf-profile", value_enum)]
-    pub kdf_profile: Option<KdfProfileArg>,
-
-    /// Explicitly permit hardened-to-portable KDF downgrade.
-    #[arg(long, requires = "kdf_profile")]
-    pub allow_kdf_downgrade: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct IdentityPublicArgs {
-    /// Create the public descriptor at this absolute path.
-    #[arg(long, value_name = "FILE")]
-    pub out: PathBuf,
-
-    /// Replace an existing regular owner-only destination.
-    #[arg(long)]
-    pub overwrite: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct IdentityProveArgs {
-    /// Owner-created registration challenge artifact.
-    #[arg(long, value_name = "FILE")]
-    pub challenge: PathBuf,
-
-    /// Create the public proof at this absolute path.
-    #[arg(long, value_name = "FILE")]
-    pub out: PathBuf,
-
-    /// Replace an existing regular owner-only destination.
-    #[arg(long)]
-    pub overwrite: bool,
-}
+mod identity_arguments;
+pub use identity_arguments::{
+    IdentityInitArgs, IdentityPassphraseChangeArgs, IdentityProveArgs, IdentityPublicArgs,
+    IdentityStatusArgs,
+};
 
 #[derive(Debug, Args, Default)]
 pub struct VaultInitArgs {}
@@ -374,6 +326,10 @@ pub enum VaultCommand {
     Init(VaultInitArgs),
     /// Validate and inspect public vault state without unlocking an identity.
     Status,
+    /// Create a fresh lineage in the current suite with a new backup and transfer.
+    Rollover(VaultRolloverArgs),
+    /// Re-encrypt every active item into an explicitly selected new suite and lineage.
+    MigrateSuite(VaultMigrateSuiteArgs),
     /// Manage fields inside accessible encrypted items.
     Field {
         #[command(subcommand)]

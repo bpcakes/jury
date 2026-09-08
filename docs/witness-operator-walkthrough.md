@@ -21,8 +21,9 @@ jury item create ExampleItem --allow-direct
 jury vault field set ExampleItem ExampleField
 ```
 
-Enter a synthetic value of at least four bytes at the last command (the default
-concealed field requires four bytes). For scripted input, supply `--value-stdin`. Save the `item_id` returned
+Enter a synthetic value of at least four bytes at the last command, then press
+Ctrl-D to finish. Enter adds a newline to the value. For piped input, supply
+`--value-stdin`. Save the `item_id` returned
 by item creation as `ITEM_ID`. For each actor, run the descriptor/proof exchange
 below. Use `ExampleApprover` with kind `approver`, then `ExampleWitnessOne` and
 `ExampleWitnessTwo` with kind `witness`. This single-host exercise keeps all
@@ -61,7 +62,9 @@ proof to the owner for `principal add`. Repeat with the current snapshot for eac
 actor; a snapshot from before another registration can be stale. This initial
 bootstrap needs no owner identity or local state. Do not copy private identities
 into the public directory. Later onboarding after a witnessed policy is applied
-also needs policy material and is outside this initial-bootstrap recipe.
+also needs policy material; the remote import procedure under
+[Read with two terminals](#read-with-two-terminals) installs it for an already
+registered role.
 
 ```sh
 jury policy require witnessed --item ExampleItem \
@@ -76,6 +79,11 @@ jury witness checkpoint --output "$PUBLIC/ExampleCheckpoint.json"
 The review labels are deliberately public. Using synthetic private names as
 public labels is convenient here; do not publish private names in a real design.
 The policy removes unilateral access to this item's current descriptor/body.
+Choose all needed operations now: for private-file reads include
+`--operation write-private-file`; for later owner changes include
+`--operation administrative-rekey`. The CLI cannot reopen a witnessed-only item
+to replace its policy through another `policy require witnessed` call. See the
+[current rotation limits](self-hosting-juryd.md#witness-key-rotation-retirement-and-recovery).
 Adding another item afterward needs [descriptor authorization](item-creation.md).
 
 ## Start and register each witness
@@ -294,7 +302,11 @@ policy sequences are refused. Use new output names. Export one checkpoint for
 the whole vault revision and distribute that exact file to every active witness,
 including when a witness pair serves several item policies. Public label text
 may repeat across policies; use `--item-id` and `--field-id` when labels are
-ambiguous, or assign distinct public labels. Each request still
+ambiguous on read/request commands that expose those flags, or assign distinct
+public labels initially. Combined template/child references use exact public
+labels, with a JSON pair for labels outside the native name profile, for example
+`--stdin '["Example Item","Example Field"]'`. Duplicate public labels cannot be
+disambiguated by that pair. Each request still
 uses only its selected item policy and its required approvals:
 
 ```sh

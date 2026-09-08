@@ -1,6 +1,9 @@
-# Initial architecture
+# Architecture
 
-This document records repository boundaries, not a finished security protocol.
+This document records the implementation boundaries and required invariants.
+Use the [Linux release guide](linux-release.md) for current packaging status and
+the [operator walkthrough](witness-operator-walkthrough.md) for runnable setup.
+The master plan also contains future and deferred work; it is not a CLI manual.
 Jury `0.x` is a pre-alpha witnessed-access experiment. It has no completed
 independent professional security review and must not be used for real secrets.
 
@@ -44,8 +47,8 @@ versioned contracts; HTTP and database adapters do not enter the witness engine.
 
 ## Child-process containment boundary
 
-`jury-process` owns the neutral child-process boundary used by later guarded
-execution work. The active `0.x` contract supports Linux only. A provisional
+`jury-process` owns the child-process boundary used by `jury exec` and `jury run`.
+The active `0.x` contract supports Linux only. A provisional
 macOS backend remains in source for deferred post-`0.x` work; it is not a
 supported release surface, required CI evidence, or a shipped artifact. Targets
 without an implemented containment guarantee reject the operation before
@@ -105,12 +108,13 @@ running Jury image through Linux `/proc/self/exe`, then marks every inherited
 descriptor close-on-exec except the pinned executable and explicitly selected
 anonymous files before replacing itself with that executable.
 
-Transparent `jury exec` inherits ordinary stdin and environment, removes every
-`JURY_*` variable, streams post-redaction stdout/stderr without a capture or
-overall-runtime limit, and mirrors the exact
-child status. Brokered `jury run` starts from a small allowlist, supplies EOF
-unless stdin is mapped, and applies an explicit timeout and separate output
-retention bounds. Both modes suppress ordinary core dumps before credential
+Direct transparent `jury exec --direct` inherits ordinary stdin and environment,
+removes every `JURY_*` variable, streams post-redaction stdout/stderr without a
+capture or overall-runtime limit, and mirrors the exact child status. Witnessed
+`exec` uses a timeout bounded by the signed policy. Brokered `jury run` starts
+from a small allowlist, supplies EOF unless stdin is mapped, and applies an
+explicit timeout and separate output retention bounds. Both modes suppress
+ordinary core dumps before credential
 capture and use the same complete process-group owner. Direct J14 records a
 secret-free digest over the pinned executable's path and metadata, exact
 argument bytes, working directory, typed destinations, and field references.
@@ -212,6 +216,28 @@ has unilateral access. If an item carries any usable direct slot, Jury makes no
 quorum or distributed-authority claim for that item. Direct and witnessed paths
 share the same guarded use-case interface and cannot expose raw identity keys,
 epoch roots, reusable witness contributions, or revision secrets to adapters.
+
+J18's new-lineage bootstrap uses the exact two-phase construction in
+[rollover-v1.md](security/rollover-v1.md), with explicit source-policy revisions
+and inactive-scope preservation in [rollover-v2.md](security/rollover-v2.md).
+Version-1 artifacts retain their accepted encoding. Before its runtime consumes these
+inputs, `scripts/check-rollover-inputs` binds and checks the bootstrap encoding,
+witness-policy projection and conformance vectors together with the existing
+direct and witnessed gates. The source-owner bridge commits the pre-genesis
+manifest; the first destination policy revision binds the complete resulting
+state, including genesis-bound witness capsules. This supplement accepts suite
+1 only. It does not establish source freshness, witness readiness, independent
+review or acceptance of a second suite.
+
+J18's distinct suite 2 is specified in [jury-v2-suite.md](security/jury-v2-suite.md).
+The supplemental `scripts/check-suite2-inputs` gate binds its changed HPKE AEAD,
+seven canonical context prefixes, provider graph and cross-provider vectors,
+while checking the unchanged suite-1 inputs. That gate passed before runtime
+adoption. Runtime selection comes from authenticated vault/slot state; identity
+registration keeps profile 1. A 1-to-2 migration requires both the bootstrap
+bridge and a genesis-owner-signed migration record. Same-suite rollover preserves
+the selected suite. Runtime/native validation and review remain separate from
+input acceptance; neither control establishes independent security review.
 
 ## Non-negotiable seams
 

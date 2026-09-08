@@ -38,6 +38,36 @@ pub use validate::{
     MAX_PUBLIC_LABEL_BYTES, MAX_VAULT_BYTES, validate_policy_operation_context,
 };
 
+impl PolicyGenesisV1 {
+    /// The single defined empty bootstrap case. This is only a shape check;
+    /// callers must still authenticate the bridge, manifest and revision.
+    #[must_use]
+    pub fn permits_empty_rollover_bootstrap(&self) -> bool {
+        let Some(SourceAttestationV1::Rollover { statement }) = &self.source_attestation else {
+            return false;
+        };
+        let Some(manifest) = &statement.bootstrap_manifest else {
+            return false;
+        };
+        manifest.items.is_empty()
+            && manifest.witness_policies.is_empty()
+            && manifest.principals.len() == 1
+            && manifest.principals[0].principal_id == self.owner.principal_id
+            && manifest.principals[0].owner
+            && manifest.principals[0].display_label == "owner"
+            && manifest.destination_vault_id == self.vault_id
+            && manifest.destination_suite == self.suite
+            && manifest.created_at_ms == self.created_at_ms
+            && manifest.acting_owner_principal_id == self.owner.principal_id
+            && manifest.digest().as_ref() == Ok(&statement.bootstrap_manifest_digest)
+            && self.owner.self_signature_preimage().is_ok_and(|preimage| {
+                use sha2::{Digest as _, Sha256};
+                manifest.principals[0].unsigned_descriptor_digest
+                    == Digest32::new(Sha256::digest(preimage).into())
+            })
+    }
+}
+
 impl WitnessedStateV1 {
     /// Whether the state may carry a quorum claim at the item level.
     ///

@@ -15,6 +15,10 @@ data. Their parent directories must already exist and satisfy Jury's private
 ownership and mode checks (use `0700` directories and `0600` private files).
 Identity parent directories must be separate from the vault, backup input and
 state paths; choosing different leaf names under a shared parent is insufficient.
+For initial vault setup, use the repository README. For role registration and
+fresh remote imports, follow the [operator walkthrough](witness-operator-walkthrough.md).
+Service databases and external anchors have their own
+[backup and restore procedure](self-hosting-juryd.md#backup-restore-and-rollback-behavior).
 
 ## Create and verify a backup
 
@@ -81,9 +85,9 @@ selected role before creating a multi-role backup:
 ```sh
 jury transfer export --out ./ExampleVault.transfer.json
 jury --identity ExampleApprover --expected-genesis "$GENESIS" \
-  transfer import --in ./ExampleVault.transfer.json
+  transfer import --in ./ExampleVault.transfer.json --allow-no-access
 jury --identity ExampleWitnessOne --expected-genesis "$GENESIS" \
-  transfer import --in ./ExampleVault.transfer.json
+  transfer import --in ./ExampleVault.transfer.json --allow-no-access
 jury --identity ExampleApprover vault audit verify
 jury --identity ExampleWitnessOne vault audit verify
 ```
@@ -216,3 +220,167 @@ backup cannot prove that external recovery succeeded.
 Inspect the retained drill installation and controlled output. Delete them only
 through an explicit operator-directed cleanup after that inspection; Jury does
 not delete drill output automatically.
+
+## Rollover and suite migration in the development checkout
+
+Direct and governed rollover and suite migration are implemented in this
+checkout, including exact-candidate recovery and retained bootstrap validation.
+Native tests exercise source Recovery approvals, destination witnessed reads,
+backup restoration and modeled interrupted publication states. A real TLS witness
+and anchor test covers unavailable-anchor refusal, abrupt restarts and one-sided
+SQLite restore refusal for one required endpoint. The complete quorum tests use
+HTTP engines with in-memory stores. Jury remains externally unreviewed pre-alpha
+and must not be used for real secrets.
+
+An active owner can prepare a fresh lineage without appending to the source,
+including when its policy history has reached the cap. Use an absent detached
+home, an absent backup file in a separate existing private directory, and an
+absent transfer file outside both. Keep every output outside the source
+repository, identity storage and local-state storage. The destination home's
+parent must also be an existing owner-only directory.
+
+```console
+$ jury vault rollover --out /absolute/destinations/ExampleVault \
+    --backup-out /absolute/offline/ExampleVault.backup \
+    --transfer-out /absolute/transfers/ExampleVault.transfer --dry-run
+```
+
+To migrate a suite-1 vault, replace `vault rollover` with
+`vault migrate-suite --to 2`, keeping the same output, authorization and adoption
+options. Suite 2 uses AES-256-GCM for HPKE; storage encryption and identity
+protection retain their existing profiles. Migration re-encrypts every active
+item and signs a record binding both suites and lineages. Only migration from
+suite 1 to suite 2 is supported. Ordinary rollover preserves the source suite,
+including suite 2; it does not implicitly migrate or downgrade.
+
+For a direct-only source, dry-run performs the actual encryption, transfer and
+backup preparation in memory. It publishes no destination. A subsequent real run generates a fresh
+candidate and requires `--adopt-new-lineage` in place of `--dry-run`. That flag
+explicitly trusts the generated genesis for the acting owner's local
+installation. Each other installation must separately verify and trust the new
+genesis when installing the transfer. The command records local backup and
+export receipts; it does not claim recipient delivery or mutate Git.
+
+Later destination rekeying, item deletion or role removal preserves the signed
+first revision and its manifest. Transfer and backup retain the bootstrap's
+registration proofs, witness policies and review labels even when those roles
+or items are no longer active. Validation uses their original admission time;
+it does not require an old challenge or label to remain unexpired today. Missing
+historical evidence is refused. A subsequent rollover copies only active roles.
+The destination's local policy catalog is recovery-critical: removing retained
+bootstrap proofs or review-label sets prevents status, reads and backups, even
+when the vault file itself is intact. Preserve the complete transfer and fresh
+owner backup. Recover into a new local installation using that transfer or
+backup; copying only the vault file does not restore the missing catalog.
+New bootstraps use version 2, which preserves separate active revisions of the
+same source witness policy as separate destination policies. Public references
+to deleted items remain inactive; references to removed fields receive distinct
+new scope IDs without recreating those fields. Version-1 artifacts remain
+readable with their original encoding.
+Public history validation authenticates the committed initial authority; it does
+not prove equality of deleted plaintext or continuing endpoint availability.
+
+The source bytes, old history and old backups remain available. Old copies
+retain their original cryptography and recipient exposure. Verify and drill the
+new backup using the procedures above with `--home` selecting the new lineage.
+
+If publication is interrupted, retain the destination home and every file in
+its private backup directory. Once `rollover.outputs.pending.json` is durable,
+retry the same command against the unchanged source with `--resume` and
+`--adopt-new-lineage`, using exactly the original output and local-state paths.
+For migration, repeat `vault migrate-suite --to 2`; switching between migration
+and rollover on retry is refused.
+Supply the original backup passphrase after the owner identity passphrase.
+Corrected endpoint credentials are allowed. Resume validates the saved candidate,
+transfer, encrypted backup and authenticated local state; it reuses the exact
+witness checkpoint without new source approvals or candidate challenges. It
+refuses changed source bytes, mismatched paths, corrupted staging and conflicting
+published outputs. KDF and passphrase-reuse options do not regenerate the backup.
+
+The candidate lives in `rollover.pending.json`. The output marker records the
+selected paths and saved output hashes. An owner-MAC audit event separately
+binds those paths, source/destination bytes, backup, transfer and exact witness
+checkpoint, so editing the marker cannot authorize a different intent. Its
+encrypted backup and other payloads
+live as owner-only `.jury-rollover-*` files beside the private backup, never as
+identity material in the new vault home. Ordinary vault commands refuse either
+pending marker or its cleanup counterpart. Resume republishes matching partial
+outputs durably before cleaning up; a completed retry validates the installation
+and confirms cleanup. Saved complete signed witness acknowledgements avoid
+repeating registration only when the final vault was already published and
+cleanup remains. If that vault is absent, resume contacts every required witness
+again. A completed retry makes no claim of continuing global freshness.
+
+A crash before the output marker is durable has not started external destination
+registration and may leave an unrecoverable partial preparation. Use the
+unchanged source and retain that preparation for explicit cleanup. Never remove
+pending state to make an incomplete installation appear ready.
+
+If waiting for role proofs ends before a destination candidate is saved, the
+registration directory remains populated and cannot be resumed. Retain it for
+explicit operator cleanup, select a new absent `--registration-dir`, and repeat
+fresh preparation with new source approvals. A plain retry using the occupied
+registration directory is refused; `--resume` requires the saved destination.
+
+Governed rollover additionally needs `--registration-dir` naming an absent
+private directory outside all source/output boundaries. The foreground process
+retains protected staged content while candidates answer its published
+`journal.json` and `<principal-id>.challenge.json` files. Each candidate selects
+the unchanged source vault and its own identity, verifies the new fingerprint
+through the owner's trusted channel, and runs:
+
+```console
+$ jury --identity ExampleWitness identity prove \
+    --challenge /absolute/registration/PRINCIPAL_ID.challenge.json \
+    --rollover-draft /absolute/registration/journal.json \
+    --expected-rollover-genesis EXPECTED_NEW_GENESIS \
+    --out /absolute/registration/PRINCIPAL_ID.proof.json
+```
+
+This proof authenticates the source owner, pinned destination genesis and role
+admission. The draft contains policy-intent digests rather than full destination
+policy templates, so the candidate command does not compare the
+destination quorum and operation rules with the source. The owner's completion
+path checks that equivalence before publication. Candidates must review the
+completed public policy material before operating the new lineage; the draft
+proof alone establishes neither its policy equivalence nor witness readiness.
+
+Supply every active approver and witness proof before
+`--registration-wait-seconds` expires. The same live process validates fresh
+key-possession responses against its fixed candidate. Losing that process
+before completion loses its protected staging; old responses cannot authorize a
+replacement candidate.
+The wait bound controls polling only. Challenges expire separately after 24
+hours; an answer to an abandoned challenge cannot recover its lost staging or
+authorize another candidate.
+Copied review labels keep their original expiry. They must remain valid beyond
+the full 24-hour registration deadline; short-lived labels are refused with
+`rollover-review-label-lifetime` before source access. Challenge renewal after
+source authorization checks that window again before candidates are asked for
+proofs. Refresh source labels and their witness policies before preparation if
+they expire too soon; rollover does not silently extend their authority.
+
+For source items requiring witnesses, `--administrative-access FILE` supplies
+version 1 JSON with `total_wait_seconds` (1–86400) and `entries`. Provide one
+entry per descriptor and body with `item_id`, `content_role`, `checkpoint`,
+`request_out`, `receipt`, `approvals`, `witnesses`, `wait_seconds` (0–900), and
+optional `allow_insecure_loopback`. Request and receipt files must be absent.
+The source policy must permit Recovery with whole-item human approval. The
+review binds the destination vault path and preserves the item's access mode.
+`--direct-source` explicitly selects an existing owner direct slot for mixed
+items; it does not make a direct slot available for witnessed-only items.
+
+Each active destination witness also needs `--destination-witness
+ID,URL,PRIVATE_OPERATOR_TOKEN,CA_PEM`. These are operator credentials for initial
+registration, distinct from the source request-client credentials. Loopback
+HTTP requires `--allow-insecure-loopback`. The command retains exact public
+registration inputs before contacting endpoints and verifies every required
+signed checkpoint/anchor acknowledgement before publishing the destination.
+It preserves the accepted initial checkpoint as `witness.checkpoint.json` and
+per-witness acknowledgements in the new home. These describe the observed
+registration outcome, not continuing global freshness.
+
+Governed dry-run checks public source and Recovery request feasibility without
+sending requests or creating a registration directory. Its output explicitly
+leaves source access, fresh proofs, endpoint registration, backup and publication
+pending. It is not a completed rollover or a witness-readiness check.

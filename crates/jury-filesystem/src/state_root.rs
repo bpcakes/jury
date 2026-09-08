@@ -282,6 +282,37 @@ impl HardenedStateRoot {
         )
     }
 
+    /// Confirms and syncs an already absent marker and quarantine. The caller
+    /// must first authenticate its recovery record and verify the replacement
+    /// outputs; this proves filesystem absence, not transaction completion.
+    pub fn confirm_private_cleanup_absent(
+        &self,
+        name: &Path,
+        quarantine_name: &Path,
+    ) -> Result<PrivateFileCleanupOutcome, FilesystemError> {
+        self.confirm_private_cleanup_absent_with_sync(name, quarantine_name, &mut |directory| {
+            directory.open(".").and_then(|parent| parent.sync_all())
+        })
+    }
+
+    fn confirm_private_cleanup_absent_with_sync(
+        &self,
+        name: &Path,
+        quarantine_name: &Path,
+        parent_sync: &mut impl FnMut(&cap_std::fs::Dir) -> std::io::Result<()>,
+    ) -> Result<PrivateFileCleanupOutcome, FilesystemError> {
+        if self.private_child_exists(name)? || self.private_child_exists(quarantine_name)? {
+            return Ok(PrivateFileCleanupOutcome::Retained);
+        }
+        if parent_sync(&self.root.dir).is_err() {
+            return Ok(PrivateFileCleanupOutcome::RemovedButParentUnsynced);
+        }
+        if self.private_child_exists(name)? || self.private_child_exists(quarantine_name)? {
+            return Ok(PrivateFileCleanupOutcome::Retained);
+        }
+        Ok(PrivateFileCleanupOutcome::RemovedAndSynced)
+    }
+
     fn cleanup_private_file_if_exact_with_sync(
         &self,
         name: &Path,
@@ -484,6 +515,40 @@ mod tests {
         );
         assert!(!root.private_child_exists(Path::new("marker.json"))?);
         assert!(!root.private_child_exists(Path::new("marker.cleanup"))?);
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_cleanup_absence_requires_sync_and_rejects_reappearing_entries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = HardenedStateRoot::open_or_create(&temporary.path().join("private"), &[])?;
+        let name = Path::new("ExampleMarker");
+        let quarantine = Path::new("ExampleQuarantine");
+        assert_eq!(
+            root.confirm_private_cleanup_absent_with_sync(name, quarantine, &mut |_| Err(
+                std::io::Error::other("injected sync failure")
+            ))?,
+            PrivateFileCleanupOutcome::RemovedButParentUnsynced
+        );
+        assert_eq!(
+            root.confirm_private_cleanup_absent(name, quarantine)?,
+            PrivateFileCleanupOutcome::RemovedAndSynced
+        );
+        assert_eq!(
+            root.confirm_private_cleanup_absent_with_sync(name, quarantine, &mut |dir| dir
+                .write(quarantine, b"ExampleReplacement"))?,
+            PrivateFileCleanupOutcome::Retained
+        );
+        assert_eq!(
+            root.confirm_private_cleanup_absent(name, quarantine)?,
+            PrivateFileCleanupOutcome::Retained
+        );
+        assert_eq!(root.root.dir.read(quarantine)?, b"ExampleReplacement");
+        assert!(
+            root.confirm_private_cleanup_absent(Path::new("../ExampleMarker"), quarantine)
+                .is_err()
+        );
         Ok(())
     }
 

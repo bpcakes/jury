@@ -530,7 +530,7 @@ fn witnessed_responses_with_count(
     Ok(responses)
 }
 
-fn reconstruct_slot_secret(
+pub(crate) fn reconstruct_slot_secret(
     slot: &WitnessedSlotV1,
     private_keys: &[ProtectedMemory],
     protection: ProtectionPolicy,
@@ -544,14 +544,16 @@ fn reconstruct_slot_secret_with_count(
     protection: ProtectionPolicy,
     count: usize,
 ) -> Result<ProtectedRevisionSecret, Box<dyn std::error::Error>> {
+    let suite = jury_protocol::hpke_context::VaultSuite::from_id(slot.suite).ok_or("unknown slot suite")?;
     let mut shares = Zeroizing::new(Vec::new());
     for (capsule, private) in slot.capsules.iter().zip(private_keys).take(count) {
-        let share = crypto::open_hpke(
+        let share = crypto::open_hpke_for_suite(
+            suite,
             private,
             &capsule.encapsulation,
             capsule.ciphertext.as_bytes(),
-            &capsule.info_preimage(),
-            &capsule.aad_preimage(),
+            &capsule.info_preimage_for_suite(suite),
+            &capsule.aad_preimage_for_suite(suite),
             33,
         )?;
         let bytes = share.expose(<[u8]>::to_vec)?;

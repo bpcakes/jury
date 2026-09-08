@@ -87,6 +87,9 @@ fn witnessed_only_automatic_foreground_session_is_revision_scoped()
             updated_at_ms: 1,
         }],
     };
+    assert_staged_capsules_bind_completed_genesis(
+        &created_policy.journal, &policy, &owner, &witness_policy, &descriptor, &state,
+    )?;
     let mut items = ItemCreator::from_source(IncrementingRandom(0x80), protection);
     let created_item = items.prepare_create(
         &policy,
@@ -294,6 +297,67 @@ fn witnessed_only_automatic_foreground_session_is_revision_scoped()
             request_random_start: 0xb0,
         },
     )?;
+    Ok(())
+}
+
+fn assert_staged_capsules_bind_completed_genesis(
+    journal: &jury_protocol::vault_v1::PolicyJournalV1,
+    policy: &PolicyState,
+    owner: &VaultPrincipalIdentity,
+    witness_policy: &WitnessPolicy,
+    descriptor: &ItemDescriptorV1,
+    state: &ItemStateV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let protection = ProtectionPolicy::EmergencyAllowDegraded;
+    let mut creator = ItemCreator::from_source(IncrementingRandom(0x80), protection);
+    let access = ItemAccessPlan { grants: Vec::new(), direct_recipient_ids: Vec::new(), witness_policy_digest: Some(witness_policy.digest()?) };
+    let staged = creator.stage_create(policy, owner, 3, NewItem {
+        kind: ItemKind::Canonical, descriptor: descriptor.clone(), state: state.clone(), bucket_id: 1, access: access.clone(),
+    }, &mut ItemArtifactInventory::default())?;
+    let reserved = staged.witness_slot_ids().ok_or("missing reserved slots")?;
+    let initial_envelope = staged.envelope().clone();
+    assert!(staged.direct_slots().is_empty());
+
+    let mut completed_journal = jury_protocol::vault_v1::PolicyJournalV1 { genesis: journal.genesis.clone(), revisions: Vec::new() };
+    completed_journal.genesis.created_at_ms = 2;
+    completed_journal.genesis.owner_signature = owner.sign_validated_statement(&completed_journal.genesis.signature_preimage()?)?;
+    let initial = crate::policy::replay_policy(&completed_journal)?;
+    let principals = initial.prepare_revision(owner, 2, journal.revisions[0].operations.clone())?;
+    completed_journal.revisions.push(principals.revision);
+    let mut completed_witness = witness_policy.clone();
+    completed_witness.genesis_fingerprint = initial.genesis_fingerprint().clone();
+    completed_witness.vault_policy_hash = principals.state.terminal_revision_hash().clone();
+    let completed = crate::policy::replay_policy_with_witness_policies(&completed_journal, std::slice::from_ref(&completed_witness))?;
+    let final_access = ItemAccessPlan { witness_policy_digest: Some(completed_witness.digest()?), ..access };
+    let component = creator.finish_create(&completed, staged, final_access)?;
+    assert_eq!(component.envelope, initial_envelope);
+    let revision = completed.prepare_revision(owner, 3, component.operations)?;
+    completed_journal.revisions.push(revision.revision);
+    CheckpointCandidate::from_validated(&revision.state, &completed_journal, std::slice::from_ref(&component.envelope))?;
+    let witnessed = revision.state.item(&component.envelope.item_id).and_then(|item| item.witnessed_state.as_ref()).ok_or("missing completed slots")?;
+    assert_ne!(initial.genesis_fingerprint(), policy.genesis_fingerprint());
+    let mut private_keys = Vec::new();
+    for index in 0..witness_policy.witness_descriptors.len() {
+        let (key, _) = crypto::generate_recipient_keypair(protection, &mut FillByte(0x61 + u8::try_from(index)?))?;
+        private_keys.push(key);
+    }
+    for (slot, expected_id) in witnessed.slots.iter().zip(reserved) {
+        assert_eq!(slot.slot_id, expected_id);
+        assert_eq!(&slot.genesis_fingerprint, initial.genesis_fingerprint());
+        let secret = reconstruct_slot_secret(slot, &private_keys, protection)?;
+        if slot.content_role == ContentRole::Body {
+            assert!(open_body(&component.envelope, &secret)? == *state);
+        } else {
+            assert!(open_descriptor(&component.envelope, &secret)? == *descriptor);
+        }
+        let mut rebound = slot.clone();
+        rebound.genesis_fingerprint = policy.genesis_fingerprint().clone();
+        for capsule in &mut rebound.capsules {
+            capsule.genesis_fingerprint = policy.genesis_fingerprint().clone();
+            capsule.context_digest = capsule.recomputed_context_digest();
+        }
+        assert!(reconstruct_slot_secret(&rebound, &private_keys, protection).is_err());
+    }
     Ok(())
 }
 

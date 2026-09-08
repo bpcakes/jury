@@ -16,7 +16,6 @@ use super::{
     platform_assurance_tag, replay::replay_policy_with_catalog,
 };
 
-const SUITE: u16 = 1;
 const MAX_POLICY_MEMBERS: usize = 32;
 const MAX_OPERATIONS: usize = 9;
 const MAX_AUTOMATIC_TARGETS: usize = 64;
@@ -369,7 +368,7 @@ impl WitnessPolicy {
         if self.schema != 1
             || self.revision == 0
             || self.construction != 1
-            || self.suite != SUITE
+            || !matches!(self.suite, 1 | 2)
             || self.direct_fallback
             || self.approver_descriptors.len() > MAX_POLICY_MEMBERS
             || self.witness_descriptors.len() > MAX_POLICY_MEMBERS
@@ -604,7 +603,9 @@ pub(super) fn validate_item_policy_binding(
         .witness_policies
         .get(&first.witness_policy_digest)
         .ok_or_else(|| PolicyError::new(PolicyErrorKind::MissingWitnessPolicy))?;
-    if policy.witness_policy_id != first.witness_policy_id
+    if policy.suite != state.suite
+        || witnessed.slots.iter().any(|slot| slot.suite != state.suite)
+        || policy.witness_policy_id != first.witness_policy_id
         || policy.revision != first.witness_policy_revision
         || policy.vault_id != state.vault_id
         || policy.genesis_fingerprint != state.genesis_fingerprint

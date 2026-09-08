@@ -44,6 +44,26 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::Vault {
             command: VaultCommand::Status,
         } => vault_status(&cli, &environment, &current, "vault-status"),
+        Command::Vault {
+            command: VaultCommand::Rollover(arguments),
+        } => rollover_commands::vault_rollover(
+            &cli,
+            arguments,
+            None,
+            &environment,
+            &current,
+            protection,
+        ),
+        Command::Vault {
+            command: VaultCommand::MigrateSuite(arguments),
+        } => rollover_commands::vault_rollover(
+            &cli,
+            &arguments.rollover,
+            Some(arguments.to),
+            &environment,
+            &current,
+            protection,
+        ),
         Command::History {
             command: HistoryCommand::Status,
         } => vault_status(&cli, &environment, &current, "history-status"),
