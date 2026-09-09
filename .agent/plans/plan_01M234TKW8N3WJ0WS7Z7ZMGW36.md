@@ -13,7 +13,7 @@ Consumer: J26 release maintainer. Feature: exact experimental Linux release publ
 - [x] Pass all ten packaged Debian 12 journeys plus the TLS lifecycle and untrusted-CA refusal.
 - [x] Prepare customer-facing release notes at target/j26-signing/release-notes.md.
 
-Remaining J26 work outside local preparation: final manifest signing needs browser authentication; Rust CLI CI is still running; publication remains separately approved. J26 stays in_progress. No release signature, tag or publication has been created.
+Remaining J26 work outside local preparation: Rust CLI CI is still running and publication requires approval. J26 stays in_progress. Final checksum signing completed and verified against the exact selected identity and issuer. A GitHub draft contains all ten artifacts; no tag or published release exists.
 
 ## Surprises & Discoveries
 
@@ -36,3 +36,11 @@ The final candidate is target/linux-release/0.0.1-c4edd62, bound to clean source
 Logs and extracted binaries are under target/j26-signing; ignored local outputs may need regeneration. Run scripts/build-linux-release verify with the exact checksum digest above before signing. The packaged journey driver has two groups; logs journeys-0.log and journeys-1.log preserve command output and failures. It ran unprivileged in the pinned Debian 12 build image, without network and with read-only source. Host integration tests selected the extracted binaries through JURY_TEST_BINARY and JURYD_TEST_BINARY; embedded CLI quorum fixtures are not packaged-daemon persistence evidence. Fresh J25 measurements bind source c4edd62 and working-tree digest 747998c500c0c50ff6750a9e1c0086524cd9bf5beff8401f4b757d6ce212a26b. Complete suite-2 verification used --boringssl-root /tmp/jury-j01b-boringssl. work-check.log, final-test.log, j25.log, packaged-integration.log and help.log record their respective checks.
 
 Follow docs/linux-release.md for signing and exact identity verification. A browser callback must complete on this machine; never send authentication codes through chat. Rebuild and repeat the affected checks if included source changes. Do not close J26 or claim publication while signing, CI, or publication approval remains outstanding. Push the bookkeeping commit after the source CI completes to avoid cancelling it; the release source and future tag must identify c4edd62, not that bookkeeping commit.
+
+## Verified signing and draft handoff
+
+The maintainer completed browser authentication. Cosign verified SHA256SUMS.sigstore.json against 96315340+featherenvy@users.noreply.github.com and https://github.com/login/oauth. Bundle SHA-256: e02cbee1b4f2981659e8649ef6644bfeeadccfb74392a05d02053acf6448e213. The manifest digest and every artifact remain unchanged. The local artifact verifier explicitly does not verify signatures; Cosign verification was performed separately and succeeded.
+
+GitHub draft release ID 385570274, proposed tag v0.0.1, is https://github.com/bpcakes/jury/releases/tag/untagged-773a1c2d106d3487a195. API inspection confirmed draft=true, prerelease=true, target_commitish=c4edd6221389e4c63774bfacf66ccbee35c9c54c, all ten uploaded asset digests matching local files, and no v0.0.1 Git ref. All draft assets were downloaded to target/j26-signing/github-draft-downloads; exact-identity Cosign verification, SHA256SUMS checks and source/artifact verification passed again on those downloaded bytes.
+
+At the publication handoff, Rust CI 34359454615 still has its CLI job running; other jobs and all other workflows have passed. Do not publish unless that CI passes and the maintainer approves this exact experimental prerelease. If a failure requires changing included source, the approval cannot cover an altered candidate: rebuild, retest, sign, replace the draft only after verification, and present it again. Push bookkeeping commits only after the source CI finishes to avoid cancellation.
