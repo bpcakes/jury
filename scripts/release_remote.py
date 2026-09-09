@@ -2,9 +2,11 @@
 import json
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import time
 import urllib.request
+from urllib.parse import quote
 
 from linux_release_support import digest, require
 from release_state import run
@@ -110,10 +112,18 @@ def verify_remote_assets(item, expected):
         with tempfile.TemporaryDirectory(prefix='jury-release-download-') as temporary:
             target = Path(temporary)/asset['name']
             with target.open('wb') as out:
-                import subprocess
                 subprocess.run(['gh', 'api', f"repos/{REPO}/releases/assets/{asset['id']}",
                                 '-H', 'Accept: application/octet-stream'], stdout=out, check=True)
             require(digest(target) == expected[asset['name']], 'remote asset bytes differ: '+asset['name'])
+
+
+def upload_asset(release_id, path):
+    # Pass bytes through stdin so packaged gh installations do not need access
+    # to the host's private temporary directory namespace.
+    with path.open('rb') as source:
+        subprocess.run(['gh', 'api', f'https://uploads.github.com/repos/{REPO}/releases/{release_id}/assets?name={quote(path.name, safe="")}',
+                        '--method', 'POST', '-H', 'Content-Type: application/octet-stream', '--input', '-'],
+                       stdin=source, stdout=subprocess.PIPE, check=True)
 
 
 def draft(state, notes):
@@ -145,7 +155,7 @@ def draft(state, notes):
     verify_remote_assets(item, {asset['name']: expected[asset['name']] for asset in existing})
     for name in expected:
         if name not in {asset['name'] for asset in existing}:
-            run(['gh', 'release', 'upload', tag, state.artifacts/name, '--repo', REPO])
+            upload_asset(item['id'], state.artifacts/name)
     verify_remote_assets(item, expected)
     print(f"Verified draft {item['html_url']}")
 

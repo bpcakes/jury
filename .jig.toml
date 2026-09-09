@@ -1,4 +1,4 @@
-_commit = "8629700b92cd9ab8b09f8ff86de4fc1573469c83"
+_commit = "45449a67ba897fd924b92d6f24a7138c5dd159d2"
 _src_path = "https://github.com/bpcakes/jig-sh.git"
 _template_local_path = ""
 _template_mode = ""
@@ -484,6 +484,10 @@ providers = []
 allow_global = false
 scope = "repo"
 scope_id = "01M13WV95P9XS4AB54DFWQFN3K"
+
+[work]
+# Root Beads data is tracker-only. Source and packaged guides remain authoritative.
+receipt_metadata = ["beads"]
 
 [[work.gates]]
 conclusion = "success"

@@ -186,11 +186,26 @@ class RemoteTests(unittest.TestCase):
             with patch.object(remote, 'local_assets', return_value={'ExampleA': '1', 'ExampleB': '2'}), \
                  patch.object(remote, 'ci'), patch.object(remote, 'release', return_value=item), \
                  patch.object(remote, 'ensure_ref'), patch.object(remote, 'pages', return_value=[dict(name='ExampleA')]), \
-                 patch.object(remote, 'run') as upload, patch.object(remote, 'verify_remote_assets') as verify:
+                 patch.object(remote, 'upload_asset') as upload, patch.object(remote, 'verify_remote_assets') as verify:
                 remote.draft(self.state, root/'notes')
-                upload.assert_called_once_with(['gh', 'release', 'upload', 'v0.0.2', root/'ExampleB', '--repo', remote.REPO])
+                upload.assert_called_once_with(31, root/'ExampleB')
                 self.assertEqual(verify.call_count, 2)
                 verify.assert_called_with(item, {'ExampleA': '1', 'ExampleB': '2'})
+
+    def test_upload_streams_exact_bytes_without_exposing_host_path_to_gh(self):
+        with tempfile.TemporaryDirectory(prefix='ExampleUpload-') as temporary:
+            path = Path(temporary)/'Example artifact.json'
+            content = b'Example upload bytes\x00\n'
+            path.write_bytes(content)
+            def consume(argv, *, stdin, stdout, check):
+                self.assertEqual(stdin.read(), content)
+                self.assertTrue(check)
+                self.assertNotIn(str(path), argv)
+                self.assertIn('https://uploads.github.com/repos/'+remote.REPO+'/releases/31/assets?name=Example%20artifact.json', argv)
+                self.assertEqual(argv[-2:], ['--input', '-'])
+            with patch('subprocess.run', side_effect=consume) as command:
+                remote.upload_asset(31, path)
+                command.assert_called_once()
 
     def test_publication_requires_exact_approval_before_network(self):
         with patch.object(remote, 'local_assets') as verify:
