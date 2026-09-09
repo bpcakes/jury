@@ -1,6 +1,7 @@
 """Exact-source GitHub validation and immutable release publication."""
 import json
 from pathlib import Path
+import re
 import tempfile
 import time
 import urllib.request
@@ -17,7 +18,10 @@ ISSUER = 'https://github.com/login/oauth'
 def api(path, method='GET', **fields):
     argv = ['gh', 'api', f'repos/{REPO}/{path}', '--method', method]
     for key, value in fields.items():
-        argv += ['-F', f'{key}={value}' if not isinstance(value, bool) else f'{key}={str(value).lower()}']
+        if isinstance(value, bool):
+            argv += ['-F', f'{key}={str(value).lower()}']
+        else:
+            argv += ['-f', f'{key}={value}']
     result = run(argv, capture=True)
     return json.loads(result) if result else None
 
@@ -92,6 +96,8 @@ def release(tag):
 def local_assets(state):
     state.prepared()
     signature(state.artifacts)
+    require(state.data.get('signature_sha256') == digest(state.artifacts/'SHA256SUMS.sigstore.json'),
+            'signature checkpoint is absent or changed; run sign to authenticate and bind it')
     return {path.name: digest(path) for path in state.artifacts.iterdir()}
 
 
@@ -176,7 +182,8 @@ def verify_public(tag, destination, *, expected_manifest=None, expected_source=N
             'expected a public experimental prerelease')
     assets = item['assets']
     names = [asset['name'] for asset in assets]
-    require(len(names) == len(set(names)) and all(Path(name).name == name for name in names),
+    require(len(names) == len(set(names)) and all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,254}', name)
+                                                for name in names),
             'invalid public asset inventory')
     # Stage complete downloads privately; an interrupted transfer never replaces a verified file.
     for asset in assets:
@@ -199,7 +206,8 @@ def verify_public(tag, destination, *, expected_manifest=None, expected_source=N
     entries = {}
     for line in (destination/'SHA256SUMS').read_text().splitlines():
         value, name = line.split('  ', 1)
-        require(Path(name).name == name and name not in entries, 'invalid checksum entry')
+        require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,254}', name)
+                and re.fullmatch(r'[0-9a-f]{64}', value) and name not in entries, 'invalid checksum entry')
         entries[name] = value
         require(digest(destination/name) == value, 'published checksum mismatch: '+name)
     require(set(names) == set(entries) | {'SHA256SUMS', 'SHA256SUMS.sigstore.json'},
@@ -208,4 +216,8 @@ def verify_public(tag, destination, *, expected_manifest=None, expected_source=N
     require(provenance['version'] == tag[1:] and provenance['dirty_candidate'] is False
             and (expected_source is None or provenance['source_commit'] == expected_source),
             'published source/version mismatch')
+    with urllib.request.urlopen(f'https://api.github.com/repos/{REPO}/git/ref/tags/{tag}') as response:
+        ref = json.load(response)
+    require(ref['object']['type'] == 'commit' and ref['object']['sha'] == provenance['source_commit'],
+            'published tag no longer names the signed source commit')
     print(f"Verified public {tag}: source {provenance['source_commit']}; SHA256SUMS {manifest}")

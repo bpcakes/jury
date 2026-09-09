@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Recovery and remote-orchestration regressions; remote doubles are not live release proof."""
 import json
+import io
 import os
 from pathlib import Path
 import runpy
@@ -144,6 +145,35 @@ class RemoteTests(unittest.TestCase):
             argv = command.call_args.args[0]
             self.assertEqual(argv[argv.index('--certificate-identity')+1], remote.IDENTITY)
             self.assertEqual(argv[argv.index('--certificate-oidc-issuer')+1], remote.ISSUER)
+
+    def test_changed_signature_checkpoint_blocks_draft_assets(self):
+        with tempfile.TemporaryDirectory(prefix='ExampleSignature-') as temporary:
+            self.state.artifacts = Path(temporary)
+            bundle = self.state.artifacts/'SHA256SUMS.sigstore.json'
+            bundle.write_text('Example original signature')
+            self.state.data['signature_sha256'] = digest(bundle)
+            bundle.write_text('Example replacement signature')
+            with patch.object(remote, 'signature'):
+                with self.assertRaisesRegex(ValueError, 'signature checkpoint'):
+                    remote.local_assets(self.state)
+
+    def test_public_download_rejects_dot_and_traversal_asset_names(self):
+        for name in ('..', '.', '../ExampleFile', '/ExampleFile', 'Example/Child'):
+            item = dict(draft=False, prerelease=True, tag_name='v0.0.2', assets=[dict(name=name)])
+            with self.subTest(name=name), tempfile.TemporaryDirectory(prefix='ExampleDownload-') as output, \
+                 patch('urllib.request.urlopen', return_value=io.BytesIO(json.dumps(item).encode())) as request:
+                with self.assertRaisesRegex(ValueError, 'asset inventory'):
+                    remote.verify_public('v0.0.2', Path(output))
+                self.assertEqual(request.call_count, 1)
+                self.assertEqual(list(Path(output).iterdir()), [])
+
+    def test_api_strings_never_use_file_expansion(self):
+        with patch.object(remote, 'run', return_value=b'{}') as command:
+            remote.api('releases', 'POST', body='@ExampleNotes', draft=True)
+            argv = command.call_args.args[0]
+            self.assertIn('-f', argv)
+            self.assertEqual(argv[argv.index('body=@ExampleNotes')-1], '-f')
+            self.assertEqual(argv[argv.index('draft=true')-1], '-F')
 
     def test_partial_draft_upload_only_adds_missing_assets(self):
         with tempfile.TemporaryDirectory(prefix='ExampleDraft-') as temporary:

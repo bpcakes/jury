@@ -27,3 +27,8 @@ unsafe_code = "forbid"
 cognitive_complexity = "warn"
 expect_used = "deny"
 unwrap_used = "deny"
+
+[profile.test]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true

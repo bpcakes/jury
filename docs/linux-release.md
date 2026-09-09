@@ -39,6 +39,16 @@ alone does not publish or approve a release.
 
 ## Prepare a local candidate
 
+Tests use optimization level 1 with debug assertions and overflow checks enabled.
+The [same-runner benchmark](https://github.com/bpcakes/jury/actions/runs/34367818557)
+at source `4c1c761e789a140c1b8edefd9514be0520449c2b` ran all 94 tests selected by
+`cargo test --locked -p jury` at levels 0 and 1, with identical inventories,
+94 passes and zero ignored tests in each. Execution took 1588.76 versus 85.50
+seconds; compilation took 61.38 versus 108.65 seconds. These are measurements of
+that runner, not a general latency guarantee. The manually dispatched
+`test-profile-benchmark.yml` workflow repeats the comparison without changing
+test selection or disabling either check.
+
 The resumable command wraps the same two-build recipe and packaged QA below.
 It requires `gh` authenticated to this repository and `cosign` for signing and
 verification. Choose a private recovery directory and an exact committed source

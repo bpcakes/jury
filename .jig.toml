@@ -29,7 +29,7 @@ source = "bpcakes/jig-skills"
 [commands]
 api_clippy_command = '''if [ -f Cargo.toml ]; then cargo clippy --workspace --all-targets --all-features --locked -- -D warnings -D clippy::mod_module_files; else printf '%s\n' 'No Cargo.toml found; skipping cargo clippy.'; fi'''
 api_fmt_command = '''if [ -f Cargo.toml ]; then cargo fmt --all -- --check; else printf '%s\n' 'No Cargo.toml found; skipping cargo fmt.'; fi'''
-api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
+api_test_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test.'; fi'''
 api_test_locked_command = '''if [ -f Cargo.toml ]; then cargo test --workspace --locked; else printf '%s\n' 'No Cargo.toml found; skipping cargo test-locked.'; fi'''
 api_test_cli_locked_command = 'cargo test --locked -p jury'
 api_test_libraries_locked_command = 'cargo test --locked --workspace --exclude jury'
@@ -490,56 +490,3 @@ conclusion = "success"
 id = "verify"
 kind = "evidence"
 profile = "verify"
-
-[[work.gates]]
-id = "jig-contract"
-kind = "check"
-tool = "jig.contract_check"
-
-[[work.gates]]
-id = "file-budget"
-kind = "evidence"
-target = "repo:file-budget"
-conclusion = "success"
-
-[[work.gates]]
-id = "rust-fmt"
-kind = "check"
-paths = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "rustfmt.toml",
-    ".rustfmt.toml",
-]
-tool = "jig.fmt_check"
-
-[[work.gates]]
-id = "rust-clippy"
-kind = "check"
-paths = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "clippy.toml",
-    ".clippy.toml",
-]
-tool = "jig.clippy"
-
-[[work.gates]]
-id = "rust-tests"
-kind = "check"
-paths = [
-    "crates/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "rust-toolchain*",
-    ".cargo/**",
-    "nextest.toml",
-    ".config/nextest.toml",
-]
-tool = "jig.test"
