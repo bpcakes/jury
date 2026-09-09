@@ -42,16 +42,18 @@ Neither mode prevents an authorized endpoint or child from retaining plaintext.
 
 ## Start here
 
-Version **0.0.1 is not published**. The [2026-09-08 Linux CLI audit](docs/qa-linux-0.0.1.md)
+Version **0.0.1 is experimental**. Check [GitHub releases](https://github.com/bpcakes/jury/releases)
+for publication status and versioned downloads. The [2026-09-08 Linux CLI audit](docs/qa-linux-0.0.1.md)
 passed ten packaged CLI journeys on Debian 12 (glibc 2.36), including witnessed
 access and recovery. Its four follow-up findings are addressed: rollover and
 suite migration are explicitly included in 0.0.1, the repaired fuzz lockfile
 passes the bounded suite, and recovery/TLS diagnostics explain the required
 filesystem layout and permissions. Passing the exercised paths does not establish
 security for real secrets. Private vulnerability reporting is available through
-the [security policy](SECURITY.md). Publication still requires confirmed report
-notification delivery, a release-signing identity, and a freshly verified
-candidate bound to the final source and documentation.
+the [security policy](SECURITY.md), and the maintainer has confirmed security-alert
+email delivery is enabled. Publication still requires a verified release
+signature and a freshly verified candidate bound to the final source and
+documentation.
 
 To build and install both commands from source:
 

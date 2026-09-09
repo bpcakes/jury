@@ -1,7 +1,8 @@
 # Linux 0.0.1 candidate
 
 Jury is externally unreviewed pre-alpha software and unsuitable for real
-secrets. Version 0.0.1 has not been published. The package contains the `jury`
+secrets. Check [GitHub releases](https://github.com/bpcakes/jury/releases) for
+publication status and versioned downloads. The package contains the `jury`
 CLI and self-hosted `juryd` daemon for Linux x86_64. Debian 12 with glibc 2.36
 is the tested runtime baseline. No macOS, Windows, ARM, or TUI artifact is
 included. This is a hard cutover of an unreleased format; recreate synthetic
@@ -33,7 +34,7 @@ future operation.
 That candidate was local and unsigned. Files under ignored `target/` are not
 release downloads and may have been removed. Changing source, packaged guides,
 provider inputs or the verifier requires a newly bound candidate. Private
-reporting is configured; the signing identity remains unselected. Passing QA
+reporting is configured and the signing identity is selected below. Passing QA
 alone does not publish or approve a release.
 
 ## Prepare a local candidate
@@ -161,32 +162,35 @@ result as a check of a replacement archive.
 ## Release signing and incident handling
 
 Private vulnerability reporting is enabled through the channel in
-[SECURITY.md](../SECURITY.md). The maintainer must confirm security-alert
-notification delivery in their GitHub account and select a release-signing
-identity before publication. No signing identity has been selected yet.
-No current candidate is signed or approved for publication. Perform a fresh
-J19 input check, J25 adversarial validation and Linux QA on the exact candidate,
+[SECURITY.md](../SECURITY.md). The maintainer has confirmed security-alert email
+delivery is enabled. Local keyless signatures must identify
+`96315340+featherenvy@users.noreply.github.com`, authenticated through GitHub
+with the exact certificate OIDC issuer `https://github.com/login/oauth`.
+Each candidate requires a verified signature and publication approval. Perform
+a fresh J19 input check, J25 adversarial validation and Linux QA on the exact candidate,
 review current dependency advisories, and record the exact verified source and
 artifact hashes. An unresolved medium-or-higher finding holds the release.
 
-The proposed signing procedure uses a Sigstore bundle for `SHA256SUMS` after
-all artifacts and provenance are final. The maintainer must select the exact
-OIDC certificate identity and issuer, keep the identity's account protected,
-and publish those exact expected values separately from the download. Do not
-use a wildcard identity or accept an unverified key delivered with an artifact.
+The signing procedure uses a Sigstore bundle for `SHA256SUMS` after
+all artifacts and provenance are final. Keep the selected identity's account
+protected and publish the exact expected identity and issuer above separately
+from the download. Do not use a wildcard identity or accept an unverified key
+delivered with an artifact.
 Follow the current [Sigstore blob-signing instructions](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/)
 and [verification instructions](https://docs.sigstore.dev/cosign/verifying/verify/).
 No credentials or private signing keys belong in the repository or package.
 
-For local keyless signing, first confirm the intended account's exact certificate
-identity and OIDC issuer using a synthetic signing check. Record those public
-values here before committing the final release source and rebuilding. Signing
-publishes the certificate identity and signing event in Sigstore's public
-verification infrastructure; use an account intended for public release signing.
+Before changing the signer, confirm the replacement account's exact certificate
+identity and OIDC issuer using a synthetic signing check, then update these
+public values before committing the final release source and rebuilding.
+Local keyless signing publishes the certificate identity and signing event in
+Sigstore's public verification infrastructure.
 
 After the final candidate passes its checks, sign the existing manifest:
 
 ```sh
+SIGNING_IDENTITY='96315340+featherenvy@users.noreply.github.com'
+SIGNING_ISSUER='https://github.com/login/oauth'
 cosign sign-blob "$CANDIDATE/SHA256SUMS" \
   --bundle "$CANDIDATE/SHA256SUMS.sigstore.json"
 cosign verify-blob "$CANDIDATE/SHA256SUMS" \
