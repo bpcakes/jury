@@ -13,7 +13,7 @@ Consumer: J26 release maintainer. Feature: exact experimental Linux release publ
 - [x] Pass all ten packaged Debian 12 journeys plus the TLS lifecycle and untrusted-CA refusal.
 - [x] Prepare customer-facing release notes at target/j26-signing/release-notes.md.
 
-Remaining J26 work outside local preparation: Rust CLI CI is still running and publication requires approval. J26 stays in_progress. Final checksum signing completed and verified against the exact selected identity and issuer. A GitHub draft contains all ten artifacts; no tag or published release exists.
+J26 publication completed after the maintainer approved and all release-source CI passed. The signed experimental v0.0.1 prerelease is public at https://github.com/bpcakes/jury/releases/tag/v0.0.1, with its tag bound to c4edd6221389e4c63774bfacf66ccbee35c9c54c. All ten public downloads passed verification. The handoff observations below are historical.
 
 ## Surprises & Discoveries
 
@@ -44,3 +44,11 @@ The maintainer completed browser authentication. Cosign verified SHA256SUMS.sigs
 GitHub draft release ID 385570274, proposed tag v0.0.1, is https://github.com/bpcakes/jury/releases/tag/untagged-773a1c2d106d3487a195. API inspection confirmed draft=true, prerelease=true, target_commitish=c4edd6221389e4c63774bfacf66ccbee35c9c54c, all ten uploaded asset digests matching local files, and no v0.0.1 Git ref. All draft assets were downloaded to target/j26-signing/github-draft-downloads; exact-identity Cosign verification, SHA256SUMS checks and source/artifact verification passed again on those downloaded bytes.
 
 At the publication handoff, Rust CI 34359454615 still has its CLI job running; other jobs and all other workflows have passed. Do not publish unless that CI passes and the maintainer approves this exact experimental prerelease. If a failure requires changing included source, the approval cannot cover an altered candidate: rebuild, retest, sign, replace the draft only after verification, and present it again. Push bookkeeping commits only after the source CI finishes to avoid cancellation.
+
+## Publication outcome
+
+The maintainer approved publication and pushed the local bookkeeping commits. Exact source c4edd6221389e4c63774bfacf66ccbee35c9c54c passed all five workflows, including every job in Rust CI 34359454615. Before publication, the signature, source/artifact binding, draft body, ten asset digests and successful source CI were checked again. Release 385570274 was published as the experimental v0.0.1 prerelease, without marking it Latest.
+
+Unauthenticated public API access confirmed draft=false, prerelease=true, the expected release body and asset digests, and the v0.0.1 tag resolving to c4edd6221389e4c63774bfacf66ccbee35c9c54c. All ten assets were downloaded without credentials to target/j26-signing/published-downloads. Exact-identity Cosign verification, all checksum entries, and source/artifact verification passed on those public downloads. The checksum manifest, bundle and build-time provenance remain unchanged.
+
+J26 and the completed active release rollups are closed. Deferred macOS, TUI and optional external-review work remains deferred; automated checks and publication do not constitute independent review or establish secret protection. The release remains externally unreviewed pre-alpha and supports synthetic data only.
