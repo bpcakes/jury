@@ -1,0 +1,30 @@
+name: Release validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Candidate refs are immutable. Ordinary branch pushes use different groups.
+concurrency:
+  group: release-validation-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  rust:
+    uses: ./.github/workflows/rust-tests.yml
+    with:
+      release_validation: true
+  security:
+    uses: ./.github/workflows/security-invariants.yml
+  provider:
+    uses: ./.github/workflows/sanitization.yml
+  policy:
+    uses: ./.github/workflows/repo-policy.yml
+    with:
+      release_validation: true
+  guides:
+    uses: ./.github/workflows/agent-map-check.yml
+    with:
+      release_validation: true

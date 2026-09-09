@@ -9,13 +9,18 @@ on:
     types:
       - checks_requested
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_validation:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: repo-policy-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ inputs.release_validation && format('release-repo-policy-{0}', github.sha) || format('repo-policy-ci-{0}', github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ !inputs.release_validation }}
 
 jobs:
   no-mod-rs:
