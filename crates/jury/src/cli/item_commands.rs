@@ -419,7 +419,6 @@ pub(super) fn field_read(
             authority: "direct-unilateral",
         }
     } else {
-        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: direct-unilateral");
         let mut output = std::io::stdout().lock();
         output

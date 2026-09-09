@@ -4,6 +4,7 @@
 .doctor
 .jury
 target
+**/target
 conformance
 node_modules
 coverage

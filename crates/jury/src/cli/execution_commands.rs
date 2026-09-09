@@ -567,7 +567,6 @@ fn run_resolved(
     options.stdin = stdin;
 
     if prepared.mode == ExecutionMode::Transparent {
-        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: {}", evidence.authority.label());
         if let Some(receipt) = &evidence.receipt {
             eprintln!("Receipt: {receipt}");

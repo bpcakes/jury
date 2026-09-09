@@ -92,7 +92,6 @@ struct CancelRequest {
 #[serde(deny_unknown_fields)]
 struct StatusResponse {
     status: &'static str,
-    maturity: &'static str,
 }
 
 #[derive(Serialize)]
@@ -343,13 +342,7 @@ async fn serve(
 }
 
 async fn live() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(StatusResponse {
-            status: "live",
-            maturity: jury_core::MATURITY,
-        }),
-    )
+    (StatusCode::OK, Json(StatusResponse { status: "live" }))
 }
 
 async fn witness_ready(
@@ -641,14 +634,7 @@ fn runtime_error(error: RuntimeError) -> Response {
 }
 
 fn ready() -> Response {
-    (
-        StatusCode::OK,
-        Json(StatusResponse {
-            status: "ready",
-            maturity: jury_core::MATURITY,
-        }),
-    )
-        .into_response()
+    (StatusCode::OK, Json(StatusResponse { status: "ready" })).into_response()
 }
 
 fn readiness_response(is_ready: bool) -> Response {
@@ -660,7 +646,6 @@ fn not_ready() -> Response {
         StatusCode::SERVICE_UNAVAILABLE,
         Json(StatusResponse {
             status: "not-ready",
-            maturity: jury_core::MATURITY,
         }),
     )
         .into_response()

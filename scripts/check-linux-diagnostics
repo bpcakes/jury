@@ -93,16 +93,21 @@ def exercise(f):
 
     config = json.loads((ROOT/'deploy/juryd/witness.example.json').read_bytes())
     config['database']['path'] = str(directory/'Example.sqlite3')
-    for name, change, expected in [
-        ('schema', lambda c: c.update(schema=99), 'schema must be 1'),
-        ('path', lambda c: c['database'].update(path='ExampleRelative.sqlite3'), 'database path must be absolute'),
-        ('label', lambda c: c['database']['authority'].update(backup_authority=c['database']['authority']['administration_authority']), 'authority labels must be distinct'),
-        ('document', lambda c: c.update(ExampleUnknownField='ExamplePrivateConfiguration'), 'required JSON fields and types'),
+    for name, change, field, expected in [
+        ('schema', lambda c: c.update(schema=99), 'schema', 'schema must be 1'),
+        ('path', lambda c: c['database'].update(path='ExampleRelative.sqlite3'), 'database.path', 'database path must be absolute'),
+        ('label', lambda c: c['database']['authority'].update(backup_authority=c['database']['authority']['administration_authority']), 'database.authority', 'authority labels must be distinct'),
+        ('document', lambda c: c.update(ExamplePrivateConfiguration='ExamplePrivateConfiguration'), None, 'JSON fields or values'),
+        ('wrong-type', lambda c: c.update(schema='x, expected ExamplePrivateConfiguration'), 'schema', 'JSON fields or values'),
+        ('field-marker', lambda c: c.update(schema='missing field `ExamplePrivateConfiguration`'), 'schema', 'JSON fields or values'),
     ]:
         candidate = copy.deepcopy(config); change(candidate)
         path = directory/f'{name}.json'; s['document'](path, candidate)
         result = subprocess.run([str(f.juryd), 'database', 'init', '--config', str(path)], capture_output=True, timeout=10)
-        require(result.returncode != 0 and expected.encode() in result.stderr,
+        require(result.returncode != 0
+                and f'configuration file {path}'.encode() in result.stderr
+                and (field is None or f'at `{field}`'.encode() in result.stderr)
+                and expected.encode() in result.stderr,
                 'configuration category missing: '+s['safe_diagnostics'](result.stdout+result.stderr))
         require(b'ExamplePrivateConfiguration' not in result.stdout+result.stderr and not (directory/'Example.sqlite3').exists(),
                 'invalid configuration leaked contents or created database')

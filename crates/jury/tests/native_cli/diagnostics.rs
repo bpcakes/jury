@@ -36,9 +36,9 @@ fn parser_errors_follow_json_contract_without_reflecting_values() -> TestResult 
         let value: serde_json::Value = serde_json::from_slice(&output.stderr)?;
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "invalid-arguments");
-        assert_eq!(value["maturity"], "pre-alpha");
-        assert_eq!(value["review_status"], "externally-unreviewed");
-        assert_eq!(value["real_secrets_supported"], false);
+        assert!(value.get("maturity").is_none());
+        assert!(value.get("review_status").is_none());
+        assert!(value.get("real_secrets_supported").is_none());
         assert!(!String::from_utf8_lossy(&output.stderr).contains("Example"));
     }
     let output = jury_command(root, root, root)
@@ -56,7 +56,7 @@ fn parser_errors_follow_json_contract_without_reflecting_values() -> TestResult 
 }
 
 #[test]
-fn child_flags_do_not_select_json_and_domain_errors_include_maturity() -> TestResult {
+fn child_flags_do_not_select_json_and_domain_errors_stay_structured() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let root = temporary.path();
     let child_flag = jury_command(root, root, root)
@@ -73,13 +73,14 @@ fn child_flags_do_not_select_json_and_domain_errors_include_maturity() -> TestRe
     assert!(domain_error.stdout.is_empty());
     let value: serde_json::Value = serde_json::from_slice(&domain_error.stderr)?;
     assert_eq!(value["ok"], false);
-    assert_eq!(value["review_status"], "externally-unreviewed");
-    assert_eq!(value["real_secrets_supported"], false);
+    assert!(value.get("maturity").is_none());
+    assert!(value.get("review_status").is_none());
+    assert!(value.get("real_secrets_supported").is_none());
     Ok(())
 }
 
 #[test]
-fn explicit_help_and_version_remain_information_and_help_states_maturity() -> TestResult {
+fn explicit_help_and_version_remain_plain_information() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let root = temporary.path();
     for arguments in [
@@ -96,21 +97,47 @@ fn explicit_help_and_version_remain_information_and_help_states_maturity() -> Te
         assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).is_err());
         if is_help {
             let help = String::from_utf8(output.stdout)?;
-            for expected in [
-                "Linux",
-                "PRE-ALPHA",
-                "externally unreviewed",
-                "do not use with real secrets",
-            ] {
-                assert!(help.contains(expected));
-            }
+            assert!(help.contains("Linux"));
+            assert!(!help.contains("PRE-ALPHA"));
+            assert!(!help.contains("externally unreviewed"));
+            assert!(!help.contains("do not use with real secrets"));
         }
     }
     Ok(())
 }
 
 #[test]
-fn json_is_a_standalone_flag_and_success_metadata_states_maturity() -> TestResult {
+fn overwrite_help_describes_replacement_and_concurrent_change_checks() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let root = temporary.path();
+    for (command, expected) in [
+        (
+            ["transfer", "export", "--help"],
+            "Replace an existing transfer file if it has not changed during export",
+        ),
+        (
+            ["principal", "challenge", "--help"],
+            "Replace an existing challenge file, even if its contents differ",
+        ),
+        (
+            ["request", "execute", "--help"],
+            "Replace an existing private output file, even if its contents differ",
+        ),
+    ] {
+        let output = jury_command(root, root, root).args(command).output()?;
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+        let help = String::from_utf8(output.stdout)?;
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains("--overwrite"));
+        assert!(help.contains(expected), "{command:?}: {help}");
+        assert!(!help.contains("identical"));
+    }
+    Ok(())
+}
+
+#[test]
+fn json_is_a_standalone_flag_without_release_banner_metadata() -> TestResult {
     let temporary = tempfile::tempdir()?;
     let root = temporary.path();
     for invalid_flag in ["--json=true", "--json=false", "--json=ExamplePrivateValue"] {
@@ -131,9 +158,9 @@ fn json_is_a_standalone_flag_and_success_metadata_states_maturity() -> TestResul
         .args(["--json", "--global", "identity", "list"])
         .output()?;
     let value = success_json(output)?;
-    assert_eq!(value["review_status"], "externally-unreviewed");
-    assert_eq!(value["real_secrets_supported"], false);
-    assert_eq!(value["maturity"], "pre-alpha");
+    assert!(value.get("maturity").is_none());
+    assert!(value.get("review_status").is_none());
+    assert!(value.get("real_secrets_supported").is_none());
     Ok(())
 }
 

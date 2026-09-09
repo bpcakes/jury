@@ -96,6 +96,13 @@ and [anchor configuration](../deploy/juryd/anchor.example.json). Replace every
 deployment label, set the public `witness_id` to the identity's exact ID, and
 install the files at the absolute paths they name.
 
+Configuration must contain exactly one JSON document; trailing whitespace is
+allowed, but extra documents and other trailing content are rejected. Parse
+diagnostics name the file, known schema path (or its nearest known parent),
+error category, and line/column. They do not echo rejected values, unknown keys,
+or enum labels. Schema errors direct the operator to the examples above;
+these human diagnostics are not a machine-readable configuration API.
+
 On the anchor host:
 
 ```console
@@ -194,9 +201,9 @@ Successful register and checkpoint responses contain a signed
 an HTTP success code or operator credential alone is not a checkpoint
 acknowledgement.
 
-Health bodies contain only `status` and the pre-alpha maturity warning. They do
-not enumerate principals, policies, vaults, items, requests, generations, or
-anchor contents. Readiness may return `503` while liveness remains `200`; do not
+Health bodies contain only `status`. They do not enumerate principals, policies,
+vaults, items, requests, generations, or anchor contents. Readiness may return
+`503` while liveness remains `200`; do not
 replace that distinction with a restart loop.
 
 Authenticated operator status is deliberately different from public health. It

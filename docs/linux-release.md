@@ -18,6 +18,9 @@ successful recovery, and both TLS services now explain unsafe certificate files.
 The repair evidence and historical candidate hashes are in
 `docs/qa-linux-0.0.1.md` in the source checkout. These repairs require a new bound
 release candidate; the earlier `cd8eeac` package is not the repaired artifact.
+The maintainer subsequently removed repeated maturity banners and metadata from
+CLI output and daemon health bodies. The packaged README, `SECURITY.md`, and this
+release document remain the canonical maturity and supported-use statements.
 
 The native implementation committed as `16ab899` passed the 2026-09-06 Linux
 QA: ten packaged CLI journeys on Debian 12, installation/removal, HTTPS,
@@ -43,8 +46,14 @@ cargo install cargo-audit --version 0.22.2 --locked
 scripts/build-linux-release build --output /absolute/fresh/candidate
 ```
 
-The recipe builds cargo-cyclonedx 0.5.9 inside the pinned Rust 1.97.0 image.
-It generates the SBOMs there with the same Cargo/Rust resolver as the binaries.
+The recipe builds cargo-cyclonedx 0.5.9 from its checksummed official crates.io
+source inside the pinned Rust 1.97.0 image.
+`scripts/cargo-cyclonedx-0.5.9.lock` refreshes that release's stale dependency
+graph, including replacing yanked `xml-rs` 0.8.19 with non-yanked 0.8.29. The
+source checksum, complete tool lock, lock digest, compiler image, and built tool
+digest are bound into the source or provenance. The refreshed lock has no
+RustSec vulnerabilities or warnings. The tool generates the SBOMs with the same
+Cargo/Rust resolver as the binaries.
 
 The script checks dirtiness over the packaged source (excluding workflow state and the marketing site), and refuses changes unless `--allow-dirty` is explicitly
 supplied for a local unsigned candidate. It does not sign, tag, or publish.
@@ -57,8 +66,9 @@ It fails if the source changes before completion. The final output directory app
 
 The output includes the native package, exact native-source archive (excluding workflow state and the marketing site), vendored provider
 sources, two CycloneDX 1.5 SBOMs, the current dependency advisory report,
-provenance, and `SHA256SUMS`. Advisory filtering or ignored advisories are
-refused; vulnerabilities or warnings stop preparation. The package
+the SBOM-generator dependency advisory report, provenance, and `SHA256SUMS`.
+Advisory filtering or ignored advisories are refused; vulnerabilities or
+warnings in either dependency graph stop preparation. The package
 includes Jury's license, third-party notices checked for every vendored package,
 Rust standard-library notices, operating/security documentation, and the
 `deploy/juryd` example configurations and systemd units used by the self-hosting

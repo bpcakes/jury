@@ -137,15 +137,13 @@ mod witness_transport;
 include!("cli/access_execution_args.rs");
 include!("cli/witness_args.rs");
 
-const PRE_ALPHA_WARNING: &str = "PRE-ALPHA: externally unreviewed; do not use with real secrets";
-
 #[derive(Debug, Parser)]
 #[command(
     name = "jury",
     version,
     about = jury_core::PRODUCT_TAGLINE,
     long_about = jury_core::PRODUCT_TAGLINE,
-    after_help = "Native Linux support only. PRE-ALPHA: externally unreviewed; do not use with real secrets."
+    after_help = "Native Linux support only."
 )]
 pub struct Cli {
     /// Emit JSON results and errors; explicit help/version remain text.
@@ -272,13 +270,13 @@ pub enum Command {
     Inject(InjectArgs),
     /// Transparently execute a command with atomic Jury field injection.
     #[command(
-        long_about = "Transparently execute a command after every Jury field reference resolves atomically. Output is streamed after redaction and the exact child status is returned. The global --json option is unsupported here; use jury run --json for structured output. PRE-ALPHA: externally unreviewed; do not use with real secrets.",
+        long_about = "Transparently execute a command after every Jury field reference resolves atomically. Output is streamed after redaction and the exact child status is returned. The global --json option is unsupported here; use jury run --json for structured output.",
         after_help = "Native Linux only. An authorized child can copy or retain every plaintext value it receives."
     )]
     Exec(ExecArgs),
     /// Run a command through a cleaned, bounded Jury broker.
     #[command(
-        long_about = "Run a command through Jury's cleaned, timeout-bounded, output-bounded broker after every field reference resolves atomically. PRE-ALPHA: externally unreviewed; do not use with real secrets.",
+        long_about = "Run a command through Jury's cleaned, timeout-bounded, output-bounded broker after every field reference resolves atomically.",
         after_help = "Native Linux only. An authorized child can copy or retain every plaintext value it receives."
     )]
     Run(RunArgs),
@@ -363,8 +361,10 @@ pub struct FieldListArgs {
 
 #[derive(Debug, Args)]
 pub struct FieldSetArgs {
+    /// Resolved item whose field is created or replaced.
     #[arg(value_name = "ITEM")]
     pub item: String,
+    /// Exact field name to create or replace.
     #[arg(value_name = "FIELD")]
     pub field: String,
     /// Conceal this field in child output (default for new fields; updates preserve the kind).
@@ -386,8 +386,10 @@ pub struct FieldSetArgs {
 
 #[derive(Debug, Args)]
 pub struct FieldRemoveArgs {
+    /// Resolved item whose field is removed.
     #[arg(value_name = "ITEM")]
     pub item: String,
+    /// Exact field name to remove.
     #[arg(value_name = "FIELD")]
     pub field: String,
     /// Prepare and authenticate the exact mutation without writing it.
@@ -441,12 +443,14 @@ pub enum ReceiptCommand {
 
 #[derive(Debug, Args)]
 pub struct ReceiptInspectArgs {
+    /// Public witnessed-decision receipt JSON to inspect.
     #[arg(value_name = "RECEIPT")]
     pub receipt: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct ReceiptVerifyArgs {
+    /// Public witnessed-decision receipt JSON to verify.
     #[arg(value_name = "RECEIPT")]
     pub receipt: PathBuf,
     /// Pin an independently retained exact policy checkpoint.
@@ -486,26 +490,33 @@ pub struct WitnessPolicyStatusArgs {
 
 #[derive(Debug, Args)]
 pub struct TransferExportArgs {
+    /// Create the portable ciphertext transfer at this path.
     #[arg(long, value_name = "FILE")]
     pub out: PathBuf,
+    /// Replace an existing transfer file if it has not changed during export.
     #[arg(long)]
     pub overwrite: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct TransferInspectArgs {
+    /// Portable ciphertext transfer to inspect.
     #[arg(long = "in", value_name = "FILE")]
     pub input: PathBuf,
+    /// Compare the transfer with the selected current vault.
     #[arg(long)]
     pub against_current: bool,
+    /// Report the selected identity's access in the transfer.
     #[arg(long)]
     pub me: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct TransferImportArgs {
+    /// Portable ciphertext transfer to import.
     #[arg(long = "in", value_name = "FILE")]
     pub input: PathBuf,
+    /// Validate the import without changing the selected vault.
     #[arg(long)]
     pub dry_run: bool,
     /// Permit a first installation with no directly accessible items (required for approvers and witnesses).
@@ -521,6 +532,7 @@ pub enum ItemCommand {
 
 #[derive(Debug, Args)]
 pub struct ItemCreateArgs {
+    /// New item name; names are public within the vault.
     #[arg(value_name = "ITEM")]
     pub item: String,
     /// Initial reader principal; may be repeated.
@@ -543,20 +555,30 @@ pub struct ItemCreateArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PrincipalCommand {
+    /// List active and removed registered principals.
     List,
+    /// Create a bounded registration challenge for a public descriptor.
     Challenge(PrincipalChallengeArgs),
+    /// Register a principal from its descriptor and signed challenge proof.
     Add(PrincipalAddArgs),
+    /// Replace a principal's identity while preserving its authority.
     Replace(PrincipalReplaceArgs),
+    /// Change a principal's public display label.
     Label(PrincipalLabelArgs),
+    /// Remove a principal after its item access has been revoked.
     Remove(PrincipalRemoveArgs),
+    /// Grant vault-owner authority to an active principal.
     GrantOwner(PrincipalTargetArgs),
+    /// Revoke vault-owner authority from an active principal.
     RevokeOwner(PrincipalTargetArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalChallengeArgs {
+    /// Signed public identity descriptor to challenge.
     #[arg(long, value_name = "PUBLIC_DESCRIPTOR")]
     pub from: PathBuf,
+    /// Create the public registration challenge at this path.
     #[arg(long, value_name = "CHALLENGE")]
     pub out: PathBuf,
     /// Assign the witness's stable protocol share coordinate in 1..=32.
@@ -566,61 +588,78 @@ pub struct PrincipalChallengeArgs {
         value_parser = clap::value_parser!(u8).range(1..=32)
     )]
     pub witness_share_index: Option<u8>,
+    /// Replace an existing challenge file, even if its contents differ.
     #[arg(long)]
     pub overwrite: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalAddArgs {
+    /// Signed public identity descriptor for the candidate principal.
     #[arg(long, value_name = "PUBLIC_DESCRIPTOR")]
     pub from: PathBuf,
+    /// Candidate's signed response to the current registration challenge.
     #[arg(long, value_name = "PROOF")]
     pub proof: PathBuf,
+    /// Existing item that initially grants reader access; may be repeated.
     #[arg(long = "reader", value_name = "ITEM")]
     pub readers: Vec<String>,
+    /// Existing item that initially grants writer access; may be repeated.
     #[arg(long = "writer", value_name = "ITEM")]
     pub writers: Vec<String>,
     /// Acknowledge unilateral direct access for initial item grants.
     #[arg(long)]
     pub acknowledge_direct_access: bool,
+    /// Validate registration and grants without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalReplaceArgs {
+    /// Active principal ID whose identity is replaced.
     #[arg(value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Signed public descriptor for the replacement identity.
     #[arg(long, value_name = "PUBLIC_DESCRIPTOR")]
     pub from: PathBuf,
+    /// Replacement identity's signed response to the challenge.
     #[arg(long, value_name = "PROOF")]
     pub proof: PathBuf,
+    /// Validate the replacement without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalLabelArgs {
+    /// Active principal ID whose public label changes.
     #[arg(value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Replacement public display label.
     #[arg(long, value_name = "LABEL")]
     pub label: String,
+    /// Validate the label change without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalRemoveArgs {
+    /// Active principal ID to remove.
     #[arg(value_name = "PRINCIPAL")]
     pub principal: String,
+    /// Revoke this principal's remaining item grants in the same mutation.
     #[arg(long)]
     pub revoke_all: bool,
+    /// Validate removal and revocations without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PrincipalTargetArgs {
+    /// Active principal ID whose owner authority changes.
     #[arg(value_name = "PRINCIPAL")]
     pub principal: String,
     /// Per-item descriptor/body approvals for witnessed-only owner changes (see docs/owner-changes.md).
@@ -629,6 +668,7 @@ pub struct PrincipalTargetArgs {
     /// Acknowledge any new unilateral direct slots created by owner grant.
     #[arg(long)]
     pub acknowledge_direct_access: bool,
+    /// Validate the owner change without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }

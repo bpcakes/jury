@@ -141,10 +141,7 @@ impl CommandOutput {
             return;
         }
         if json {
-            let mut value = self.json_value();
-            value["review_status"] = "externally-unreviewed".into();
-            value["real_secrets_supported"] = false.into();
-            println!("{value}");
+            println!("{}", self.json_value());
         } else {
             self.write_human();
         }
@@ -169,8 +166,7 @@ impl CommandOutput {
                 "kind": kind,
                 "kdf_profile": kdf_profile,
                 "protection_degraded": protection_degraded,
-                "durability": durability,
-                "maturity": "pre-alpha"
+                "durability": durability
             }),
             Self::IdentityStatus {
                 identity,
@@ -196,8 +192,7 @@ impl CommandOutput {
                 "stronger_profile_available": stronger_profile_available,
                 "public_fields_authenticated": false,
                 "private_payload_verified": false,
-                "protection_mode": "portable",
-                "maturity": "pre-alpha"
+                "protection_mode": "portable"
             }),
             Self::IdentityList { identities } => serde_json::json!({
                 "ok": true,
@@ -214,8 +209,7 @@ impl CommandOutput {
                         "public_fields_authenticated": false,
                         "private_payload_verified": false
                     }))
-                    .collect::<Vec<_>>(),
-                "maturity": "pre-alpha"
+                    .collect::<Vec<_>>()
             }),
             Self::IdentityPassphraseChanged {
                 identity,
@@ -233,8 +227,7 @@ impl CommandOutput {
                 "kdf_profile": kdf_profile,
                 "principal_keys_changed": false,
                 "protection_degraded": protection_degraded,
-                "durability": durability,
-                "maturity": "pre-alpha"
+                "durability": durability
             }),
             Self::VaultCreated {
                 home_source,
@@ -254,8 +247,7 @@ impl CommandOutput {
                 "item_count": 0,
                 "local_state": local_state,
                 "durability": durability,
-                "backup_required": true,
-                "maturity": "pre-alpha"
+                "backup_required": true
             }),
             Self::VaultStatus {
                 operation,
@@ -301,8 +293,7 @@ impl CommandOutput {
                 },
                 "cryptographic_scopes": true,
                 "public_validation": "valid",
-                "identity_unlocked": false,
-                "maturity": "pre-alpha"
+                "identity_unlocked": false
             }),
             Self::AuditVerified {
                 vault_id,
@@ -321,8 +312,7 @@ impl CommandOutput {
                 "audit_events_after_checkpoint": audit_events_after_checkpoint,
                 "local_activity_only": true,
                 "other_principals_verified": false,
-                "remote_freshness_verified": false,
-                "maturity": "pre-alpha"
+                "remote_freshness_verified": false
             }),
             Self::Mutation {
                 operation,
@@ -352,8 +342,7 @@ impl CommandOutput {
                 "pending_requests_invalidated": pending_requests_invalidated,
                 "item_quorum_claim_suppressed": item_quorum_claim_suppressed,
                 "warnings": warnings,
-                "delivery_claimed": false,
-                "maturity": "pre-alpha"
+                "delivery_claimed": false
             }),
             Self::FieldList { fields } => serde_json::json!({
                 "ok": true,
@@ -366,8 +355,7 @@ impl CommandOutput {
                     "kind": field.kind,
                     "updated_at_ms": field.updated_at_ms
                 })).collect::<Vec<_>>(),
-                "inaccessible_items_disclosed": false,
-                "maturity": "pre-alpha"
+                "inaccessible_items_disclosed": false
             }),
             Self::PrivateOutput {
                 operation,
@@ -384,8 +372,7 @@ impl CommandOutput {
                 "sink": sink,
                 "durability": durability,
                 "authority": authority,
-                "plaintext_in_structured_output": false,
-                "maturity": "pre-alpha"
+                "plaintext_in_structured_output": false
             }),
             Self::Execution {
                 operation,
@@ -421,14 +408,12 @@ impl CommandOutput {
                 "receipt": receipt,
                 "receipt_digest": receipt_digest,
                 "receipt_nonclaim": receipt_nonclaim,
-                "authorized_child_may_retain_plaintext": true,
-                "maturity": "pre-alpha"
+                "authorized_child_may_retain_plaintext": true
             }),
             Self::Silent => serde_json::json!({
                 "ok": true,
                 "operation": "private-output",
-                "plaintext_in_structured_output": false,
-                "maturity": "pre-alpha"
+                "plaintext_in_structured_output": false
             }),
             Self::Safe {
                 operation, fields, ..
@@ -439,17 +424,12 @@ impl CommandOutput {
                     "operation".to_owned(),
                     serde_json::Value::String((*operation).to_owned()),
                 );
-                object.insert(
-                    "maturity".to_owned(),
-                    serde_json::Value::String("pre-alpha".to_owned()),
-                );
                 serde_json::Value::Object(object)
             }
         }
     }
 
     fn write_human(&self) {
-        println!("{PRE_ALPHA_WARNING}");
         match self {
             Self::IdentityCreated {
                 identity,

@@ -113,7 +113,6 @@ pub(super) fn request_create(
             "durability": durability(publication),
             "session_private_key_persisted": false,
             "later_execution_available": false,
-            "maturity": "pre-alpha",
         }),
         lines: vec![
             format!("Request: {}", grouped(&hex(artifact.request.request_id.as_bytes()))),
@@ -145,7 +144,6 @@ pub(super) fn request_inspect(
             "complete": true,
             "lossy": false,
             "session_private_key_present": false,
-            "maturity": "pre-alpha",
         }),
         lines: vec![review.text().to_owned()],
     })
@@ -180,7 +178,6 @@ pub(super) fn request_status(
             "expires_at_ms": artifact.request.expires_at_ms,
             "session_private_key_present": false,
             "witnesses_contacted": false,
-            "maturity": "pre-alpha",
         }),
         lines: vec![
             format!(
@@ -278,7 +275,6 @@ pub(super) fn request_execute(
             ],
         })
     } else {
-        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: witnessed-approved");
         eprintln!("Receipt: {}", arguments.receipt.display());
         eprintln!("{}", VerifiedWitnessReceipt::NONCLAIM);

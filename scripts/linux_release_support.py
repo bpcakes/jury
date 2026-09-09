@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import tarfile
 import tomllib
-from urllib.parse import parse_qs, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
 
 def require(condition, message):
@@ -50,14 +50,46 @@ def package_documentation(source, bundle):
     verify_documentation_links(bundle)
 
 
-def verify_documentation_links(bundle):
+def package_container_documentation(source, bundle, revision):
+    """Keep canonical prose, linking unbundled references to the source repository."""
+    require(bool(re.fullmatch(r'[0-9a-f]{40}', revision)),
+            'container documentation requires a full source commit SHA')
+    source = source.resolve()
+    names = ('README.md', 'SECURITY.md', 'docs/linux-release.md')
+    included = {source/name for name in names}
+    for name in names:
+        document = source/name
+
+        def relocate(match):
+            target = urlsplit(match[2])
+            if target.scheme or target.netloc or not target.path:
+                return match[0]
+            resolved = (document.parent/unquote(target.path)).resolve()
+            require(resolved.is_relative_to(source), 'container documentation link escapes source')
+            require(resolved.exists(),
+                    f'container documentation has a missing source target: {name} -> {target.path}')
+            if resolved in included:
+                return match[0]
+            url = urlunsplit(('https', 'github.com',
+                             f'/bpcakes/jury/blob/{revision}/'+quote(resolved.relative_to(source).as_posix()),
+                             target.query, target.fragment))
+            return match[1]+url+match[3]
+
+        destination = bundle/name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(re.sub(r'(\[[^\]]+\]\()([^)]+)(\))', relocate, document.read_text()))
+    verify_documentation_links(bundle, [bundle/name for name in names])
+
+
+def verify_documentation_links(bundle, documents=None):
     # Owned guides only: preserve upstream notices verbatim. Source references
     # are included for reading; builds still require the full source archive.
-    for document in (bundle/'docs').rglob('*.md'):
+    for document in (bundle/'docs').rglob('*.md') if documents is None else documents:
         for target in re.findall(r'\[[^\]]+\]\(([^)]+)\)', document.read_text()):
-            if urlsplit(target).scheme or target.startswith('#'):
+            parsed = urlsplit(target)
+            if parsed.scheme or parsed.netloc or not parsed.path:
                 continue
-            path = (document.parent/target.split('#', 1)[0]).resolve()
+            path = (document.parent/unquote(parsed.path)).resolve()
             require(path.is_relative_to(bundle.resolve()) and path.exists(),
                     f'shipped guide has a missing local target: {document.relative_to(bundle)} -> {target}')
 

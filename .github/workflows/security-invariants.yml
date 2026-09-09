@@ -29,8 +29,6 @@ jobs:
           components: clippy
       - name: Require immutable third-party action revisions
         run: bash scripts/test-ci-action-pins.sh
-      - name: Check Linux release artifact input and tamper handling
-        run: python3 scripts/test-linux-release.py
       - name: Check direct cryptographic provider binding
         run: python3 scripts/check-direct-crypto-gate
       - name: Check frozen source inventory regressions
@@ -47,6 +45,22 @@ jobs:
         run: cargo test --manifest-path conformance/direct-crypto/Cargo.toml --locked
       - name: Verify exact-revision checkout bootstrap boundary
         run: bash scripts/test-new-checkout.sh
+
+  container-distribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Build juryd image for distribution checks
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: docker build --build-arg SOURCE_REVISION="$SOURCE_REVISION" -f deploy/juryd/Dockerfile -t juryd:ci .
+      - name: Check Linux release artifact input, documentation and tamper handling
+        env:
+          JURYD_TEST_IMAGE: juryd:ci
+          JURYD_TEST_REVISION: ${{ github.sha }}
+        run: python3 scripts/test-linux-release.py
 
   j25-parser-fuzz-smoke:
     runs-on: ubuntu-latest

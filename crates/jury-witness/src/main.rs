@@ -19,8 +19,7 @@ const MAX_AUDIT_EXPORT_BYTES: usize = 1024 * 1024;
 #[command(
     name = "juryd",
     version,
-    about = "Self-hostable Jury witness and external-anchor services",
-    after_help = "WARNING: externally unreviewed pre-alpha; do not use with real secrets."
+    about = "Self-hostable Jury witness and external-anchor services"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -51,25 +50,31 @@ enum Command {
 enum DatabaseCommand {
     /// Atomically migrate and initialize the configured database.
     Init {
+        /// Absolute path to the witness-service JSON configuration.
         #[arg(long)]
         config: PathBuf,
     },
     /// Create a consistent standalone backup without overwriting a target.
     Backup {
+        /// Absolute path to the witness-service JSON configuration.
         #[arg(long)]
         config: PathBuf,
+        /// Create the standalone database backup at this absent path.
         #[arg(long)]
         output: PathBuf,
     },
     /// Restore a validated backup only to the configured absent target.
     Restore {
+        /// Absolute path to the witness-service JSON configuration.
         #[arg(long)]
         config: PathBuf,
+        /// Validated standalone database backup to restore.
         #[arg(long)]
         backup: PathBuf,
     },
     /// Export a value-free database inventory without claiming anchor freshness.
     Audit {
+        /// Absolute path to the witness-service JSON configuration.
         #[arg(long)]
         config: PathBuf,
         /// Create this public JSON file; existing paths are never replaced.
@@ -82,25 +87,31 @@ enum DatabaseCommand {
 enum AnchorCommand {
     /// Run the public read/authenticated-CAS external-anchor service.
     Serve {
+        /// Absolute path to the external-anchor JSON configuration.
         #[arg(long)]
         config: PathBuf,
     },
     /// Atomically migrate and initialize the anchor database.
     Init {
+        /// Absolute path to the external-anchor JSON configuration.
         #[arg(long)]
         config: PathBuf,
     },
     /// Create a consistent standalone anchor backup without overwriting a target.
     Backup {
+        /// Absolute path to the external-anchor JSON configuration.
         #[arg(long)]
         config: PathBuf,
+        /// Create the standalone anchor backup at this absent path.
         #[arg(long)]
         output: PathBuf,
     },
     /// Restore an anchor backup only to the configured absent target.
     Restore {
+        /// Absolute path to the external-anchor JSON configuration.
         #[arg(long)]
         config: PathBuf,
+        /// Validated standalone anchor backup to restore.
         #[arg(long)]
         backup: PathBuf,
     },

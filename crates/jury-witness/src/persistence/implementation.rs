@@ -649,7 +649,7 @@ fn validate_existing_private_file(path: &Path) -> Result<(), AdapterError> {
     Ok(())
 }
 
-const fn map_adapter_store_error(error: AdapterError) -> WitnessStoreError {
+fn map_adapter_store_error(error: AdapterError) -> WitnessStoreError {
     match error.kind() {
         AdapterErrorKind::CapacityExhausted => WitnessStoreError::capacity_exhausted(),
         _ => WitnessStoreError::unavailable(),

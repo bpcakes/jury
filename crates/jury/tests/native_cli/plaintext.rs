@@ -46,7 +46,7 @@ fn exercise_read_sinks(repository: &Path, data: &Path, state: &Path, private: &P
     )?;
     assert!(revealed.status.success());
     assert_eq!(revealed.stdout, b"ExampleValue");
-    assert_eq!(revealed.stderr, b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n");
+    assert_eq!(revealed.stderr, b"Authority: direct-unilateral\n");
     Ok(())
 }
 
@@ -104,7 +104,7 @@ fn exercise_template_sinks(
     )?;
     assert!(revealed_injection.status.success());
     assert_eq!(revealed_injection.stdout, b"prefix=ExampleValue;suffix");
-    assert_eq!(revealed_injection.stderr, b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n");
+    assert_eq!(revealed_injection.stderr, b"Authority: direct-unilateral\n");
     Ok(())
 }
 

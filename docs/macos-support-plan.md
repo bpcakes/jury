@@ -321,7 +321,8 @@ of implementation and before freezing a release toolchain.
 ### Installation and first use
 
 An operator can install the artifact for their native architecture, run
-`jury --help`, and see the pre-alpha warning and truthful supported features.
+`jury --help`, and see truthful supported features without a repeated release
+status banner.
 They can initialize `ExamplePrincipal` and `ExampleVault` in strict mode using
 synthetic values, with private state outside the Git worktree.
 
@@ -733,7 +734,7 @@ completion criterion for this platform plan.
 
 Remove the blanket Linux dispatcher refusal only for implemented macOS paths.
 Keep unsupported targets explicit. Update help/status descriptions alongside
-working behavior while retaining the pre-alpha warning. Exercise ordinary
+working behavior without adding a repeated release status banner. Exercise ordinary
 strict operation without requiring explicit homes for every command.
 
 No macOS default may overlap a repository, identity root, global vault, restore
@@ -1171,7 +1172,7 @@ affect launch and loader behavior. Preserve the witnessed defining path.
 can install, run the synthetic strict direct/witnessed lifecycle, upgrade the
 binary without moving state, and uninstall the binary without deleting user
 state. Documentation names exact support, installation limits, state roots,
-execution limitations, recovery, and the unchanged pre-alpha warning.
+execution limitations, recovery, and the current maturity boundary.
 Every prepared distribution includes the required Jury/third-party license
 texts and notices, and its metadata/docs identify Jury as `Elastic-2.0` and
 source-available. Inspect the actual package contents, not only the build tree.
@@ -1271,8 +1272,7 @@ If native primitives cannot meet strict memory, pinned launch, or immutable
 file delivery, preserve the refusal and mark the owning task incomplete with
 the concrete missing capability. The next step is implementation of the
 missing provider or an explicit product-contract revision. It is not hiding
-the failure, narrowing the supported operation set while claiming full support,
-or changing the pre-alpha warning into an assurance claim.
+the failure or narrowing the supported operation set while claiming full support.
 
 ## Interfaces and compatibility
 

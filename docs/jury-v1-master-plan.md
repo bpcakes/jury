@@ -71,7 +71,8 @@ elsewhere in this document.
 - Direct slots remain supported as an explicit unilateral bootstrap, recovery,
   or low-assurance mode. Any usable direct slot defeats the quorum claim for that
   item and must be reported as such.
-- Every `0.x` build retains the pre-alpha warning and is not for real secrets.
+- Every `0.x` release documents its pre-alpha status and real-secret limitation
+  in the packaged README, security policy, and release notes.
 - J01A and J01B gate shared primitives and direct cryptography. J19 separately
   gates witnessed/distributed cryptographic implementation by binding the exact
   J19A-J19C construction, vectors, bounded retention model, provider inputs, and
@@ -8482,7 +8483,9 @@ Scope:
   upstream advisories immediately before signing; J01B's dated snapshot
   alone is insufficient;
 - add security reporting, embargo, and key-compromise procedures;
-- retain the pre-alpha/no-real-secrets warning throughout `0.x`.
+- keep the pre-alpha/no-real-secrets status in the packaged README, security
+  policy, and release notes without repeating a banner in command output,
+  structured responses, or service health bodies.
 
 Acceptance:
 

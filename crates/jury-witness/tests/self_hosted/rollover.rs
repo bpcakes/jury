@@ -124,7 +124,7 @@ fn rollover_registration_survives_real_service_and_anchor_restarts() -> TestResu
         )?;
     }
     witness = ProcessGuard::spawn(executable, &["serve", "--config"], &witness_config)?;
-    wait_ready(&client, &format!("{witness_base}/livez"), &mut witness)?;
+    wait_live(&client, &format!("{witness_base}/livez"), &mut witness)?;
     wait_not_ready(&client, &format!("{witness_base}/readyz"), &mut witness)?;
     let rolled_back = client
         .post(&url)

@@ -12,9 +12,10 @@ Related Jury plan: `docs/jury-v1-master-plan.md`.
 
 Release relation: every task in this document is post-`0.x` work. The first
 Jury `0.x` ships the Linux CLI and self-hosted `juryd` without macOS, Jig
-migration, TUI, semantic merge, or runtime rollover/suite migration. This plan
-requires a separate activation after J26 and does not block the active Jury
-release.
+migration, TUI, or semantic merge. Jury rollover and suite migration ship in
+Linux 0.0.1 under J18; the deferred work here is only the later Jig-to-Jury
+integration. This plan requires a separate activation after J26 and does not
+block the active Jury release.
 
 Legacy implementation: Jig vault format v2 and its CLI/TUI.
 

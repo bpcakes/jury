@@ -131,7 +131,7 @@ pub(super) fn exercise_successful_execution(
         executed.stdout,
         b"ExampleValue|[REDACTED]|ExampleValue|literal"
     );
-    assert_eq!(executed.stderr, b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n[REDACTED]");
+    assert_eq!(executed.stderr, b"Authority: direct-unilateral\n[REDACTED]");
     assert!(
         !executed
             .stdout
@@ -319,7 +319,7 @@ fn assert_execution_sandbox(
     assert!(stripped_environment.stdout.is_empty());
     assert_eq!(
         stripped_environment.stderr,
-        b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n"
+        b"Authority: direct-unilateral\n"
     );
 
     let inherited_descriptor_path = temporary.join("inherited-descriptor");
@@ -349,7 +349,7 @@ fn assert_execution_sandbox(
     assert!(descriptor_scrubbed.stdout.is_empty());
     assert_eq!(
         descriptor_scrubbed.stderr,
-        b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n"
+        b"Authority: direct-unilateral\n"
     );
     Ok(())
 }

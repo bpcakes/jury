@@ -131,7 +131,6 @@ pub(super) fn template_inject(
             authority: "direct-unilateral",
         })
     } else {
-        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: direct-unilateral");
         let mut stdout = std::io::stdout().lock();
         stdout
@@ -309,7 +308,6 @@ fn witnessed_template_inject(
             ],
         })
     } else {
-        eprintln!("{PRE_ALPHA_WARNING}");
         eprintln!("Authority: witnessed-approved");
         eprintln!("Receipt: {}", receipt_path.display());
         eprintln!("{}", VerifiedWitnessReceipt::NONCLAIM);

@@ -8,8 +8,28 @@ require the full repository or the accompanying source archive; the native
 package alone does not contain all Rust build inputs. Build from that source root:
 
 ```console
-$ docker build -f deploy/juryd/Dockerfile -t juryd:local .
+$ docker build --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+    -f deploy/juryd/Dockerfile -t juryd:local .
 ```
+
+`SOURCE_REVISION` must be the full 40-character commit SHA of the source being
+built. For a source archive without Git metadata, supply its original commit
+SHA explicitly. Build published images from the matching committed source;
+an uncommitted local build can differ from the documentation at that revision.
+
+The image carries the canonical supported-use statements at
+`/usr/share/doc/jury/README.md`, `/usr/share/doc/jury/SECURITY.md`, and
+`/usr/share/doc/jury/docs/linux-release.md`. CLI output and health responses
+omit repeated maturity banners; this does not change the supported-use limits.
+The document text is preserved. Links between these three documents stay local;
+other file links point to that source commit on GitHub and require network
+access. Packaging rejects missing source targets before compiling Rust.
+The Security invariants CI workflow builds and checks the image in a separate
+job with a 30-minute timeout, alongside the cryptographic binding checks.
+Verify these files in the built image with
+`JURYD_TEST_IMAGE=juryd:local python3 scripts/test-linux-release.py`.
+When testing an archive build, also set `JURYD_TEST_REVISION` to the original
+commit SHA; a Git checkout defaults to its current `HEAD`.
 
 Run the anchor image on the independently administered anchor host, mounting
 its configuration read-only and its own state directory writable:

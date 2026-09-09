@@ -118,7 +118,7 @@ fn new_fields_redact_and_updates_preserve_explicit_classification() -> TestResul
             "child stdout violated field classification"
         );
         assert!(
-            child.stderr == [b"PRE-ALPHA: externally unreviewed; do not use with real secrets\nAuthority: direct-unilateral\n".as_slice(), expected].concat(),
+            child.stderr == [b"Authority: direct-unilateral\n".as_slice(), expected].concat(),
             "child stderr violated field classification"
         );
     }

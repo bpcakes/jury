@@ -39,6 +39,3 @@ pub const PRODUCT_NAME: &str = "Jury";
 
 /// Short product positioning used by the initial command-line interface.
 pub const PRODUCT_TAGLINE: &str = "Portable secrets with configurable distributed authority.";
-
-/// Current implementation maturity.
-pub const MATURITY: &str = "externally unreviewed pre-alpha; do not use with real secrets";

@@ -1,5 +1,14 @@
 # Linux 0.0.1 QA and UX audit
 
+## Runtime warning policy, 2026-09-08
+
+The maintainer removed the repeated pre-alpha warning from CLI help, human and
+JSON command results, errors, plaintext/child diagnostics, daemon health bodies,
+and the deferred TUI message. The packaged README, security policy, and release
+notes remain the canonical maturity and supported-use statements. This decision
+supersedes QA-07's recommendation to add the warning to more executable surfaces;
+its historical observations remain below as evidence about the superseded build.
+
 ## QA-20–QA-23 repairs, 2026-09-08
 
 Pulled `origin/main` with a fast-forward to
@@ -49,10 +58,11 @@ pre-alpha software and must not be used with real secrets.
 ## Historical candidate audit, 2026-09-08 (superseded by repairs)
 
 **Release recommendation: hold 0.0.1.** The exercised Linux functionality
-passed, but the new candidate ships two capabilities explicitly deferred from
-0.0.1, and the required bounded fuzz check cannot start with its checked-in
-lockfile. QA-20 and QA-21 block J26. QA-22 and QA-23 are smaller recovery-path
-and TLS-diagnostic UX issues.
+passed, but the release documents then disagreed about whether two shipped
+capabilities belonged in 0.0.1, and the required bounded fuzz check could not
+start with its checked-in lockfile. The maintainer resolved QA-20 by including
+rollover and suite migration with the complete J18 acceptance criteria. QA-21
+through QA-23 were repaired separately.
 A private security-reporting contact and release-signing identity also remain
 unconfigured. Jury remains externally unreviewed pre-alpha software and must
 not be used with real secrets.
@@ -64,7 +74,7 @@ resolved and the replacement candidate is tested. No application code,
 repository test assertions, lockfiles, cryptographic inputs, or release scope were changed by
 this audit. No release was signed or published.
 
-### QA-20 — P2: the 0.0.1 package ships deferred lineage operations
+### QA-20 — P2: release documents disagreed about shipped lineage operations
 
 Tracked as `jury-qv4.6.4`, blocking J26.
 
@@ -87,9 +97,9 @@ jury vault migrate-suite --to 2 \
 
 Both exit 0 and report `published: true`, with destination suites 1 and 2.
 This was reproduced with host and packaged binaries, including Debian 12.
-[README Workspace](../README.md#workspace) says both are deferred until after
-0.0.1, and J26 requires deferred executable surfaces to be absent. The normal
-release build includes both variants from
+At the time of this reproduction, [README Workspace](../README.md#workspace)
+said both were deferred until after 0.0.1 while J26 required deferred executable
+surfaces to be absent. The normal release build includes both variants from
 `crates/jury/src/cli.rs`; they are executable capabilities, not merely stale
 help text.
 
@@ -97,7 +107,9 @@ Before release, either omit these executable surfaces from the 0.0.1 artifact,
 or explicitly revise release scope and apply the full acceptance criteria to
 the newly included paths. Hiding help alone would not reconcile the scope.
 This finding establishes a release-contract mismatch, not a cryptographic
-exploit or a failure of the two direct operations exercised here.
+exploit or a failure of the two direct operations exercised here. The maintainer
+chose the second repair: rollover and suite migration are in Linux 0.0.1 scope,
+and their complete J18 acceptance criteria apply to the exact candidate.
 
 ### QA-21 — P2: the required fuzz suite cannot execute
 
@@ -1039,8 +1051,11 @@ Bounded ASan fuzzing, alternate-provider conformance, the unchanged frozen
 protocol gate and the repository lifecycle leak scan passed. The latter used
 the installed package binary, detected its seeded leak and found no exact hits
 in its named scan surfaces. The product lockfile audit found no vulnerabilities
-or warnings in 347 packages. The separately installed SBOM tool warns about its
-own locked, yanked `xml-rs` 0.8.19 dependency; that warning is retained.
+or warnings in 347 packages. The historical candidate's separately installed
+SBOM tool warned about its locked, yanked `xml-rs` 0.8.19 dependency. The next
+candidate builds the same checksummed cargo-cyclonedx 0.5.9 crates.io source with
+a checked-in refreshed lock. That lock selects non-yanked `xml-rs` 0.8.29 and
+has no current RustSec vulnerabilities or warnings.
 
 Publication remains pending: no private reporting contact or release-signing
 identity has been supplied, and GitHub private vulnerability reporting is

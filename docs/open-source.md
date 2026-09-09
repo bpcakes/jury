@@ -37,7 +37,7 @@ Applied to Jury, the following summarizes the intended reading of
 | --- | --- |
 | Individuals self-host Jury | Allowed |
 | Companies use Jury internally, including production | Allowed by the license; Jury remains unsuitable for real secrets |
-| A SaaS company uses Jury internally for its own secrets | Allowed by the license; the same pre-alpha warning applies |
+| A SaaS company uses Jury internally for its own secrets | Allowed by the license; Jury remains unsuitable for real secrets |
 | Developers modify or redistribute Jury | Allowed with the required license and notices |
 | Consultants help customers install Jury for internal use | Allowed |
 | A provider offers hosted Jury vaults or witnesses to third parties | Prohibited when the service exposes a substantial set of Jury's features or functionality, whether paid or free |

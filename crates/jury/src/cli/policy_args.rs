@@ -94,13 +94,16 @@ pub struct PolicyAllowDirectArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PrivacyCommand {
+    /// Reseal one unchanged item to advance its public revision.
     Cover(PrivacyCoverArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct PrivacyCoverArgs {
+    /// Resolved item to reseal without changing its plaintext fields.
     #[arg(long, value_name = "ITEM")]
     pub item: String,
+    /// Validate the cover mutation without changing the vault.
     #[arg(long)]
     pub dry_run: bool,
 }

@@ -66,14 +66,14 @@ fn parser_rejects_ambiguous_home_and_identity_flags() {
 }
 
 #[test]
-fn help_preserves_active_scope_and_warning() -> Result<(), Box<dyn std::error::Error>> {
+fn help_preserves_active_scope() -> Result<(), Box<dyn std::error::Error>> {
     let error = match Cli::try_parse_from(["jury", "--help"]) {
         Ok(_) => return Err("help unexpectedly parsed as a command".into()),
         Err(error) => error,
     };
     let help = error.to_string();
     assert!(help.contains("Native Linux support only"));
-    assert!(help.contains("PRE-ALPHA"));
+    assert!(!help.contains("PRE-ALPHA"));
     assert!(!help.contains("managed service"));
     assert!(!help.contains("semantic merge"));
     assert!(!help.contains("rollover"));
@@ -117,7 +117,7 @@ fn execution_help_states_plaintext_and_platform_limits() -> Result<(), Box<dyn s
             Err(error) => error,
         };
         let help = error.to_string();
-        assert!(help.contains("PRE-ALPHA"));
+        assert!(!help.contains("PRE-ALPHA"));
         assert!(help.contains("Native Linux only"));
         assert!(help.contains("authorized child can copy or retain"));
     }

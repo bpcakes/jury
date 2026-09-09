@@ -20,6 +20,10 @@ from linux_release_support import (collect_notices, collect_provider_notices, ex
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = 'rust@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073'
 TARGET = 'x86_64-unknown-linux-gnu'
+SBOM_TOOL_VERSION = '0.5.9'
+SBOM_TOOL_SOURCE = f'https://static.crates.io/crates/cargo-cyclonedx/cargo-cyclonedx-{SBOM_TOOL_VERSION}.crate'
+SBOM_TOOL_SOURCE_SHA256 = '5d162f67705f0f5038759d73bf546a083bf30e8677c2e944b416bca48d9d69a8'
+SBOM_TOOL_LOCK = ROOT/'scripts/cargo-cyclonedx-0.5.9.lock'
 WARNING = 'Externally unreviewed pre-alpha; unsuitable for real secrets.'
 EXCLUDED = ('.agent/', '.beads/', 'web/')
 FLAGS = '--remap-path-prefix=/src=/jury --remap-path-prefix=/vendor=/deps'
@@ -36,6 +40,29 @@ def capture(args, **kwargs):
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def verify_sbom_tool_lock():
+    packages = tomllib.loads(SBOM_TOOL_LOCK.read_text())['package']
+    versions = {(package['name'], package['version']) for package in packages}
+    require(('cargo-cyclonedx', SBOM_TOOL_VERSION) in versions,
+            'SBOM tool lock does not contain the pinned cargo-cyclonedx version')
+    require(('xml-rs', '0.8.29') in versions and not any(
+        name == 'xml-rs' and version != '0.8.29' for name, version in versions),
+        'SBOM tool lock does not contain the reviewed non-yanked xml-rs version')
+
+
+def install_sbom_tool(tool_output):
+    verify_sbom_tool_lock()
+    tool_output.mkdir()
+    run(['docker', 'run', '--rm', '--read-only', '--platform', 'linux/amd64',
+         '--user', f'{os.getuid()}:{os.getgid()}', '--tmpfs', '/tmp:rw,exec,nosuid,size=512m',
+         '--mount', f'type=bind,src={tool_output},dst=/build', '--env', 'CARGO_HOME=/build/cargo',
+         '--mount', f'type=bind,src={SBOM_TOOL_LOCK},dst=/tool-lock,readonly',
+         '--mount', f'type=bind,src={ROOT/"scripts/linux_sbom_tool.py"},dst=/tool-installer.py,readonly',
+         '--env', 'PATH=/build/tools/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+         '--env', 'CARGO_BUILD_JOBS=8', IMAGE, 'python3', '/tool-installer.py',
+         SBOM_TOOL_SOURCE, SBOM_TOOL_SOURCE_SHA256, SBOM_TOOL_VERSION])
 
 
 def digest(path):
@@ -157,6 +184,16 @@ def build_candidate(args):
                 and not audit['settings']['target_os'] and audit['settings']['severity'] is None,
                 'dependency audit must not filter or ignore advisories')
         (output/'dependency-audit.json').write_bytes(audit_bytes)
+        sbom_audit_bytes = capture([
+            'cargo', 'audit', '--json', '--deny', 'warnings', '--file',
+            source/'scripts/cargo-cyclonedx-0.5.9.lock'
+        ], cwd=work)
+        sbom_audit = json.loads(sbom_audit_bytes)
+        require(not sbom_audit['settings']['ignore'] and not sbom_audit['settings']['target_arch']
+                and not sbom_audit['settings']['target_os']
+                and sbom_audit['settings']['severity'] is None,
+                'SBOM dependency audit must not filter or ignore advisories')
+        (output/'sbom-tool-dependency-audit.json').write_bytes(sbom_audit_bytes)
         if args.vendor_archive:
             extract_vendor(args.vendor_archive.resolve(), args.vendor_sha256, work)
         else:
@@ -203,14 +240,11 @@ def build_candidate(args):
         (notices/'inventory.json').write_bytes(json_bytes(notice_inventory))
         (notices/'README.txt').write_text('Cargo license and notice files cover every vendored package, including build and development dependencies. Missing published-crate license files are supplemented from recorded upstream revisions. Nested native-provider notices and Rust toolchain notices are included. See inventory.json and supplement-sources.json for the exact coverage and source bindings.\n')
         (bundle/'README.txt').write_text(f'Jury {version} for Linux x86_64\n{WARNING}\nTested on Debian 12 (glibc 2.36).\n\nVerify the signed SHA256SUMS using the published signing identity before extraction.\nInstall: install -Dm755 jury ~/.local/bin/jury\n         install -Dm755 juryd ~/.local/bin/juryd\nThen run jury --help and juryd --help.\nSee docs/linux-release.md and docs/self-hosting-juryd.md.\n')
-        # Compile the pinned SBOM tool with the same pinned compiler; no host resolver.
+        # Compile the checksummed crates.io SBOM tool source with the same pinned
+        # compiler. The reviewed lock replaces the release's stale dependency
+        # graph without allowing resolver drift.
         tool_output = work/'tool-output'
-        tool_output.mkdir()
-        run(['docker', 'run', '--rm', '--read-only', '--platform', 'linux/amd64',
-             '--user', f'{os.getuid()}:{os.getgid()}', '--tmpfs', '/tmp:rw,exec,nosuid,size=512m',
-             '--mount', f'type=bind,src={tool_output},dst=/build', '--env', 'CARGO_HOME=/build/cargo',
-             '--env', 'CARGO_BUILD_JOBS=8', IMAGE, 'cargo', 'install', 'cargo-cyclonedx',
-             '--version', '0.5.9', '--locked', '--root', '/build/tools'])
+        install_sbom_tool(tool_output)
         sbom_source = work/'sbom-source'
         shutil.copytree(source, sbom_source, symlinks=True)
         docker(sbom_source, vendor, config, first,
@@ -246,9 +280,13 @@ def build_candidate(args):
             'builder_image': IMAGE, 'builder_toolchain': toolchain, 'rustflags': FLAGS, 'cargo_command': command,
             'build_jobs': [8, 4], 'builder_uid': os.getuid(), 'builder_gid': os.getgid(),
             'source_date_epoch': 0, 'strip': 'symbols', 'incremental': False,
-            'sbom_generator': 'cargo-cyclonedx 0.5.9', 'sbom_builder_image': IMAGE,
+            'sbom_generator': f'cargo-cyclonedx {SBOM_TOOL_VERSION}',
+            'sbom_generator_source_sha256': SBOM_TOOL_SOURCE_SHA256,
+            'sbom_generator_lock_sha256': digest(SBOM_TOOL_LOCK),
+            'sbom_builder_image': IMAGE,
             'sbom_generator_sha256': digest(tool_output/'tools/bin/cargo-cyclonedx'),
             'dependency_audit_tool': audit_version, 'dependency_audit_lock_sha256': files['Cargo.lock']['sha256'],
+            'sbom_dependency_audit_lock_sha256': digest(SBOM_TOOL_LOCK),
             'vendor_config': config_text, 'source_files': files,
             'reproduced_binaries': binary_hashes,
             'artifacts': {path.name: digest(path) for path in sorted(output.iterdir())},

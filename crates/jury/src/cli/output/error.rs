@@ -81,15 +81,11 @@ impl CliError {
                 "{}",
                 serde_json::json!({
                     "ok": false,
-                    "error": {"code": self.code, "message": self.message},
-                    "maturity": "pre-alpha",
-                    "review_status": "externally-unreviewed",
-                    "real_secrets_supported": false
+                    "error": {"code": self.code, "message": self.message}
                 })
             );
         } else {
             let mut stderr = std::io::stderr().lock();
-            let _ = writeln!(stderr, "{PRE_ALPHA_WARNING}");
             let _ = writeln!(stderr, "jury: {} ({})", self.message, self.code);
         }
     }

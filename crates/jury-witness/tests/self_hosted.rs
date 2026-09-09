@@ -208,7 +208,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         .send()?
         .error_for_status()?
         .json()?;
-    assert_eq!(live["status"], "live");
+    assert_eq!(live, json!({"status": "live"}));
     let live_text = live.to_string();
     assert!(!live_text.contains("principal"));
     assert!(!live_text.contains("policy"));
@@ -572,21 +572,36 @@ fn assert_unsafe_tls_certificate_refused(
 }
 
 fn wait_ready(client: &Client, url: &str, process: &mut ProcessGuard) -> TestResult {
+    wait_health_ok(client, url, process, "ready")
+}
+
+fn wait_live(client: &Client, url: &str, process: &mut ProcessGuard) -> TestResult {
+    wait_health_ok(client, url, process, "live")
+}
+
+fn wait_health_ok(
+    client: &Client,
+    url: &str,
+    process: &mut ProcessGuard,
+    expected: &str,
+) -> TestResult {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if let Some(status) = process.child.try_wait()? {
-            return Err(format!("juryd exited before readiness with {status}").into());
+            return Err(format!("juryd exited before {expected} health with {status}").into());
         }
-        if client
-            .get(url)
-            .send()
-            .is_ok_and(|response| response.status() == StatusCode::OK)
+        if let Ok(response) = client.get(url).send()
+            && response.status() == StatusCode::OK
         {
+            assert_eq!(
+                response.json::<serde_json::Value>()?,
+                json!({"status": expected})
+            );
             return Ok(());
         }
         thread::sleep(Duration::from_millis(50));
     }
-    Err("juryd readiness timeout".into())
+    Err(format!("juryd {expected} health timeout").into())
 }
 
 fn wait_not_ready(client: &Client, url: &str, process: &mut ProcessGuard) -> TestResult {
@@ -595,11 +610,13 @@ fn wait_not_ready(client: &Client, url: &str, process: &mut ProcessGuard) -> Tes
         if let Some(status) = process.child.try_wait()? {
             return Err(format!("juryd exited during rollback check with {status}").into());
         }
-        if client
-            .get(url)
-            .send()
-            .is_ok_and(|response| response.status() == StatusCode::SERVICE_UNAVAILABLE)
+        if let Ok(response) = client.get(url).send()
+            && response.status() == StatusCode::SERVICE_UNAVAILABLE
         {
+            assert_eq!(
+                response.json::<serde_json::Value>()?,
+                json!({"status": "not-ready"})
+            );
             return Ok(());
         }
         thread::sleep(Duration::from_millis(25));

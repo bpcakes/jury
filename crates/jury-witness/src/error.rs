@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdapterErrorKind {
@@ -73,10 +76,50 @@ impl ConfigurationConstraint {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct AdapterError {
     kind: AdapterErrorKind,
     configuration_constraint: Option<ConfigurationConstraint>,
+    configuration_path: Option<PathBuf>,
+    configuration_field: Option<String>,
+    detail: Option<JsonDiagnostic>,
+}
+
+/// Only structured metadata crosses from serde into an operator diagnostic.
+/// Never retain its Display/Debug message: those can contain rejected values.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct JsonDiagnostic {
+    description: &'static str,
+    line: usize,
+    column: usize,
+}
+
+impl JsonDiagnostic {
+    fn from_error(error: &serde_json::Error) -> Self {
+        use serde_json::error::Category;
+
+        Self {
+            description: match error.classify() {
+                Category::Syntax | Category::Eof => "malformed JSON",
+                Category::Data => {
+                    "JSON fields or values do not match the required schema; check field names, required fields, types and formats in deploy/juryd examples"
+                }
+                Category::Io => "configuration JSON could not be read",
+            },
+            line: error.line(),
+            column: error.column(),
+        }
+    }
+}
+
+impl fmt::Display for JsonDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} (line {}, column {})",
+            self.description, self.line, self.column
+        )
+    }
 }
 
 impl AdapterError {
@@ -85,6 +128,9 @@ impl AdapterError {
         Self {
             kind,
             configuration_constraint: None,
+            configuration_path: None,
+            configuration_field: None,
+            detail: None,
         }
     }
 
@@ -92,6 +138,9 @@ impl AdapterError {
         Self {
             kind: AdapterErrorKind::InvalidConfiguration,
             configuration_constraint: Some(constraint),
+            configuration_path: None,
+            configuration_field: None,
+            detail: None,
         }
     }
 
@@ -99,12 +148,39 @@ impl AdapterError {
         Self {
             kind: AdapterErrorKind::InvalidCredential,
             configuration_constraint: Some(constraint),
+            configuration_path: None,
+            configuration_field: None,
+            detail: None,
         }
     }
 
     #[must_use]
-    pub const fn kind(self) -> AdapterErrorKind {
+    pub const fn kind(&self) -> AdapterErrorKind {
         self.kind
+    }
+
+    pub(crate) fn configuration_parse(
+        path: &Path,
+        field: Option<String>,
+        error: &serde_json::Error,
+    ) -> Self {
+        Self {
+            kind: AdapterErrorKind::InvalidConfiguration,
+            configuration_constraint: Some(ConfigurationConstraint::Document),
+            configuration_path: Some(path.to_path_buf()),
+            configuration_field: field,
+            detail: Some(JsonDiagnostic::from_error(error)),
+        }
+    }
+
+    pub(crate) fn at_configuration_field(mut self, field: impl Into<String>) -> Self {
+        self.configuration_field = Some(field.into());
+        self
+    }
+
+    pub(crate) fn with_configuration_path(mut self, path: &Path) -> Self {
+        self.configuration_path = Some(path.to_path_buf());
+        self
     }
 }
 
@@ -114,12 +190,27 @@ impl fmt::Debug for AdapterError {
             .debug_struct("AdapterError")
             .field("kind", &self.kind)
             .field("configuration_constraint", &self.configuration_constraint)
+            .field("configuration_path", &self.configuration_path)
+            .field("configuration_field", &self.configuration_field)
+            .field("detail", &self.detail)
             .finish()
     }
 }
 
 impl fmt::Display for AdapterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(path) = &self.configuration_path {
+            write!(formatter, "configuration file {}", path.display())?;
+            if let Some(field) = &self.configuration_field {
+                write!(formatter, " at `{field}`")?;
+            }
+            formatter.write_str(": ")?;
+        } else if let Some(field) = &self.configuration_field {
+            write!(formatter, "configuration field `{field}`: ")?;
+        }
+        if let Some(detail) = &self.detail {
+            return fmt::Display::fmt(detail, formatter);
+        }
         if let Some(constraint) = self.configuration_constraint {
             return formatter.write_str(constraint.message());
         }

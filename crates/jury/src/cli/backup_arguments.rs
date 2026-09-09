@@ -29,6 +29,7 @@ pub struct BackupCreateArgs {
     /// Replace an existing regular owner-only backup destination.
     #[arg(long)]
     pub overwrite: bool,
+    /// Password-hardening profile for the backup file.
     #[arg(long = "kdf-profile", value_enum, default_value_t = KdfProfileArg::Portable)]
     pub kdf_profile: KdfProfileArg,
     /// Deliberately permit the backup passphrase to equal the current identity passphrase.
@@ -44,12 +45,14 @@ pub struct BackupCreateArgs {
 
 #[derive(Debug, Args)]
 pub struct BackupVerifyArgs {
+    /// Owner-only backup file to decrypt and validate.
     #[arg(long = "in", value_name = "FILE")]
     pub input: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct BackupRestoreArgs {
+    /// Owner-only backup file to restore.
     #[arg(long = "in", value_name = "FILE")]
     pub input: PathBuf,
     /// Create the restored owner identity at this absent absolute path.
@@ -72,12 +75,14 @@ pub struct BackupRestoreArgs {
     /// Create an included witness-client identity at this absent absolute path.
     #[arg(long, value_name = "ABSENT_PATH")]
     pub witness_identity_out: Option<PathBuf>,
+    /// Password-hardening profile for each newly restored identity file.
     #[arg(long = "identity-kdf-profile", value_enum, default_value_t = KdfProfileArg::Portable)]
     pub identity_kdf_profile: KdfProfileArg,
 }
 
 #[derive(Debug, Args)]
 pub struct BackupDrillArgs {
+    /// Owner-only backup file to restore and exercise.
     #[arg(long = "in", value_name = "FILE")]
     pub input: PathBuf,
     /// Create the restored detached vault at this absent absolute path.
@@ -96,6 +101,7 @@ pub struct BackupDrillArgs {
     /// Create an included witness-client identity at this absent absolute path.
     #[arg(long, value_name = "ABSENT_PATH")]
     pub witness_identity_out: Option<PathBuf>,
+    /// Password-hardening profile for each temporary restored identity file.
     #[arg(long = "identity-kdf-profile", value_enum, default_value_t = KdfProfileArg::Portable)]
     pub identity_kdf_profile: KdfProfileArg,
 }

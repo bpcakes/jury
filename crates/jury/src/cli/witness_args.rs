@@ -38,12 +38,14 @@ pub struct RequestCreateArgs {
     /// Current owner-signed checkpoint JSON accepted by the selected witnesses.
     #[arg(long, value_name = "CHECKPOINT")]
     pub checkpoint: PathBuf,
+    /// Create the detached public request JSON at this path.
     #[arg(long, value_name = "FILE")]
     pub out: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct RequestArtifactArgs {
+    /// Complete public witnessed request JSON.
     #[arg(value_name = "REQUEST")]
     pub request: PathBuf,
 }
@@ -100,14 +102,17 @@ pub struct RequestExecuteArgs {
     /// Permit raw field bytes on stdout. Never valid with `--json`.
     #[arg(long)]
     pub reveal: bool,
+    /// Replace an existing private output file, even if its contents differ.
     #[arg(long, requires = "out")]
     pub overwrite: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct RequestCancelArgs {
+    /// Complete public witnessed request JSON to cancel.
     #[arg(value_name = "REQUEST")]
     pub request: PathBuf,
+    /// Create the signed public cancellation artifact at this path.
     #[arg(long, value_name = "FILE")]
     pub out: PathBuf,
     /// Witness endpoint as WITNESS_ID,BASE_URL,CREDENTIAL_FILE[,CA_CERTIFICATE].
@@ -129,6 +134,7 @@ pub enum ApprovalReasonArg {
 
 #[derive(Debug, Args)]
 pub struct ApproveArgs {
+    /// Public witnessed request JSON to review and decide.
     #[arg(value_name = "REQUEST")]
     pub request: PathBuf,
     /// Sign a denial instead of an approval.
