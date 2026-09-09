@@ -63,7 +63,7 @@ def ci(state, *, dispatch=False, wait=False):
     sha = state.data['source_sha']
     candidate = latest_run(sha)
     if dispatch:
-        if candidate is None or candidate['status'] == 'completed' and candidate['conclusion'] != 'success':
+        if candidate is None or candidate['status'] == 'completed':
             branch = 'release-validation/'+sha
             ensure_ref('heads', branch, sha)
             api(f'actions/workflows/{WORKFLOW}/dispatches', 'POST', ref=branch)

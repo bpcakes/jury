@@ -123,6 +123,15 @@ class RemoteTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'attempt changed'):
                 remote.ci(self.state)
 
+    def test_explicit_dispatch_refreshes_completed_success(self):
+        fresh = self.run_record(13)
+        with patch.object(remote, 'ensure_ref'), patch.object(remote, 'api', side_effect=[
+                {'workflow_runs': [self.run_record()]}, None, {'workflow_runs': [fresh]}, fresh]) as api:
+            result = remote.ci(self.state, dispatch=True)
+            self.assertEqual(result['id'], 13)
+            api.assert_any_call('actions/workflows/release-validation.yml/dispatches', 'POST',
+                                ref='release-validation/'+'a'*40)
+
     def test_wrong_source_or_workflow_is_refused(self):
         for field, value in [('head_sha', 'c'*40), ('event', 'push'), ('path', '.github/workflows/rust-tests.yml')]:
             candidate = self.run_record()

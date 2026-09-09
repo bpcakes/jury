@@ -74,6 +74,8 @@ hashes. Changing the release command requires fresh recovery state. An optional
 workflow. Ordinary pushes cannot cancel it. Publication requires the latest run
 and attempt for that exact source to pass all existing validation workflows,
 including J25; a newer failed or running attempt invalidates an older success.
+`--dispatch` starts fresh validation when the previous run has completed and
+resumes an already running validation. Without it, `ci` inspects the latest run.
 
 Signing requires browser authentication. Release notes must include the exact
 source commit, `SHA256SUMS` digest and externally unreviewed pre-alpha warning.
