@@ -63,6 +63,27 @@ fn collect_after_input(mut child: std::process::Child, input: &[u8]) -> TestResu
 
 #[test]
 fn closed_input_pipe_is_rejected_regardless_of_exit_code() -> TestResult {
+    const ISOLATED_CHILD: &str = "JURY_TEST_CLOSED_PIPE_CHILD";
+    if std::env::var_os(ISOLATED_CHILD).is_none() {
+        // Concurrent forks in sibling tests can briefly inherit the pipe's read
+        // end before exec closes it. Create the pipe in a separate test process
+        // so reaping its child really does remove the last reader.
+        let output = Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "support::closed_input_pipe_is_rejected_regardless_of_exit_code",
+                "--test-threads=1",
+            ])
+            .env(ISOLATED_CHILD, "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "isolated pipe test failed: {output:?}"
+        );
+        // An exact filter that no longer names a test must not silently pass.
+        assert!(String::from_utf8(output.stdout)?.contains("test result: ok. 1 passed; 0 failed;"));
+        return Ok(());
+    }
     for code in [0, 1, 2, 101] {
         // This is a real closed-pipe test of the helper, not proof of CLI policy.
         // Waiting first guarantees that no reader remains, regardless of capacity.
