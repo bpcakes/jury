@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -159,7 +160,8 @@ def build_candidate(args):
     require(sys.version_info >= (3, 11, 4), 'Python 3.11.4 or newer is required')
     require(platform.system() == 'Linux' and platform.machine() == 'x86_64', 'build requires Linux x86_64')
     version = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
-    require(version == '0.0.1', 'this recipe is scoped to 0.0.1')
+    require(bool(re.fullmatch(r'0\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', version)),
+            'this recipe supports experimental 0.x releases only')
     dirty = bool(capture(['git', 'status', '--porcelain', '--', '.', ':(exclude).agent', ':(exclude).beads', ':(exclude)web'], cwd=ROOT))
     require(not dirty or args.allow_dirty, 'checkout is dirty; use --allow-dirty only for an unsigned local candidate')
     output = args.output.resolve()

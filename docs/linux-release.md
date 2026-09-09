@@ -1,4 +1,4 @@
-# Linux 0.0.1 candidate
+# Experimental Linux releases
 
 Jury is externally unreviewed pre-alpha software and unsuitable for real
 secrets. Check [GitHub releases](https://github.com/bpcakes/jury/releases) for
@@ -38,6 +38,56 @@ reporting is configured and the signing identity is selected below. Passing QA
 alone does not publish or approve a release.
 
 ## Prepare a local candidate
+
+The resumable command wraps the same two-build recipe and packaged QA below.
+It requires `gh` authenticated to this repository and `cosign` for signing and
+verification. Choose a private recovery directory and an exact committed source
+revision; changes in the working checkout do not alter that frozen candidate.
+
+```sh
+RELEASE_STATE=/absolute/private/release-state
+python3 scripts/release-linux --state "$RELEASE_STATE" prepare --source FULL_COMMIT_SHA
+python3 scripts/release-linux --state "$RELEASE_STATE" status
+python3 scripts/release-linux --state "$RELEASE_STATE" ci --dispatch --wait
+python3 scripts/release-linux --state "$RELEASE_STATE" sign
+python3 scripts/release-linux --state "$RELEASE_STATE" draft --notes /absolute/release-notes.md
+```
+
+`prepare` checks release fixtures and frozen cryptographic inputs before building,
+then runs the ten journeys, TLS, native CLI and self-hosted integration suites,
+and every help page against extracted binaries. It retains command output and
+retries incomplete steps. Every resume checks the frozen checkout and artifact
+hashes. Changing the release command requires fresh recovery state. An optional
+`--vendor-archive` plus `--vendor-sha256` reuses authenticated dependency bytes.
+
+`ci` uses a `release-validation/FULL_COMMIT_SHA` branch and the dedicated release
+workflow. Ordinary pushes cannot cancel it. Publication requires the latest run
+and attempt for that exact source to pass all existing validation workflows,
+including J25; a newer failed or running attempt invalidates an older success.
+
+Signing requires browser authentication. Release notes must include the exact
+source commit, `SHA256SUMS` digest and externally unreviewed pre-alpha warning.
+Draft retries upload only missing assets and verify all remote bytes. Existing
+public releases, mismatching assets, notes or tags are never overwritten.
+Complete the required solo candidate verification and J26 binding described in
+the architecture before explicitly approving publication of the displayed digest:
+
+```sh
+python3 scripts/release-linux --state "$RELEASE_STATE" publish --approve-sha256 AUTHENTICATED_MANIFEST_SHA256
+```
+
+This publishes the verified draft as an experimental prerelease, downloads its
+assets without credentials, and verifies the signature and every checksum. If a
+network interruption hides a successful publication, repeat the same command;
+it reconciles the existing release. Public verification can also run separately:
+
+```sh
+python3 scripts/release-linux verify-public --tag v0.0.1 --output /absolute/public-downloads
+```
+
+The recovery directory is operational state for this command, not independent
+review evidence. Keep it through publication recovery; remove its detached source
+with `git worktree remove` before deleting the directory when no longer needed.
 
 Use Linux x86_64, Git, Python 3.11.4+, Docker, and Cargo 1.90 or newer.
 Install the pinned advisory scanner:

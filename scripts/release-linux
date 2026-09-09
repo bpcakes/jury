@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""Resume experimental Linux release preparation from a frozen Git revision."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tarfile
+import tempfile
+
+from linux_release_support import digest, require
+import release_remote as remote
+from release_state import State, run
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def help_crawl(binary):
+    pending, seen = [()], set()
+    while pending:
+        command = pending.pop()
+        require(command not in seen and len(seen) < 256, 'cyclic or excessive help command tree')
+        seen.add(command)
+        output = run([binary, *command, '--help'], capture=True).decode()
+        require('Usage:' in output, 'help omitted usage')
+        if 'Commands:\n' in output:
+            section = output.split('Commands:\n', 1)[1].split('\n\n', 1)[0]
+            for line in section.splitlines():
+                match = re.match(r'^  ([a-z][a-z0-9-]*)\s', line)
+                require(match, 'unrecognized help command entry')
+                if match[1] != 'help':
+                    pending.append((*command, match[1]))
+    print(f'Help checked: {binary.name}, {len(seen)} command pages')
+
+
+def prepare(state, args):
+    state.initialize(ROOT, args.source)
+    preflight = ('test-linux-release.py', 'test-release-linux.py', 'test-witness-gate.py',
+                 'test-suite2-inputs.py', 'check-direct-crypto-gate', 'check-witness-gate',
+                 'check-rollover-inputs', 'check-suite2-inputs')
+    for name in preflight:
+        state.stage('preflight-'+name, lambda name=name: state.command('preflight-'+name,
+                    ['python3', 'scripts/'+name]))
+
+    def build():
+        if not state.artifacts.exists():
+            argv = ['python3', 'scripts/build-linux-release', 'build', '--output', state.artifacts]
+            if args.vendor_archive:
+                argv += ['--vendor-archive', args.vendor_archive.resolve(), '--vendor-sha256', args.vendor_sha256]
+            state.command('build', argv)
+        # Handles a crash after the builder atomically publishes its output.
+        state.data['manifest_sha256'] = digest(state.artifacts/'SHA256SUMS')
+        state.verify_artifacts()
+    state.stage('build', build)
+    provenance = state.verify_artifacts()
+    if state.data['stages'].get('qa-complete') == 'passed':
+        print('Verified artifacts; packaged QA is already complete')
+        return
+    with tempfile.TemporaryDirectory(prefix='qa-', dir=state.root) as temporary:
+        extracted = Path(temporary)
+        basename = f"jury-{provenance['version']}-{provenance['target']}"
+        with tarfile.open(state.artifacts/(basename+'.tar.gz')) as archive:
+            require(all(member.isfile() and Path(member.name).parts[0] == basename
+                        and '..' not in Path(member.name).parts for member in archive.getmembers()),
+                    'native archive contains unsupported entries')
+            archive.extractall(extracted, filter='data')
+        jury, juryd = (extracted/basename/name for name in ('jury', 'juryd'))
+        for binary in (jury, juryd):
+            require(digest(binary) == provenance['reproduced_binaries'][binary.name], 'QA binary changed')
+        common = ['--jury', jury, '--juryd', juryd]
+        journeys = {name: ['python3', 'scripts/check-linux-'+name, *common] for name in
+                    ('witness-lifecycle', 'approval-review', 'descriptor-access', 'role-onboarding',
+                     'shared-policies', 'diagnostics', 'owner-changes', 'public-labels')}
+        journeys['disjoint'] = ['python3', 'scripts/check-linux-shared-policies', '--disjoint', *common]
+        journeys['input-surfaces'] = ['python3', 'scripts/check-linux-input-surfaces', '--jury', jury]
+        journeys['tls'] = ['python3', 'scripts/check-linux-witness-lifecycle', '--tls', *common]
+        for name, argv in journeys.items():
+            state.stage('qa-'+name, lambda name=name, argv=argv: state.command('qa-'+name, argv))
+        env = dict(os.environ, JURY_TEST_BINARY=str(jury), JURYD_TEST_BINARY=str(juryd),
+                   CARGO_PROFILE_TEST_OPT_LEVEL='1', CARGO_PROFILE_TEST_DEBUG_ASSERTIONS='true',
+                   CARGO_PROFILE_TEST_OVERFLOW_CHECKS='true')
+        for package, suite in (('jury', 'native_cli'), ('jury-witness', 'self_hosted')):
+            state.stage('qa-'+suite, lambda package=package, suite=suite: state.command('qa-'+suite,
+                        ['cargo', 'test', '--locked', '-p', package, '--test', suite], env))
+        state.stage('qa-help', lambda: [help_crawl(binary) for binary in (jury, juryd)])
+    state.stage('qa-complete', state.verify_artifacts)
+    print('Unsigned candidate prepared. Run ci --dispatch --wait, then sign and draft.')
+
+
+def sign(state):
+    state.prepared()
+    remote.ci(state)
+    bundle = state.artifacts/'SHA256SUMS.sigstore.json'
+    if not bundle.exists():
+        # Keep interactive authentication outside command logs and atomically install the bundle.
+        temporary = state.root/'signing.sigstore.json'
+        temporary.unlink(missing_ok=True)
+        run(['cosign', 'sign-blob', state.artifacts/'SHA256SUMS', '--bundle', temporary,
+             '--oidc-disable-ambient-providers', '--fulcio-auth-flow', 'normal'])
+        temporary.replace(bundle)
+    remote.signature(state.artifacts)
+    state.verify_artifacts()
+    state.data['signature_sha256'] = digest(bundle)
+    state.save()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--state', type=Path, help='private mode-0700 recovery directory')
+    sub = parser.add_subparsers(dest='command', required=True)
+    prep = sub.add_parser('prepare', help='freeze source, preflight, build twice and run packaged QA')
+    prep.add_argument('--source', required=True, help='committed Git revision')
+    prep.add_argument('--vendor-archive', type=Path)
+    prep.add_argument('--vendor-sha256')
+    sub.add_parser('status', help='inspect checkpoint and verify source/artifacts')
+    ci = sub.add_parser('ci', help='require latest release-validation success for this source')
+    ci.add_argument('--dispatch', action='store_true')
+    ci.add_argument('--wait', action='store_true')
+    sub.add_parser('sign', help='authenticate in browser and sign the final manifest')
+    draft = sub.add_parser('draft', help='create or resume an immutable draft and upload exact assets')
+    draft.add_argument('--notes', required=True, type=Path)
+    publish = sub.add_parser('publish', help='publish the approved draft and verify public downloads')
+    publish.add_argument('--approve-sha256', required=True,
+                         help='explicit publication approval for this exact manifest after required review')
+    verify = sub.add_parser('verify-public', help='download without credentials; verify signature and all hashes')
+    verify.add_argument('--tag', required=True)
+    verify.add_argument('--output', required=True, type=Path)
+    verify.add_argument('--manifest-sha256')
+    verify.add_argument('--source-sha')
+    args = parser.parse_args()
+    if args.command == 'verify-public':
+        remote.verify_public(args.tag, args.output, expected_manifest=args.manifest_sha256,
+                             expected_source=args.source_sha)
+        return
+    require(args.state, '--state is required')
+    state = State(args.state)
+    try:
+        if args.command == 'prepare':
+            require(bool(args.vendor_archive) == bool(args.vendor_sha256), 'supply both vendor arguments')
+            prepare(state, args)
+        elif args.command == 'status':
+            state.check_source()
+            if state.data.get('manifest_sha256'):
+                state.verify_artifacts()
+            print(json.dumps(state.data, indent=2, sort_keys=True))
+        elif args.command == 'ci':
+            remote.ci(state, dispatch=args.dispatch, wait=args.wait)
+        elif args.command == 'sign':
+            sign(state)
+        elif args.command == 'draft':
+            remote.draft(state, args.notes)
+        elif args.command == 'publish':
+            remote.publish(state, args.approve_sha256)
+    finally:
+        state.close()
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, RuntimeError, OSError, KeyError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f'Release stopped: {error}') from error
