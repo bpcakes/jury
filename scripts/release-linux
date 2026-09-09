@@ -40,8 +40,9 @@ def prepare(state, args):
                  'test-suite2-inputs.py', 'check-direct-crypto-gate', 'check-witness-gate',
                  'check-rollover-inputs', 'check-suite2-inputs')
     for name in preflight:
+        options = ['--providers-only'] if name == 'check-suite2-inputs' else []
         state.stage('preflight-'+name, lambda name=name: state.command('preflight-'+name,
-                    ['python3', 'scripts/'+name]))
+                    ['python3', 'scripts/'+name, *options]))
 
     def build():
         if not state.artifacts.exists():
