@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -57,31 +58,62 @@ def safe_diagnostics(output):
     return output.decode("utf-8", errors="replace")[-8000:]
 
 
-def http(port, route, payload=None, role=None):
+def http(port, route, payload=None, role=None, ca=None):
     headers = {"Content-Type": "application/json"}
     if role:
         headers["Authorization"] = "Bearer " + TOKENS[role]
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}{route}",
+        f"{'https' if ca else 'http'}://127.0.0.1:{port}{route}",
         data=None if payload is None else json.dumps(payload).encode(), headers=headers,
     )
     # Loopback tests must not be routed through an inherited HTTP proxy.
     try:
-        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=20) as response:
+        handlers = [urllib.request.ProxyHandler({})]
+        if ca:
+            handlers.append(urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=str(ca))))
+        with urllib.request.build_opener(*handlers).open(request, timeout=20) as response:
             return response.status, json.load(response)
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"HTTP {error.code} at {route}: {safe_diagnostics(error.read(8192))}") from None
 
 
 class Fixture:
-    def __init__(self, root, jury, juryd):
+    def __init__(self, root, jury, juryd, tls=False):
         self.root, self.jury, self.juryd = root, jury, juryd
+        self.tls = tls
+        self.transport_args = [] if tls else ["--allow-insecure-loopback"]
         self.children = []
         self.environment = {key: value for key, value in os.environ.items() if not key.startswith(("JURY_", "XDG_"))}
         for name in ("repo", "data", "state", "public", "services"):
             (root / name).mkdir(mode=0o700)
         self.environment.update(XDG_DATA_HOME=str(root / "data"), XDG_STATE_HOME=str(root / "state"))
         subprocess.run(["git", "init", "--quiet", str(root / "repo")], check=True)
+        if tls:
+            for name in ("trusted", "untrusted"):
+                self.openssl([
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                    "-subj", "/CN=ExampleLifecycleCA",
+                    "-keyout", str(root / f"{name}.key"), "-out", str(root / f"{name}.pem"),
+                ])
+                (root / f"{name}.key").chmod(0o600)
+                (root / f"{name}.pem").chmod(0o600)
+            self.openssl(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes",
+                          "-subj", "/CN=ExampleLifecycleService", "-keyout", str(root / "service.key"),
+                          "-out", str(root / "service.csr")])
+            write(root / "service.ext", b"basicConstraints=critical,CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+            self.openssl(["openssl", "x509", "-req", "-in", str(root / "service.csr"),
+                          "-CA", str(root / "trusted.pem"), "-CAkey", str(root / "trusted.key"),
+                          "-set_serial", "1", "-days", "1", "-extfile", str(root / "service.ext"),
+                          "-out", str(root / "service.pem")])
+            (root / "service.key").chmod(0o600)
+            (root / "service.pem").chmod(0o600)
+
+    def openssl(self, command):
+        result = subprocess.run(command, capture_output=True, timeout=30)
+        require(result.returncode == 0, f"synthetic TLS certificate generation failed: {safe_diagnostics(result.stderr)}")
+
+    def http(self, port, route, payload=None, role=None):
+        return http(port, route, payload, role, self.root / "trusted.pem" if self.tls else None)
 
     def cli(self, args, value=None, json_output=True, expected=0):
         # A single, explicit stdin contract avoids environment/stdin ambiguity.
@@ -113,7 +145,7 @@ class Fixture:
                 log.seek(0)
                 raise RuntimeError(f"juryd exited before readiness: {safe_diagnostics(log.read())}")
             try:
-                status, body = http(port, "/readyz")
+                status, body = self.http(port, "/readyz")
                 if status == 200 and body["status"] == "ready":
                     return process
             except (urllib.error.URLError, TimeoutError):
@@ -170,6 +202,10 @@ class Fixture:
         ports = unused_ports()
         for config, port, kind in zip((anchor, witness), ports, ("anchor", "witness")):
             config.update(witness_id=actor["id"], listen=f"127.0.0.1:{port}", tls={"allow_insecure_loopback": True})
+            if self.tls:
+                config["tls"] = {"certificate_file": str(self.root / "service.pem"),
+                                 "private_key_file": str(self.root / "service.key"),
+                                 "allow_insecure_loopback": False}
             config["database"]["path"] = str(directory / f"{kind}.sqlite3")
         for role in TOKENS:
             write(directory / f"{role}.token", TOKENS[role].encode())
@@ -180,6 +216,10 @@ class Fixture:
         anchor["write_credential_file"] = str(directory / "Anchor.token")
         witness["identity"].update(identity_file=str(self.root / "data/jury/identities" / f"{actor['name']}.identity.json"), passphrase_file=str(directory / "identity.passphrase"))
         witness["external_anchor"].update(base_url=f"http://127.0.0.1:{ports[0]}/", ca_certificate_file=str(directory / "ca.pem"), write_credential_file=str(directory / "Anchor.token"), allow_insecure_loopback=True)
+        if self.tls:
+            witness["external_anchor"].update(base_url=f"https://127.0.0.1:{ports[0]}/",
+                                               ca_certificate_file=str(self.root / "trusted.pem"),
+                                               allow_insecure_loopback=False)
         witness.update(client_credential_file=str(directory / "Client.token"), operator_credential_file=str(directory / "Operator.token"))
         for config, kind in ((anchor, "anchor"), (witness, "witness")):
             document(directory / f"{kind}.json", config)
@@ -187,7 +227,8 @@ class Fixture:
         self.daemon_command(["database", "init", "--config", directory / "witness.json"])
         self.start(["anchor", "serve", "--config", directory / "anchor.json"], ports[0])
         actor.update(directory=directory, port=ports[1], process=self.start(["serve", "--config", directory / "witness.json"], ports[1]))
-        return f"{actor['id']},http://127.0.0.1:{ports[1]},{directory / 'Client.token'}"
+        endpoint = f"{actor['id']},{'https' if self.tls else 'http'}://127.0.0.1:{ports[1]},{directory / 'Client.token'}"
+        return endpoint + (f",{self.root / 'trusted.pem'}" if self.tls else "")
 
     def exercise(self):
         self.cli(["identity", "init"], PASSPHRASE + b"\n")
@@ -214,36 +255,45 @@ class Fixture:
         endpoint_args = []
         for actor in actors:
             endpoint_args += ["--witness", self.serve_witness(actor)]
-            status, response = http(actor["port"], "/v1/operator/register", {"policy_material": material, "checkpoint": json.loads(checkpoint.read_text()), "accepted_registration": base64.b64encode(actor["proof"].read_bytes()).decode()}, "Operator")
+            status, response = self.http(actor["port"], "/v1/operator/register", {"policy_material": material, "checkpoint": json.loads(checkpoint.read_text()), "accepted_registration": base64.b64encode(actor["proof"].read_bytes()).decode()}, "Operator")
             require(status == 200 and response["durability"] == "witness-database-and-external-anchor-readback", "registration not durable")
             document(self.root / "public" / f"{actor['name']}.ack.json", response)
         common = ["--item-id", target["item_id"], "--field-id", target["field_id"], "--checkpoint", checkpoint]
         request, receipt = self.root / "public/request.json", self.root / "public/receipt.json"
-        result = self.cli(["read", *common, "--request-out", request, "--receipt", receipt, *endpoint_args, "--allow-insecure-loopback", "--reveal"], json_output=False)
+        if self.tls:
+            untrusted = [entry.replace(str(self.root / "trusted.pem"), str(self.root / "untrusted.pem"))
+                         for entry in endpoint_args]
+            refused = self.cli(["read", *common, "--request-out", self.root / "public/untrusted-request.json",
+                                "--receipt", self.root / "public/untrusted-receipt.json",
+                                *untrusted, "--reveal"], json_output=False, expected=4)
+            require(b"witness-unavailable" in refused.stderr, "untrusted TLS CA was not refused as a transport failure")
+            require(not refused.stdout, "untrusted TLS read published output")
+            require(not (self.root / "public/untrusted-receipt.json").exists(), "untrusted TLS read published a receipt")
+        result = self.cli(["read", *common, "--request-out", request, "--receipt", receipt, *endpoint_args, *self.transport_args, "--reveal"], json_output=False)
         require(result.stdout == VALUE, "witnessed read did not return exact field bytes")
         self.cli(["receipt", "verify", receipt, "--checkpoint", checkpoint])
         artifact = json.loads(request.read_text())
         payload = {"request": artifact["request"], "manifest": artifact["action_manifest"]}
         for actor in actors:
-            status, before = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            status, before = self.http(actor["port"], "/v1/requests/reserve", payload, "Client")
             require(status == 200 and before["status"] == "stable", "completed request was not stable")
             self.stop(actor["process"])
             actor["process"] = self.start(["serve", "--config", actor["directory"] / "witness.json"], actor["port"])
-            status, after = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            status, after = self.http(actor["port"], "/v1/requests/reserve", payload, "Client")
             require(status == 200 and after == before, "restart changed the exact stable response")
         cancelled = self.root / "public/cancel-request.json"
         self.cli(["request", "create", *common, "--out", cancelled])
-        self.cli(["request", "cancel", cancelled, "--out", self.root / "public/cancellation.json", *endpoint_args, "--allow-insecure-loopback"])
+        self.cli(["request", "cancel", cancelled, "--out", self.root / "public/cancellation.json", *endpoint_args, *self.transport_args])
         artifact = json.loads(cancelled.read_text())
         payload = {"request": artifact["request"], "manifest": artifact["action_manifest"]}
         for actor in actors:
             self.stop(actor["process"])
             actor["process"] = self.start(["serve", "--config", actor["directory"] / "witness.json"], actor["port"])
-            status, response = http(actor["port"], "/v1/requests/reserve", payload, "Client")
+            status, response = self.http(actor["port"], "/v1/requests/reserve", payload, "Client")
             require(status == 200 and response["status"] == "stable", "cancelled request did not survive restart")
             require(response["response"]["decision"]["reason"] == "cancelled", "cancelled request was not refused")
         self.exercise_name_check(item["item_id"], checkpoint, endpoint_args)
-        print("Real Linux witness lifecycle passed: direct owner grant/revoke with denied former-owner read, witnessed owner-change refusal, exact read, receipt, stable replay, restart, cancellation, and governed descriptor name checks.")
+        print(f"Real Linux witness lifecycle ({'TLS with untrusted-CA refusal' if self.tls else 'HTTP'}) passed: direct owner grant/revoke with denied former-owner read, witnessed owner-change refusal, exact read, receipt, stable replay, restart, cancellation, and governed descriptor name checks.")
 
     def exercise_owner_slots(self):
         owner = self.cli(["identity", "init", "--name", "ExampleSecondOwner", "--kind", "human"], PASSPHRASE + b"\n")
@@ -293,7 +343,7 @@ class Fixture:
             request = self.root / "public" / f"{name}.descriptor-request.json"
             receipt = self.root / "public" / f"{name}.descriptor-receipt.json"
             config = self.root / "public" / f"{name}.descriptor-access.json"
-            document(config, {"version": 1, "entries": [{"item_id": item_id, "checkpoint": str(checkpoint), "request_out": str(request), "receipt": str(receipt), "witnesses": endpoints[1::2], "allow_insecure_loopback": True, "wait_seconds": 1}]})
+            document(config, {"version": 1, "entries": [{"item_id": item_id, "checkpoint": str(checkpoint), "request_out": str(request), "receipt": str(receipt), "witnesses": endpoints[1::2], "allow_insecure_loopback": not self.tls, "wait_seconds": 1}]})
             result = self.cli(["item", "create", name, "--allow-direct", "--descriptor-access", config], expected=expected)
             if expected:
                 require(result["error"]["code"] == "duplicate-item-name", "witnessed duplicate was accepted or misclassified")
@@ -317,10 +367,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jury", type=Path, default=ROOT / "target/debug/jury")
     parser.add_argument("--juryd", type=Path, default=ROOT / "target/debug/juryd")
+    parser.add_argument("--tls", action="store_true", help="use a generated synthetic CA on both links and check untrusted-CA refusal (requires openssl)")
     args = parser.parse_args()
     require(sys.platform == "linux", "this test requires Linux")
     with tempfile.TemporaryDirectory(prefix="jury-linux-lifecycle-") as directory:
-        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve())
+        fixture = Fixture(Path(directory), args.jury.resolve(), args.juryd.resolve(), tls=args.tls)
         try:
             fixture.exercise()
         finally:

@@ -10,7 +10,7 @@ use std::{
     net::{TcpListener, TcpStream},
     os::unix::fs::PermissionsExt as _,
     os::unix::process::ExitStatusExt as _,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Mutex,
     thread,
@@ -36,6 +36,12 @@ const OPERATOR_TOKEN: &str = "ExampleOperatorCredential_0123456789abcdef";
 const ANCHOR_TOKEN: &str = "ExampleAnchorCredential_0123456789abcdef";
 const PASSPHRASE: &[u8] = b"ExampleWitnessPassphrase";
 static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn juryd_executable() -> PathBuf {
+    std::env::var_os("JURYD_TEST_BINARY")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_juryd").into())
+        .into()
+}
 
 #[test]
 fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
@@ -137,7 +143,8 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
         }),
     )?;
 
-    let executable = env!("CARGO_BIN_EXE_juryd");
+    let executable = juryd_executable();
+    let executable = executable.as_path();
     run_success(executable, &["anchor", "init", "--config"], &anchor_config)?;
     run_success(
         executable,
@@ -294,7 +301,7 @@ fn documented_loopback_services_are_bounded_safe_and_graceful() -> TestResult {
     Ok(())
 }
 
-fn assert_initial_audit(executable: &str, witness_config: &Path, root: &Path) -> TestResult {
+fn assert_initial_audit(executable: &Path, witness_config: &Path, root: &Path) -> TestResult {
     let audit_export = root.join("witness-audit.json");
     run_success_with_output(
         executable,
@@ -376,7 +383,8 @@ fn slow_headers_and_inflight_shutdown_are_bounded() -> TestResult {
         }),
     )?;
 
-    let executable = env!("CARGO_BIN_EXE_juryd");
+    let executable = juryd_executable();
+    let executable = executable.as_path();
     run_success(executable, &["anchor", "init", "--config"], &config)?;
     let mut anchor = ProcessGuard::spawn(executable, &["anchor", "serve", "--config"], &config)?;
     let client = Client::builder()
@@ -514,7 +522,7 @@ fn write_file(path: &Path, bytes: &[u8], mode: u32) -> TestResult {
 }
 
 fn assert_unsafe_tls_certificate_refused(
-    executable: &str,
+    executable: &Path,
     certificate: &Path,
     anchor_config: &Path,
     witness_config: &Path,
@@ -628,7 +636,7 @@ struct ProcessGuard {
     child: Child,
 }
 
-fn run_success(executable: &str, arguments: &[&str], config: &Path) -> TestResult {
+fn run_success(executable: &Path, arguments: &[&str], config: &Path) -> TestResult {
     let status = Command::new(executable)
         .args(arguments)
         .arg(config)
@@ -641,7 +649,7 @@ fn run_success(executable: &str, arguments: &[&str], config: &Path) -> TestResul
 }
 
 fn run_success_with_output(
-    executable: &str,
+    executable: &Path,
     arguments: &[&str],
     config: &Path,
     output: &Path,
@@ -660,7 +668,7 @@ fn run_success_with_output(
 }
 
 impl ProcessGuard {
-    fn spawn(executable: &str, arguments: &[&str], config: &Path) -> Result<Self, Box<dyn Error>> {
+    fn spawn(executable: &Path, arguments: &[&str], config: &Path) -> Result<Self, Box<dyn Error>> {
         let mut command = Command::new(executable);
         command.args(arguments).arg(config);
         let child = command

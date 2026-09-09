@@ -44,7 +44,8 @@ fn rollover_registration_survives_real_service_and_anchor_restarts() -> TestResu
     let witness_base = format!("https://127.0.0.1:{witness_port}");
     let (anchor_config, witness_config) =
         configurations(root, witness_id, &identity_file, anchor_port, witness_port)?;
-    let executable = env!("CARGO_BIN_EXE_juryd");
+    let executable = juryd_executable();
+    let executable = executable.as_path();
     run_success(executable, &["anchor", "init", "--config"], &anchor_config)?;
     run_success(
         executable,

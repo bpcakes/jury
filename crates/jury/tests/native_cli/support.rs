@@ -13,7 +13,9 @@ pub(super) fn run(
 }
 
 pub(super) fn jury_command(repository: &Path, data: &Path, state: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_jury"));
+    let executable =
+        std::env::var_os("JURY_TEST_BINARY").unwrap_or_else(|| env!("CARGO_BIN_EXE_jury").into());
+    let mut command = Command::new(executable);
     command
         .current_dir(repository)
         .env_clear()

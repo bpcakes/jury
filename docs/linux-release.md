@@ -123,11 +123,38 @@ python3 scripts/check-linux-shared-policies --disjoint --jury "$JURY_BIN" --jury
 python3 scripts/check-linux-input-surfaces --jury "$JURY_BIN" || exit 1
 ```
 
+The existing native CLI integration suite can also run against the extracted
+`jury` binary, including its direct and governed rollover/migration cases.
+The self-hosted suite accepts the extracted `juryd` binary and exercises real
+SQLite, anchor processes, TLS, restart, and shutdown. Supply absolute paths;
+an invalid supplied path fails instead of falling back to Cargo's binary.
+
+```sh
+JURY_TEST_BINARY="$JURY_BIN" CARGO_PROFILE_TEST_OPT_LEVEL=1 \
+  CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true \
+  cargo test --locked -p jury --test native_cli
+JURYD_TEST_BINARY="$JURYD_BIN" CARGO_PROFILE_TEST_OPT_LEVEL=1 \
+  CARGO_PROFILE_TEST_DEBUG_ASSERTIONS=true CARGO_PROFILE_TEST_OVERFLOW_CHECKS=true \
+  cargo test --locked -p jury-witness --test self_hosted
+```
+
+These overrides select only the executable under test. Rust test fixtures and
+assertions still come from this source checkout; the native CLI suite's embedded
+witness fixtures are not the packaged daemon. Without the overrides, both suites
+retain their normal Cargo-built executable selection.
+
 Use Debian 12 as the native package's runtime baseline and run as an
 unprivileged user. Keep stderr and the exit status of every command. The
-loopback journeys exercise HTTP with explicit test opt-in; they do not replace
-a TLS lifecycle using an explicit synthetic CA for both service links, including
-untrusted-certificate refusal. Complete J25 and the repository's required
+loopback journeys exercise HTTP with explicit test opt-in. Also run the lifecycle
+in TLS mode (requires `openssl`), which generates a synthetic CA for both service
+links and checks that an untrusted CA produces a transport refusal and no private
+output or success receipt:
+
+```bash
+python3 scripts/check-linux-witness-lifecycle --jury "$JURY_BIN" --juryd "$JURYD_BIN" --tls
+```
+
+Complete J25 and the repository's required
 verification on the exact release source as well. Do not count an old candidate's
 result as a check of a replacement archive.
 
