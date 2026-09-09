@@ -32,9 +32,9 @@ future operation.
 
 That candidate was local and unsigned. Files under ignored `target/` are not
 release downloads and may have been removed. Changing source, packaged guides,
-provider inputs or the verifier requires a newly bound candidate. The reporting
-channel and signing identity below remain unconfigured; passing QA alone does
-not publish or approve a release.
+provider inputs or the verifier requires a newly bound candidate. Private
+reporting is configured; the signing identity remains unselected. Passing QA
+alone does not publish or approve a release.
 
 ## Prepare a local candidate
 
@@ -160,8 +160,10 @@ result as a check of a replacement archive.
 
 ## Release signing and incident handling
 
-Before publication, configure a private security-reporting contact in
-`SECURITY.md` and select a release-signing identity. Neither is configured yet.
+Private vulnerability reporting is enabled through the channel in
+[SECURITY.md](../SECURITY.md). The maintainer must confirm security-alert
+notification delivery in their GitHub account and select a release-signing
+identity before publication. No signing identity has been selected yet.
 No current candidate is signed or approved for publication. Perform a fresh
 J19 input check, J25 adversarial validation and Linux QA on the exact candidate,
 review current dependency advisories, and record the exact verified source and
@@ -176,13 +178,39 @@ Follow the current [Sigstore blob-signing instructions](https://docs.sigstore.de
 and [verification instructions](https://docs.sigstore.dev/cosign/verifying/verify/).
 No credentials or private signing keys belong in the repository or package.
 
+For local keyless signing, first confirm the intended account's exact certificate
+identity and OIDC issuer using a synthetic signing check. Record those public
+values here before committing the final release source and rebuilding. Signing
+publishes the certificate identity and signing event in Sigstore's public
+verification infrastructure; use an account intended for public release signing.
+
+After the final candidate passes its checks, sign the existing manifest:
+
+```sh
+cosign sign-blob "$CANDIDATE/SHA256SUMS" \
+  --bundle "$CANDIDATE/SHA256SUMS.sigstore.json"
+cosign verify-blob "$CANDIDATE/SHA256SUMS" \
+  --bundle "$CANDIDATE/SHA256SUMS.sigstore.json" \
+  --certificate-identity "$SIGNING_IDENTITY" \
+  --certificate-oidc-issuer "$SIGNING_ISSUER"
+```
+
+`CANDIDATE` must name the verified final candidate directory; `SIGNING_IDENTITY`
+and `SIGNING_ISSUER` must contain the exact preselected public values. A signature
+verification failure stops publication. After successful signature verification,
+check every artifact against `SHA256SUMS` and rerun the source/artifact verifier
+above. Keep the manifest and artifacts unchanged: the signature bundle is a
+separate upload and is not added to the manifest it signs. The provenance's
+`signed` and `published` fields describe the state at build time; do not edit
+provenance after signing.
+
 If the signing account is compromised, stop publication, identify affected
 artifact hashes and time ranges, publish a non-sensitive notice through the
 established project channel, revoke access to the account, and establish a new
 identity through a separately authenticated announcement. Do not silently
 replace existing versioned artifacts. Treat reports with synthetic reproductions
 as public only when their contents are non-sensitive; handle private reports
-through the configured private channel once it exists.
+through the configured private channel.
 
 ## Install and remove
 

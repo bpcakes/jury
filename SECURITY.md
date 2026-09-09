@@ -8,9 +8,12 @@ Version 0.0.1 is the current development candidate. No version has been
 published or declared suitable for production. The completed CLI QA does not
 change that status; see [release preparation](docs/linux-release.md).
 
-No private vulnerability-reporting channel is documented yet. Do not submit
-credentials, private data, or sensitive vulnerability details to public issues.
-Public issues may be used for non-sensitive bugs with synthetic reproductions.
+Report suspected security vulnerabilities through
+[GitHub private vulnerability reporting](https://github.com/bpcakes/jury/security/advisories/new).
+Include the affected version, expected and observed behavior, and a minimal
+synthetic reproduction. Do not include credentials or private data in reports,
+or sensitive vulnerability details in public issues. Public issues may be used
+for non-sensitive bugs with synthetic reproductions.
 Any public `0.x` release remains experimental and must publish supported
 versions, its threat
 model, deterministic test vectors, and the explicit statement that it has not

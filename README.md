@@ -48,9 +48,10 @@ access and recovery. Its four follow-up findings are addressed: rollover and
 suite migration are explicitly included in 0.0.1, the repaired fuzz lockfile
 passes the bounded suite, and recovery/TLS diagnostics explain the required
 filesystem layout and permissions. Passing the exercised paths does not establish
-security for real secrets. Publication still requires a private reporting
-contact, a release-signing identity, and a freshly verified candidate bound to
-the final source and documentation.
+security for real secrets. Private vulnerability reporting is available through
+the [security policy](SECURITY.md). Publication still requires confirmed report
+notification delivery, a release-signing identity, and a freshly verified
+candidate bound to the final source and documentation.
 
 To build and install both commands from source:
 
