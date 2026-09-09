@@ -192,12 +192,12 @@ fn grant_candidate_access(
                 .ok_or("missing genesis fingerprint")?,
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "access",
+            "item",
             "list",
-            "--me",
         ],
         b"CandidatePass1234\n",
     )?)?;
+    assert_eq!(candidate_access["operation"], "item-list");
     assert_eq!(candidate_access["count"], 1);
     assert_eq!(candidate_access["items"][0]["item"], "ExampleItem");
     assert_eq!(candidate_access["items"][0]["role"], "reader");
@@ -360,9 +360,8 @@ fn assert_human_my_access_list(repository: &Path, data: &Path, state: &Path) -> 
         &[
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "access",
+            "item",
             "list",
-            "--me",
         ],
         b"ExamplePass1234\n",
     )?;
@@ -497,9 +496,8 @@ fn change_and_revoke_candidate_access(
             "candidate",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "access",
+            "item",
             "list",
-            "--me",
         ],
         b"CandidatePass1234\n",
     )?)?;
@@ -535,13 +533,16 @@ fn change_and_revoke_candidate_access(
             "candidate",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "access",
+            "item",
             "list",
-            "--me",
         ],
         b"CandidatePass1234\n",
     )?)?;
+    assert_eq!(candidate_revoked["operation"], "item-list");
     assert_eq!(candidate_revoked["count"], 0);
+    assert_eq!(candidate_revoked["items"], serde_json::json!([]));
+    assert!(!candidate_revoked.to_string().contains("ExampleItem"));
+    assert!(!candidate_revoked.to_string().contains(revoked_access["item_id"].as_str().ok_or("missing revoked item ID")?));
     Ok(())
 }
 
@@ -559,7 +560,6 @@ fn set_example_field(paths: NativePaths<'_>) -> TestResult {
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "vault",
             "field",
             "set",
             "ExampleItem",
@@ -591,7 +591,6 @@ fn cover_and_remove_fields(paths: NativePaths<'_>) -> TestResult {
             "--allow-degraded-protection",
             "privacy",
             "cover",
-            "--item",
             "ExampleItem",
         ],
         b"ExamplePass1234\n",
@@ -607,7 +606,6 @@ fn cover_and_remove_fields(paths: NativePaths<'_>) -> TestResult {
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "vault",
             "field",
             "remove",
             "ExampleItem",
@@ -625,7 +623,6 @@ fn cover_and_remove_fields(paths: NativePaths<'_>) -> TestResult {
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "vault",
             "field",
             "remove",
             "ExampleItem",
@@ -643,7 +640,6 @@ fn cover_and_remove_fields(paths: NativePaths<'_>) -> TestResult {
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "vault",
             "field",
             "remove",
             "ExampleItem",
@@ -661,7 +657,6 @@ fn cover_and_remove_fields(paths: NativePaths<'_>) -> TestResult {
             "--json",
             "--passphrase-stdin",
             "--allow-degraded-protection",
-            "vault",
             "field",
             "list",
             "ExampleItem",

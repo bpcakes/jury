@@ -130,19 +130,37 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::Item {
             command: ItemCommand::Create(arguments),
         } => item_create(&cli, arguments, &environment, &current, protection),
-        Command::Vault {
+        Command::Item {
+            command: ItemCommand::List,
+        } => access_commands::list_accessible_items(
+            &cli,
+            &environment,
+            &current,
+            protection,
+            "item-list",
+        ),
+        Command::Field {
+            command: FieldCommand::List(arguments),
+        }
+        | Command::Vault {
             command:
                 VaultCommand::Field {
                     command: FieldCommand::List(arguments),
                 },
         } => field_list(&cli, arguments, &environment, &current, protection),
-        Command::Vault {
+        Command::Field {
+            command: FieldCommand::Set(arguments),
+        }
+        | Command::Vault {
             command:
                 VaultCommand::Field {
                     command: FieldCommand::Set(arguments),
                 },
         } => field_set(&cli, arguments, &environment, &current, protection),
-        Command::Vault {
+        Command::Field {
+            command: FieldCommand::Remove(arguments),
+        }
+        | Command::Vault {
             command:
                 VaultCommand::Field {
                     command: FieldCommand::Remove(arguments),

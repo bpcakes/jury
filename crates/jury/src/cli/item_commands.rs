@@ -313,9 +313,10 @@ pub(super) fn privacy_cover(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    ItemSelector::parse(arguments.item.clone()).map_err(|_| invalid_item_selector())?;
+    let item_name = arguments.target.item()?;
+    ItemSelector::parse(item_name.to_owned()).map_err(|_| invalid_item_selector())?;
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let accessible = selected_accessible_item(&context, &arguments.item)?;
+    let accessible = selected_accessible_item(&context, item_name)?;
     let state = open_item_body(&context, &accessible, Capability::Write)?;
     let timestamp = timestamp_ms()?;
     let bucket_id = current_bucket(&context, &accessible);
@@ -331,7 +332,7 @@ pub(super) fn privacy_cover(
         context,
         prepared,
         "privacy-cover",
-        arguments.item.clone(),
+        item_name.to_owned(),
         arguments.dry_run,
         MutationKind::PrivacyCover,
         protection,

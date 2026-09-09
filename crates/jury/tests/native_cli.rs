@@ -29,6 +29,9 @@ mod native_cli_field_redaction;
 #[path = "native_cli/diagnostics.rs"]
 mod native_cli_diagnostics;
 
+#[path = "native_cli/command_ux.rs"]
+mod native_cli_command_ux;
+
 #[path = "native_cli/main_flow.rs"]
 mod native_cli_main_flow;
 

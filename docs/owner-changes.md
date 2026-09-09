@@ -97,8 +97,8 @@ opens and prepares the mutation without committing it. Use fresh absent
 request and receipt paths for each retry.
 
 After a successful change, export a checkpoint with
-`jury witness checkpoint --predecessor current.checkpoint.json --output next.checkpoint.json`
-and current material with `jury witness policy-material --output next.material.json`.
+`jury witness checkpoint --predecessor current.checkpoint.json --out next.checkpoint.json`
+and current material with `jury witness policy-material --out next.material.json`.
 Propagate them to every active witness before requesting access at the new
 revision, following the [operator walkthrough](witness-operator-walkthrough.md).
 Witnesses require the next consecutive revision and the exact predecessor.

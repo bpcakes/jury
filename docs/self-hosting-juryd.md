@@ -296,7 +296,7 @@ Export the exact compact public policy bundle from the vault installation:
 
 ```console
 $ jury witness policy-material \
-    --output /absolute/public/path/ExamplePolicyMaterial.json
+    --out /absolute/public/path/ExamplePolicyMaterial.json
 ```
 
 Distribute that exact file, the signed checkpoint, and the exact registration

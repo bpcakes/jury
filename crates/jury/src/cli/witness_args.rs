@@ -1,12 +1,16 @@
+const REQUEST_WORKFLOW_HELP: &str = "To open an item, start `jury read`, `jury inject`, `jury exec`, or `jury run` with the governed access options. The command publishes --request-out and must keep running while another terminal uses `jury approve REQUEST --out APPROVAL`.\n\n`jury request preview` only creates an inspection artifact. It cannot be executed later. Each foreground attempt needs a fresh request and fresh approvals.";
+
 #[derive(Debug, Subcommand)]
 pub enum RequestCommand {
-    /// Create a detached public artifact for inspection; it cannot resume an execution session.
+    /// Preview a detached request for inspection only; it cannot execute.
+    #[command(name = "preview", alias = "create", after_help = REQUEST_WORKFLOW_HELP)]
     Create(RequestCreateArgs),
     /// Validate and render one complete request artifact.
     Inspect(RequestArtifactArgs),
     /// Report the current local phase of one request artifact.
     Status(RequestArtifactArgs),
-    /// Create and execute a fresh request; keep this process open while another terminal approves it.
+    /// Compatibility command for a fresh governed read; prefer `jury read`.
+    #[command(hide = true, after_help = REQUEST_WORKFLOW_HELP)]
     Execute(RequestExecuteArgs),
     /// Sign cancellation intent for one exact request.
     Cancel(RequestCancelArgs),
@@ -154,6 +158,6 @@ pub struct WitnessCheckpointArgs {
     #[arg(long, value_name = "CHECKPOINT")]
     pub predecessor: Option<PathBuf>,
     /// Create this public JSON file; existing paths are never replaced.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long = "out", alias = "output", value_name = "FILE")]
     pub output: PathBuf,
 }

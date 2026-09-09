@@ -23,10 +23,32 @@ pub(super) fn vault_init(
     let identity_bytes = {
         let repositories = repository_refs(&home);
         let root = HardenedStateRoot::open_existing(&identity_root, &repositories)
-            .map_err(map_filesystem_error)?;
+            .map_err(|error| {
+                if error.kind() == FilesystemErrorKind::NotFound {
+                    CliError::new(
+                        CliErrorKind::NotFound,
+                        "not-found",
+                        "the identity storage home does not exist; run `jury identity init` with the same identity and home selection, then retry `jury vault init`",
+                    )
+                } else {
+                    map_filesystem_error(error)
+                }
+            })?;
         selector
             .read(&root, &repositories, MAX_IDENTITY_FILE_BYTES)
-            .map_err(map_filesystem_error)?
+            .map_err(|error| {
+                if error.kind() != FilesystemErrorKind::NotFound {
+                    return map_filesystem_error(error);
+                }
+                let message = match &selector {
+                    IdentitySelector::Named(_) =>
+                        "the selected identity does not exist; run `jury identity init` with the same --identity selection or JURY_IDENTITY environment, and the same home selection, then retry `jury vault init`",
+                    IdentitySelector::ExplicitFile(_) =>
+                        "the selected identity file does not exist; run `jury identity init --identity-file PATH` with the same absolute path and home selection, then retry `jury vault init`",
+                };
+                // Keep the existing machine error code while explaining the missing identity.
+                CliError::new(CliErrorKind::NotFound, "not-found", message)
+            })?
     };
     let identity_file = IdentityFileV1::parse(&identity_bytes).map_err(|_| invalid_identity())?;
     let passphrase = secret_input::capture_named_or_environment(

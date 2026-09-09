@@ -12,9 +12,9 @@ pub enum PolicyCommand {
         command: PolicyAllowCommand,
     },
     /// Show the configured authority policy for one resolved item.
-    Status(PolicyItemArgs),
+    Status(ItemTargetArgs),
     /// Explain the configured authority policy for one resolved item.
-    Explain(PolicyItemArgs),
+    Explain(ItemTargetArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -30,17 +30,29 @@ pub enum PolicyAllowCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct PolicyItemArgs {
-    /// Resolved item name whose authority policy to show or explain.
-    #[arg(long, value_name = "ITEM")]
-    pub item: String,
+pub struct ItemTargetArgs {
+    /// Resolved item name.
+    // A conflicting legacy selector waives this required positional argument.
+    #[arg(value_name = "ITEM", required = true, conflicts_with = "legacy_item")]
+    pub item: Option<String>,
+    /// Compatibility spelling for positional ITEM.
+    #[arg(long = "item", value_name = "ITEM", hide = true)]
+    pub legacy_item: Option<String>,
+}
+
+impl ItemTargetArgs {
+    fn item(&self) -> Result<&str, CliError> {
+        match (&self.item, &self.legacy_item) {
+            (Some(item), None) | (None, Some(item)) => Ok(item),
+            _ => Err(invalid_item_selector()),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
 pub struct PolicyRequireWitnessedArgs {
-    /// Resolved item name that will require witnessed authority.
-    #[arg(long, value_name = "ITEM")]
-    pub item: String,
+    #[command(flatten)]
+    pub target: ItemTargetArgs,
     /// Active approver ID whose descriptor permits every declared operation; may be repeated.
     #[arg(long = "approver", value_name = "PRINCIPAL")]
     pub approvers: Vec<String>,
@@ -78,9 +90,8 @@ pub struct PolicyRequireWitnessedArgs {
 
 #[derive(Debug, Args)]
 pub struct PolicyAllowDirectArgs {
-    /// Resolved item name that will allow direct access.
-    #[arg(long, value_name = "ITEM")]
-    pub item: String,
+    #[command(flatten)]
+    pub target: ItemTargetArgs,
     /// Active human or machine principal that already has read access to ITEM; may be repeated.
     #[arg(long = "principal", value_name = "PRINCIPAL", required = true)]
     pub principals: Vec<String>,
@@ -100,9 +111,8 @@ pub enum PrivacyCommand {
 
 #[derive(Debug, Args)]
 pub struct PrivacyCoverArgs {
-    /// Resolved item to reseal without changing its plaintext fields.
-    #[arg(long, value_name = "ITEM")]
-    pub item: String,
+    #[command(flatten)]
+    pub target: ItemTargetArgs,
     /// Validate the cover mutation without changing the vault.
     #[arg(long)]
     pub dry_run: bool,

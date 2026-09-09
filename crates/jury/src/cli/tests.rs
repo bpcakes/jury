@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "tests/command_ux.rs"]
+mod command_ux;
+
 #[test]
 fn field_redaction_options_are_explicit_and_mutually_exclusive()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -164,7 +167,8 @@ fn witnessed_automatic_help_names_exact_authority() -> Result<(), Box<dyn std::e
 #[test]
 fn witnessed_policy_help_explains_inputs() -> Result<(), Box<dyn std::error::Error>> {
     let witnessed_help = help(&["jury", "policy", "require", "witnessed", "--help"])?;
-    assert!(witnessed_help.contains("Resolved item name that will require witnessed authority"));
+    assert!(witnessed_help.contains("<ITEM> Resolved item name"));
+    assert!(witnessed_help.contains("Require named approvers and witnesses"));
     assert!(witnessed_help.contains("at least two unique values"));
     assert!(witnessed_help.contains("descriptor permits every declared operation"));
     assert!(witnessed_help.contains("--review-label"));
@@ -188,10 +192,12 @@ fn witnessed_policy_help_explains_inputs() -> Result<(), Box<dyn std::error::Err
     }
 
     let status_help = help(&["jury", "policy", "status", "--help"])?;
-    assert!(status_help.contains("Resolved item name whose authority policy to show or explain"));
+    assert!(status_help.contains("<ITEM> Resolved item name"));
+    assert!(status_help.contains("Show the configured authority policy"));
 
     let allow_direct_help = help(&["jury", "policy", "allow", "direct", "--help"])?;
-    assert!(allow_direct_help.contains("Resolved item name that will allow direct access"));
+    assert!(allow_direct_help.contains("<ITEM> Resolved item name"));
+    assert!(allow_direct_help.contains("Allow listed principals to use direct access"));
     assert!(allow_direct_help.contains("human or machine principal that already has read access"));
 
     let witness_status_help = help(&["jury", "witness", "policy-status", "--help"])?;

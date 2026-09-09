@@ -335,7 +335,6 @@ fn assert_owner_access(paths: NativePaths<'_>) -> TestResult {
             "--allow-degraded-protection",
             "policy",
             "status",
-            "--item",
             "ExampleItem",
         ],
         b"ExamplePass1234\n",

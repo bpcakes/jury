@@ -10,65 +10,10 @@ pub(super) fn access_list(
     if let Some(item) = &arguments.item {
         ItemSelector::parse(item.clone()).map_err(|_| invalid_item_selector())?;
     }
-    let context = load_vault_principal(cli, environment, current, protection)?;
     if arguments.me {
-        let accessible = discover_accessible_items(&context)?;
-        let mut lines = vec![format!("Accessible items: {}", accessible.len())];
-        let entries = accessible
-            .iter()
-            .map(|item| {
-                let envelope = &context.vault.items[item.envelope_index];
-                let explanation = context.policy.access(
-                    &envelope.item_id,
-                    &context.identity.principal_id(),
-                    Capability::Read,
-                );
-                let item_id = hex(envelope.item_id.as_bytes());
-                let role = explanation
-                    .effective_role
-                    .map(access_role)
-                    .unwrap_or("none");
-                let path = access_path(explanation.path);
-                let read = explanation.allowed;
-                let write = explanation
-                    .effective_role
-                    .is_some_and(|role| matches!(role, AccessRole::Writer | AccessRole::Owner));
-                let administer = explanation.effective_role == Some(AccessRole::Owner);
-                lines.push(format!("Item: {}", item.descriptor.name()));
-                lines.push(format!("  Role: {role}; path: {path}"));
-                lines.push(format!(
-                    "  Permissions: read: {}; write: {}; administer: {}",
-                    yes_no(read),
-                    yes_no(write),
-                    yes_no(administer)
-                ));
-                lines.push(format!(
-                    "  Carries item quorum claim: {}",
-                    yes_no(explanation.carries_quorum_claim)
-                ));
-                serde_json::json!({
-                    "item": item.descriptor.name(),
-                    "item_id": item_id,
-                    "role": explanation.effective_role.map(access_role),
-                    "path": path,
-                    "read": read,
-                    "write": write,
-                    "administer": administer,
-                    "carries_item_quorum_claim": explanation.carries_quorum_claim,
-                })
-            })
-            .collect::<Vec<_>>();
-        return Ok(CommandOutput::Safe {
-            operation: "access-list-me",
-            fields: serde_json::json!({
-                "principal_id": hex(context.identity.principal_id().as_bytes()),
-                "count": entries.len(),
-                "items": entries,
-                "inaccessible_items_disclosed": false,
-            }),
-            lines,
-        });
+        return list_accessible_items(cli, environment, current, protection, "access-list-me");
     }
+    let context = load_vault_principal(cli, environment, current, protection)?;
     let item_name = arguments
         .item
         .as_deref()
@@ -153,6 +98,72 @@ pub(super) fn access_list(
             "access_mode": policy_item.access_mode().map(item_access_mode),
             "direct_slot_count": policy_item.direct_slots.len(),
             "item_quorum_claim_suppressed": !policy_item.direct_slots.is_empty(),
+        }),
+        lines,
+    })
+}
+
+pub(super) fn list_accessible_items(
+    cli: &Cli,
+    environment: &Environment,
+    current: &Path,
+    protection: ProtectionPolicy,
+    operation: &'static str,
+) -> Result<CommandOutput, CliError> {
+    let context = load_vault_principal(cli, environment, current, protection)?;
+    let accessible = discover_accessible_items(&context)?;
+    let mut lines = vec![format!("Accessible items: {}", accessible.len())];
+    let entries = accessible
+        .iter()
+        .map(|item| {
+            let envelope = &context.vault.items[item.envelope_index];
+            let explanation = context.policy.access(
+                &envelope.item_id,
+                &context.identity.principal_id(),
+                Capability::Read,
+            );
+            let item_id = hex(envelope.item_id.as_bytes());
+            let role = explanation
+                .effective_role
+                .map(access_role)
+                .unwrap_or("none");
+            let path = access_path(explanation.path);
+            let read = explanation.allowed;
+            let write = explanation
+                .effective_role
+                .is_some_and(|role| matches!(role, AccessRole::Writer | AccessRole::Owner));
+            let administer = explanation.effective_role == Some(AccessRole::Owner);
+            lines.push(format!("Item: {}", item.descriptor.name()));
+            lines.push(format!("  Role: {role}; path: {path}"));
+            lines.push(format!(
+                "  Permissions: read: {}; write: {}; administer: {}",
+                yes_no(read),
+                yes_no(write),
+                yes_no(administer)
+            ));
+            lines.push(format!(
+                "  Carries item quorum claim: {}",
+                yes_no(explanation.carries_quorum_claim)
+            ));
+            serde_json::json!({
+                "item": item.descriptor.name(),
+                "item_id": item_id,
+                "role": explanation.effective_role.map(access_role),
+                "path": path,
+                "read": read,
+                "write": write,
+                "administer": administer,
+                "carries_item_quorum_claim": explanation.carries_quorum_claim,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(CommandOutput::Safe {
+        operation,
+        fields: serde_json::json!({
+            "principal_id": hex(context.identity.principal_id().as_bytes()),
+            "count": entries.len(),
+            "items": entries,
+            "inaccessible_items_disclosed": false,
         }),
         lines,
     })

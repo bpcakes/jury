@@ -7,7 +7,8 @@ pub(super) fn policy_require_witnessed(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    ItemSelector::parse(arguments.item.clone()).map_err(|_| invalid_item_selector())?;
+    let item_name = arguments.target.item()?;
+    ItemSelector::parse(item_name.to_owned()).map_err(|_| invalid_item_selector())?;
     let approver_ids = if arguments.approvers.is_empty() {
         Vec::new()
     } else {
@@ -57,7 +58,7 @@ pub(super) fn policy_require_witnessed(
     }
     let context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
-    let accessible = selected_accessible_item(&context, &arguments.item)?;
+    let accessible = selected_accessible_item(&context, item_name)?;
     let envelope = &context.vault.items[accessible.envelope_index];
     let item = context
         .policy
@@ -324,7 +325,7 @@ pub(super) fn policy_require_witnessed(
         context,
         prepared,
         "policy-require-witnessed",
-        arguments.item.clone(),
+        item_name.to_owned(),
         arguments.dry_run,
         MutationKind::Policy,
         protection,
@@ -338,7 +339,8 @@ pub(super) fn policy_allow_direct(
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    ItemSelector::parse(arguments.item.clone()).map_err(|_| invalid_item_selector())?;
+    let item_name = arguments.target.item()?;
+    ItemSelector::parse(item_name.to_owned()).map_err(|_| invalid_item_selector())?;
     if !arguments.acknowledge_direct_access {
         return Err(CliError::new(
             CliErrorKind::InvalidArguments,
@@ -349,7 +351,7 @@ pub(super) fn policy_allow_direct(
     let principals = parse_unique_principal_ids(&arguments.principals)?;
     let context = load_vault_principal(cli, environment, current, protection)?;
     require_owner(&context)?;
-    let accessible = selected_accessible_item(&context, &arguments.item)?;
+    let accessible = selected_accessible_item(&context, item_name)?;
     let envelope = &context.vault.items[accessible.envelope_index];
     for principal_id in &principals {
         let principal = grantable_principal(&context.policy, principal_id)?;
@@ -393,7 +395,7 @@ pub(super) fn policy_allow_direct(
     finish_item_mutation_with_ack(
         context,
         prepared,
-        arguments.item.clone(),
+        item_name.to_owned(),
         MutationFinishOptions {
             operation: "policy-allow-direct",
             dry_run: arguments.dry_run,
@@ -448,15 +450,16 @@ pub(super) fn random_witness_policy_id() -> Result<WitnessPolicyId, CliError> {
 
 pub(super) fn policy_status(
     cli: &Cli,
-    arguments: &PolicyItemArgs,
+    arguments: &ItemTargetArgs,
     explain: bool,
     environment: &Environment,
     current: &Path,
     protection: ProtectionPolicy,
 ) -> Result<CommandOutput, CliError> {
-    ItemSelector::parse(arguments.item.clone()).map_err(|_| invalid_item_selector())?;
+    let item_name = arguments.item()?;
+    ItemSelector::parse(item_name.to_owned()).map_err(|_| invalid_item_selector())?;
     let context = load_vault_principal(cli, environment, current, protection)?;
-    let accessible = selected_accessible_item(&context, &arguments.item)?;
+    let accessible = selected_accessible_item(&context, item_name)?;
     let envelope = &context.vault.items[accessible.envelope_index];
     let item = context
         .policy
@@ -541,7 +544,7 @@ pub(super) fn policy_status(
             "policy-status"
         },
         fields: serde_json::json!({
-            "item": arguments.item,
+            "item": item_name,
             "item_id": hex(envelope.item_id.as_bytes()),
             "mode": item_access_mode(mode),
             "direct_slot_count": item.direct_slots.len(),
@@ -560,11 +563,7 @@ pub(super) fn policy_status(
             "value_free": true,
         }),
         lines: vec![
-            format!(
-                "Policy mode for {}: {}",
-                arguments.item,
-                item_access_mode(mode)
-            ),
+            format!("Policy mode for {}: {}", item_name, item_access_mode(mode)),
             format!("Carries item quorum claim: {carries_quorum_claim}"),
             format!(
                 "Automatic read targets: {}",

@@ -18,7 +18,7 @@ Initialize the owner and vault if they do not exist:
 jury identity init
 jury vault init
 jury item create ExampleItem --allow-direct
-jury vault field set ExampleItem ExampleField
+jury field set ExampleItem ExampleField
 ```
 
 Enter a synthetic value of at least four bytes at the last command, then press
@@ -67,13 +67,13 @@ also needs policy material; the remote import procedure under
 registered role.
 
 ```sh
-jury policy require witnessed --item ExampleItem \
+jury policy require witnessed ExampleItem \
   --approver "$APPROVER_ID" --approvals 1 \
   --witness "$WITNESS_ONE_ID" --witness "$WITNESS_TWO_ID" --witness-quorum 2 \
   --operation read-stdout --review-label ExampleItem \
   --field-review-label ExampleField=ExampleField --request-lifetime 300
-jury witness policy-material --output "$PUBLIC/ExamplePolicy.json"
-jury witness checkpoint --output "$PUBLIC/ExampleCheckpoint.json"
+jury witness policy-material --out "$PUBLIC/ExamplePolicy.json"
+jury witness checkpoint --out "$PUBLIC/ExampleCheckpoint.json"
 ```
 
 The review labels are deliberately public. Using synthetic private names as
@@ -278,11 +278,13 @@ add `write-private-file` when initially setting the policy, then replace
 `--reveal` with `--out /absolute/private/ExampleOutput`; its parent must be outside
 the worktree and local identity/state trees. Do not use `--json` with `--reveal`.
 
-A detached `jury request create` artifact supports inspection/status/cancellation;
-it cannot resume a later execution. `read`, `inject`, `run`, `exec`, and
-`request execute` each create a fresh request and retain its session key only in
-the running process. Retries need fresh request/approval/receipt paths and fresh
-approval. The wait is bounded to 900 seconds and also by request expiry.
+Use `jury read`, `jury inject`, `jury run`, or `jury exec` for governed access.
+Each creates a fresh request and retains its session key only in the running
+process. `jury request preview` creates a detached artifact for inspection;
+it cannot execute later. The old `request create` and `request execute` spellings
+remain accepted for scripts; the latter also creates a fresh governed read.
+Retries need fresh request/approval/receipt paths and fresh approval. The wait
+is bounded to 900 seconds and also by request expiry.
 
 To deny, the approver adds `--deny` and types `deny` at the confirmation prompt.
 Approval and denial require a terminal; neither accepts a piped confirmation. To cancel a published request, the owner can
@@ -310,9 +312,9 @@ disambiguated by that pair. Each request still
 uses only its selected item policy and its required approvals:
 
 ```sh
-jury witness policy-material --output "$PUBLIC/ExamplePolicyNext.json"
+jury witness policy-material --out "$PUBLIC/ExamplePolicyNext.json"
 jury witness checkpoint \
-  --predecessor "$PUBLIC/ExampleCheckpoint.json" --output "$PUBLIC/ExampleCheckpointNext.json"
+  --predecessor "$PUBLIC/ExampleCheckpoint.json" --out "$PUBLIC/ExampleCheckpointNext.json"
 python3 operator-post.py checkpoint "$WITNESS_URL" "$OPERATOR_CREDENTIAL_FILE" \
   "$CA_FILE" "$PUBLIC/ExamplePolicyNext.json" "$PUBLIC/ExampleCheckpointNext.json" \
   - "$PUBLIC/$ACTOR.next-ack.json"

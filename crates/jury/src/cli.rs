@@ -200,7 +200,7 @@ pub enum Command {
         #[command(subcommand)]
         command: IdentityCommand,
     },
-    /// Initialize a vault using the selected identity.
+    /// Shortcut for `jury vault init`; requires an existing human identity.
     Init(VaultInitArgs),
     /// Inspect or initialize the selected vault.
     Vault {
@@ -217,10 +217,15 @@ pub enum Command {
         #[command(subcommand)]
         command: AccessCommand,
     },
-    /// Create encrypted item compartments.
+    /// Create and list accessible encrypted items.
     Item {
         #[command(subcommand)]
         command: ItemCommand,
+    },
+    /// List, set, or remove fields inside accessible encrypted items.
+    Field {
+        #[command(subcommand)]
+        command: FieldCommand,
     },
     /// Configure direct and witnessed item authority.
     Policy {
@@ -257,7 +262,8 @@ pub enum Command {
         #[command(subcommand)]
         command: WitnessCommand,
     },
-    /// Create, inspect, observe, execute, or cancel witnessed requests.
+    /// Preview requests, inspect their artifacts, or cancel a foreground request.
+    #[command(after_help = REQUEST_WORKFLOW_HELP)]
     Request {
         #[command(subcommand)]
         command: RequestCommand,
@@ -316,6 +322,9 @@ pub use identity_arguments::{
 };
 
 #[derive(Debug, Args, Default)]
+#[command(
+    after_help = "First create a human identity with `jury identity init`, using the same identity and home selection. Then run `jury vault init` (or its shortcut `jury init`)."
+)]
 pub struct VaultInitArgs {}
 
 #[derive(Debug, Subcommand)]
@@ -328,12 +337,12 @@ pub enum VaultCommand {
     Rollover(VaultRolloverArgs),
     /// Re-encrypt every active item into an explicitly selected new suite and lineage.
     MigrateSuite(VaultMigrateSuiteArgs),
-    /// Manage fields inside accessible encrypted items.
+    /// Compatibility spelling for `jury field`.
     Field {
         #[command(subcommand)]
         command: FieldCommand,
     },
-    /// Resolve one field to an explicitly selected private sink.
+    /// Compatibility spelling for `jury read`.
     Read(ReadArgs),
     /// Verify the selected principal's authenticated local activity evidence.
     Audit {
@@ -342,60 +351,8 @@ pub enum VaultCommand {
     },
 }
 
-#[derive(Debug, Subcommand)]
-pub enum FieldCommand {
-    /// List fields only from items accessible to the selected identity.
-    List(FieldListArgs),
-    /// Create or replace one field using protected standard input.
-    Set(FieldSetArgs),
-    /// Remove one field from an accessible item.
-    Remove(FieldRemoveArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct FieldListArgs {
-    /// Optional canonical item name; omission lists all accessible fields.
-    #[arg(value_name = "ITEM")]
-    pub item: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct FieldSetArgs {
-    /// Resolved item whose field is created or replaced.
-    #[arg(value_name = "ITEM")]
-    pub item: String,
-    /// Exact field name to create or replace.
-    #[arg(value_name = "FIELD")]
-    pub field: String,
-    /// Conceal this field in child output (default for new fields; updates preserve the kind).
-    /// Concealed values require at least four bytes.
-    #[arg(long, conflicts_with = "unconcealed")]
-    pub concealed: bool,
-    /// Allow this field's bytes in child output; the stored field remains encrypted.
-    #[arg(long)]
-    pub unconcealed: bool,
-    /// Read the field value from standard input; required for non-terminal use.
-    /// Terminal entry is hidden, with or without this flag. Ctrl-D finishes immediately;
-    /// Enter adds a newline to the value. Ctrl-C cancels without saving.
-    #[arg(long)]
-    pub value_stdin: bool,
-    /// Prepare and authenticate the exact mutation without writing it.
-    #[arg(long)]
-    pub dry_run: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct FieldRemoveArgs {
-    /// Resolved item whose field is removed.
-    #[arg(value_name = "ITEM")]
-    pub item: String,
-    /// Exact field name to remove.
-    #[arg(value_name = "FIELD")]
-    pub field: String,
-    /// Prepare and authenticate the exact mutation without writing it.
-    #[arg(long)]
-    pub dry_run: bool,
-}
+mod field_arguments;
+pub use field_arguments::{FieldCommand, FieldListArgs, FieldRemoveArgs, FieldSetArgs};
 
 #[derive(Debug, Args)]
 pub struct InternalExecArgs {
@@ -471,7 +428,7 @@ pub enum WitnessCommand {
 #[derive(Debug, Args)]
 pub struct WitnessPolicyMaterialArgs {
     /// Create this public JSON file; existing paths are never replaced.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long = "out", alias = "output", value_name = "FILE")]
     pub output: PathBuf,
 }
 
@@ -528,6 +485,8 @@ pub struct TransferImportArgs {
 pub enum ItemCommand {
     /// Create an empty item with explicit initial access.
     Create(ItemCreateArgs),
+    /// List directly accessible items and permissions; witnessed-only items are not disclosed.
+    List,
 }
 
 #[derive(Debug, Args)]

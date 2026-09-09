@@ -93,7 +93,9 @@ cd "$EXAMPLE_ROOT/repository"
 jury identity init
 jury vault init
 jury item create ExampleItem --allow-direct
-jury vault field set ExampleItem ExampleField
+jury field set ExampleItem ExampleField
+jury item list
+jury field list ExampleItem
 jury read --direct ExampleItem ExampleField --out "$EXAMPLE_ROOT/output/value.txt"
 jury vault audit verify
 ```
@@ -133,7 +135,7 @@ The native Linux CLI currently handles:
 - direct item, field, principal, and access operations with explicit unilateral status;
 - witnessed-policy configuration and owner-signed review labels;
 - governed witnessed read, template injection, transparent exec, and brokered run;
-- request creation, complete inspection, offline status, interactive approval/denial, foreground execution, and cancellation;
+- foreground governed access, detached request previews, complete inspection, offline status, interactive approval/denial, and cancellation;
 - privacy cover and local audit verification;
 - direct transparent execution and bounded brokered execution behind `--direct`;
 - signed portable-ciphertext export, inspection, and strict import;
@@ -160,11 +162,56 @@ audit verification, identity public/prove, and other authenticated commands.
 changes, and restored identities. Without those sources, the CLI prompts and
 confirms new passphrases. Keep passphrases out of command arguments and shell history.
 
-At a terminal, `jury vault field set ITEM FIELD` reads hidden input, with or
+At a terminal, `jury field set ITEM FIELD` reads hidden input, with or
 without `--value-stdin`. Ctrl-D finishes immediately without adding a newline;
 Enter adds a newline to the stored value. Backspace erases one byte on the
 current line; Ctrl-U clears that line. Ctrl-C cancels without saving and restores
 terminal settings. For exact binary bytes, pipe input with `--value-stdin`.
+
+### Command conventions
+
+Initialize the selected human identity with `jury identity init`, then create
+its vault with `jury vault init`. When retrying setup, retain the same
+`--identity` or `--identity-file` selection, home flags, and environment
+overrides. Identity creation and vault creation are separate operations.
+
+| Task | Command |
+| --- | --- |
+| Inspect the selected vault | `jury vault status` |
+| Discover directly accessible items | `jury item list` |
+| Create an item with direct access | `jury item create ITEM --allow-direct` |
+| List fields | `jury field list [ITEM]` |
+| Write or remove a field | `jury field set ITEM FIELD`, `jury field remove ITEM FIELD` |
+| Inspect grants or policy | `jury access list ITEM`, `jury policy status ITEM` |
+| Configure witnessed authority | `jury policy require witnessed ITEM …` |
+| Explicitly allow direct authority | `jury policy allow direct ITEM …` |
+| Reseal unchanged item state | `jury privacy cover ITEM` |
+| Read, render, or launch a child | `jury read`, `jury inject`, `jury exec`, `jury run` |
+| Export witness configuration | `jury witness policy-material --out FILE`, `jury witness checkpoint --out FILE` |
+
+`jury item list` reports the same directly accessible catalog as
+`jury access list --me`. Item and field listings omit inaccessible and
+witnessed-only items; an empty listing does not mean the vault is empty.
+
+For governed access, start `read`, `inject`, `exec`, or `run` with its witnessed
+options and keep it running while another terminal approves the file published
+at `--request-out`. `jury request preview` creates an inspection artifact only;
+it cannot be executed later. Use `request inspect` or `request status` to inspect
+an artifact, and `request cancel` to submit cancellation for a foreground request.
+See the [witness walkthrough](docs/witness-operator-walkthrough.md) for the full
+approval and cancellation commands.
+
+Existing scripts remain supported: `jury init` is a shortcut for
+`jury vault init`; `jury vault field` and `jury vault read` retain their behavior. Policy
+and privacy commands still accept `--item ITEM` instead of positional `ITEM`
+(but reject both together). Witness exports still accept `--output` for
+`--out`. `request create` remains an alias for `request preview`, and the
+legacy `request execute` command still starts a fresh governed read. Its
+`--item`/`--field` flags correspond to the positional item/field labels of
+`jury read`; it never resumes an existing request. Existing JSON operation
+labels remain stable, including `request-create` for a preview and
+`access-list-me` for the older access listing; `jury item list` reports
+`item-list`.
 
 ### Templates and child processes
 
@@ -198,7 +245,7 @@ operations. A foreground operation publishes the complete public request,
 retains its fresh protected request-session receiver only in that process,
 waits for the declared approval files, obtains signed responses from the exact
 witness set, and opens the exact revision only after quorum. A detached
-`request create` artifact remains inspectable, approvable, and cancellable, but
+`request preview` artifact remains inspectable, approvable, and cancellable, but
 cannot later execute: Jury deliberately persists neither its session private
 key nor witness contributions. Create a fresh foreground request instead.
 Interactive approval renders the complete authenticated manifest, meaningful
@@ -248,11 +295,11 @@ owned by the recipient. Both `principal add` and `principal replace` require
 the selected descriptor against the candidate descriptor authenticated by the
 proof.
 
-New fields created with `jury vault field set` are concealed by default.
+New fields created with `jury field set` are concealed by default.
 Updating a field preserves its existing classification unless you specify
 `--concealed` or `--unconcealed`. Use `--unconcealed` only when that field's
 value may appear in child output; its stored value remains encrypted. Existing
-fields are not reclassified automatically. Inspect them with `jury vault field list`.
+fields are not reclassified automatically. Inspect them with `jury field list`.
 Concealed values must contain at least four bytes; shorter public values require
 `--unconcealed`.
 
