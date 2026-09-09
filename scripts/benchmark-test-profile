@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Compare the complete locked CLI test suite at two optimization levels."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+COMMAND = ['cargo', 'test', '--locked', '-p', 'jury']
+
+
+def run(arguments, environment, log):
+    started = time.monotonic()
+    with log.open('wb') as output:
+        result = subprocess.run(arguments, cwd=ROOT, env=environment,
+                                stdout=output, stderr=subprocess.STDOUT)
+    seconds = time.monotonic() - started
+    if result.returncode:
+        print(log.read_text(errors='replace'), flush=True)
+        raise RuntimeError(f'{arguments} failed with exit {result.returncode}; see {log}')
+    return seconds
+
+
+def measure(level, output):
+    environment = os.environ.copy()
+    environment.update(CARGO_PROFILE_TEST_OPT_LEVEL=str(level),
+                       CARGO_PROFILE_TEST_DEBUG_ASSERTIONS='true',
+                       CARGO_PROFILE_TEST_OVERFLOW_CHECKS='true')
+    prefix = output / f'opt-{level}'
+    compile_seconds = run([*COMMAND, '--no-run'], environment, prefix.with_suffix('.compile.log'))
+    listing = prefix.with_suffix('.list.log')
+    run([*COMMAND, '--', '--list'], environment, listing)
+    inventory = sorted(line for line in listing.read_text().splitlines() if line.endswith(': test'))
+    if not inventory:
+        raise RuntimeError('test inventory is empty')
+    execution = prefix.with_suffix('.test.log')
+    test_seconds = run(COMMAND, environment, execution)
+    totals = re.findall(r'^test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored; '
+                        r'\d+ measured; (\d+) filtered out;', execution.read_text(), re.MULTILINE)
+    passed, failed, ignored, filtered = map(sum, zip(*(map(int, row) for row in totals)))
+    if failed or filtered or passed + ignored != len(inventory):
+        raise RuntimeError('executed test totals do not match the complete selected inventory')
+    return dict(opt_level=level, debug_assertions=True, overflow_checks=True,
+                compile_seconds=compile_seconds, test_seconds=test_seconds,
+                passed=passed, ignored=ignored, inventory=inventory)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=False)
+    results = []
+    for level in (0, 1):
+        print(f'Running all locked CLI tests at opt-level={level}, assertions and overflow checks on',
+              flush=True)
+        results.append(measure(level, args.output))
+        print(json.dumps({k: v for k, v in results[-1].items() if k != 'inventory'}), flush=True)
+    baseline, optimized = results
+    if baseline['inventory'] != optimized['inventory'] or baseline['ignored'] != optimized['ignored']:
+        raise RuntimeError('profiles selected different tests or ignored different tests')
+    report = dict(schema=1, source_commit=subprocess.check_output(
+        ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        consumer='maintainer selecting the CI test profile before 0.0.2',
+        deletion_condition='profile decision is superseded',
+        denominator='every test selected by cargo test --locked -p jury',
+        countermetrics=['compile time', 'test inventory', 'ignored tests',
+                        'failures', 'debug assertions', 'overflow checks'],
+        scope='sequential runs on this one runner; no cross-machine speedup claim',
+        profiles=results, execution_speedup=baseline['test_seconds'] / optimized['test_seconds'])
+    (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(f'Complete comparable passes; execution speedup {report["execution_speedup"]:.2f}x', flush=True)
+
+
+if __name__ == '__main__':
+    main()

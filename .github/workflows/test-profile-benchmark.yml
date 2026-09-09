@@ -1,0 +1,32 @@
+name: Test profile benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-profile-benchmark-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Compare complete test suites on this runner
+        run: python3 scripts/benchmark-test-profile --output target/test-profile-benchmark
+      - name: Preserve timings, inventories and failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-profile-benchmark-${{ github.sha }}
+          path: target/test-profile-benchmark
+          retention-days: 14
+          if-no-files-found: error
