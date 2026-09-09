@@ -93,6 +93,7 @@ jobs:
                 --comparison-provenance explicit
               ;;
             *)
-              scripts/jig check repo:file-budget
+              # Candidate-ref checkouts have origin/main but no local main.
+              scripts/jig check repo:file-budget --comparison-base origin/main
               ;;
           esac
