@@ -567,8 +567,16 @@ fn publish_approval(
             now_ms: issued_at_ms,
         },
     )?;
-    fs::write(path, serde_json::to_vec(&decision)?)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o644))?;
+    // The foreground command is already polling this path. Publish complete
+    // bytes with their final permissions so it cannot observe a partial JSON
+    // file or the group-writable mode inherited from a permissive umask.
+    let mut staged =
+        tempfile::NamedTempFile::new_in(path.parent().ok_or("approval has no parent")?)?;
+    staged.write_all(&serde_json::to_vec(&decision)?)?;
+    staged
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o644))?;
+    staged.persist_noclobber(path)?;
     Ok(review_text)
 }
 
