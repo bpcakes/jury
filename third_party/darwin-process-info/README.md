@@ -108,8 +108,12 @@ controller survives group signals and reaps every injected member; successful
 cleanup cannot be credited to fixture expiry or fallback cleanup. This verifies
 membership changes between snapshots, not an ability to prevent outside
 processes joining after cleanup has finished.
-CI configuration is not evidence that a runner has passed; M04 stays open until
-its required native Apple Silicon minimum/current-version runs have been observed.
+M04 native acceptance passed on Apple Silicon macOS 15.7.9 and 26.6.2 in
+[CI run 34501541365](https://github.com/bpcakes/jury/actions/runs/34501541365),
+for implementation commit `362b209`. Each current-toolchain job passed ten
+provider tests, 54 process tests and eight running-image tests; the provider's
+Rust 1.90 lane also passed on macOS 15. This is containment acceptance, not
+full macOS CLI integration or release acceptance.
 
 The CLI replacement tests require the platform C compiler, `/bin/cp`, and a
 loader-injectable Cargo test binary. Copying runs in a separate process so

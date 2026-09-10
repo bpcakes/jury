@@ -50,7 +50,7 @@ versioned contracts; HTTP and database adapters do not enter the witness engine.
 `jury-process` owns the child-process boundary used by `jury exec` and `jury run`.
 The active `0.x` contract supports Linux only. A provisional
 Apple Silicon macOS backend remains in source with M04 native containment
-validation active;
+validation complete;
 it is not a supported release surface or a shipped artifact. Native tests
 validate the follow-on work without changing the Linux release contract. Intel
 Mac support is outside the product scope. Targets without an implemented

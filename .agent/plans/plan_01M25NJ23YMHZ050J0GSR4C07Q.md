@@ -22,9 +22,9 @@ Task: `jury-qv4.3.4`, activated by the operator on 2026-09-10.
 - [x] Complete requested local combined-failure and CLI/audit classification
   checks, then refresh workspace validation for those additions.
 - [x] Observe current macOS 26.6.2 Apple Silicon tests.
-- [ ] Observe minimum-version macOS 15 Apple Silicon tests.
+- [x] Observe minimum-version macOS 15 Apple Silicon tests.
 - [x] Observe Linux regression execution.
-- [ ] Record final evidence, close the task and finish this plan only when
+- [x] Record final evidence, close the task and finish this plan only when
   those acceptance requirements pass.
 
 ## Surprises & Discoveries
@@ -168,6 +168,29 @@ evidence. Intel acceptance was subsequently removed from scope by the operator.
   uncommitted. CI publication remains an operator question.
 
 ## Outcomes & Retrospective
+
+M04 acceptance is complete. Implementation commit
+`362b209a01a933a470893161b0d1c381aec13ee4` passed all 18 executable PR checks;
+one optional external check was skipped. PR #1 remains a draft, unmerged:
+https://github.com/bpcakes/jury/pull/1
+The native Darwin run is
+https://github.com/bpcakes/jury/actions/runs/34501541365
+Its logs establish native arm64 macOS 15.7.9 (24G830) and 26.6.2 (25G83),
+with ten provider, 54 process, eight running-image and 76 CLI unit tests
+passing on each current-toolchain lane. The running-image parent intentionally
+ignores one subprocess helper entrypoint. Rust 1.90 provider tests and Clippy
+also passed on macOS 15.7.9. The PR test-merge commit
+`11580e179dcd5718d93dac40ca7ad38d38ebed2e` has tree
+`18d3174d1e20ed3da09b56194d895d268a162738`, identical to the implementation
+commit's tree. Logs are retained at `/tmp/jury-m04-ci-macos15-current.log`,
+`/tmp/jury-m04-ci-macos26-current.log` and
+`/tmp/jury-m04-ci-macos15-msrv.log`. Native Linux evidence follows below.
+These observed results supersede the earlier unavailable-host/CI blockers
+recorded in this recovery history. Apple Silicon containment acceptance is
+complete; full native CLI launch/delivery and release acceptance remain M05-M10.
+The final closure work check passed all configured targets under receipt
+`receipt_01M262XA2ETN42CGFTZKV0Q4E1`; gates were fresh and `work finish`
+closed this plan with outcome `success`. The task is closed as Completed.
 
 Native Linux verification passed on 2026-09-10 using the operator-provided
 host in an isolated temporary source directory. The 811-file working-source

@@ -3,7 +3,7 @@
 Own Jury's neutral child-process containment, bounded capture, and
 streaming-redaction boundary. Linux is the active `0.x` platform. The macOS
 backend is provisional and not release-supported; M04 native containment
-validation is active. This crate
+validation passed on supported Apple Silicon macOS versions. This crate
 also supplies running-image identity snapshots on Linux and macOS. It
 contains no vault-domain policy.
 

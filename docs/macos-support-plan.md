@@ -34,7 +34,8 @@ observations in Git, not a second permanent certification ledger.
   provider ownership, failure tests, and native-run contract on 2026-09-05.
 - [x] Implement and close M01 strict memory and M02 filesystem boundaries.
 - [x] M03 explicitly activated and implemented on 2026-09-08: native non-child CLI and owning validation.
-- [ ] Implement remaining M04-M10 work under their separate activation/release scope.
+- [x] M04 containment implemented and validated on native Apple Silicon macOS 15/26 and Linux on 2026-09-10.
+- [ ] Implement remaining M05-M10 work under their separate activation/release scope.
 - [ ] Pass native minimum-version and current-version acceptance.
 - [ ] Prepare installable artifacts and complete the release binding.
 
@@ -823,7 +824,7 @@ identity as a recovery shortcut.
 
 ### M04 / J12M — Validate and finish native process containment
 
-**Activation update (2026-09-10).** M04 is in progress under `jury-qv4.3.4`.
+**Completion update (2026-09-10).** M04 is complete under `jury-qv4.3.4`.
 The maintained provider is now `third_party/darwin-process-info`: its fixed
 two-PID query replaces `libproc`'s count-then-allocate snapshot. Only a complete
 exact singleton can prove sole membership; invalid responses fail and saturated
@@ -834,8 +835,11 @@ cleanup also fails. Native handshake, churn and consumed-status regressions
 accompany these changes. The controlled native churn test adds acknowledged
 members between cleanup proofs from outside the signalled group, verifies
 saturated snapshots reset the proof streak, and requires SIGKILL status for
-each added member. Local arm64 tests pass; the Apple Silicon
-supported-version matrix remains acceptance work. Public support status remains
+each added member. Native Apple Silicon macOS 15.7.9 and 26.6.2 passed the
+provider, containment and selected CLI suites in
+[CI run 34501541365](https://github.com/bpcakes/jury/actions/runs/34501541365)
+for implementation commit `362b209`; native Linux workspace tests and Clippy
+also passed. Public support status remains
 provisional. Recovery and exact evidence live in
 `.agent/plans/plan_01M25NJ23YMHZ050J0GSR4C07Q.md`.
 
