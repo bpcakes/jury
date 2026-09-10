@@ -105,18 +105,7 @@ pub(super) fn vault_init(
     let protected_vault = protect(&vault_bytes, protection)?;
     let prepared_shared = prepare_new_vault(&mut home, &protected_vault)?;
 
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| {
-        CliError::new(
-            CliErrorKind::Filesystem,
-            "state-home-unavailable",
-            "the separate local-state home is unavailable",
-        )
-    })?;
+    let state_root = state_root(environment)?;
     let repositories = repository_refs(&home);
     let exclusions = detached_paths(&home);
     let state = VaultStateDirectory::open_or_create(
@@ -293,12 +282,7 @@ pub(super) fn vault_audit_verify(
     }
     .map_err(|_| local_state_error())?;
 
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_root = state_root(environment)?;
     validate_detached_separation(&state_root, &home)?;
     let state = VaultStateDirectory::open_existing(
         &state_root,

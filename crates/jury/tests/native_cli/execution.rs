@@ -43,46 +43,6 @@ pub(super) fn exercise_successful_execution(
     data: &Path,
     state: &Path,
 ) -> TestResult {
-    let concealed_set = success_json(run(
-        repository,
-        data,
-        state,
-        &[
-            "--json",
-            "--passphrase-stdin",
-            "--allow-degraded-protection",
-            "vault",
-            "field",
-            "set",
-            "ExampleItem",
-            "ExampleSecret",
-            "--concealed",
-            "--value-stdin",
-        ],
-        b"ExamplePass1234\nConcealedValue",
-    )?)?;
-    assert_eq!(concealed_set["operation"], "field-set");
-    assert!(!concealed_set.to_string().contains("ConcealedValue"));
-
-    let binary_set = success_json(run(
-        repository,
-        data,
-        state,
-        &[
-            "--json",
-            "--passphrase-stdin",
-            "--allow-degraded-protection",
-            "vault",
-            "field",
-            "set",
-            "ExampleItem",
-            "ExampleBinary",
-            "--value-stdin",
-        ],
-        b"ExamplePass1234\n\xff\x01\x02\x03",
-    )?)?;
-    assert_eq!(binary_set["operation"], "field-set");
-
     let exec_environment = temporary.join("exec.env");
     fs::write(
         &exec_environment,

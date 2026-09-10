@@ -2,6 +2,8 @@
 //!
 //! The macOS backend is provisional and retained only for deferred post-`0.x`
 //! work; it is not a supported release surface or native validation claim.
+//! Running-image identity snapshots are available on Linux and macOS; they
+//! do not imply native child-containment or launch support.
 //!
 //! Unsupported platforms fail before spawn. A successful return proves that
 //! the direct child was reaped and the complete process group was repeatedly
@@ -17,6 +19,8 @@
 #![forbid(unsafe_code)]
 
 mod process;
+mod running_image;
+pub use running_image::RunningImage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod unix;
 

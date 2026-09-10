@@ -254,7 +254,7 @@ pub(super) fn preflight_endpoints(
     let mut endpoints = Vec::new();
     for specification in &arguments.destination_witness {
         let endpoint =
-            WitnessEndpointClient::parse(specification, arguments.allow_insecure_loopback)?;
+            WitnessEndpointClient::load(specification, arguments.allow_insecure_loopback)?;
         if !required.contains(&endpoint.witness_id) || !observed.insert(endpoint.witness_id) {
             return Err(invalid_registration());
         }

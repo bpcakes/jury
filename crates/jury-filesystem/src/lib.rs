@@ -8,6 +8,7 @@ mod capability;
 mod identity_selection;
 mod local_state;
 mod lock;
+mod native_paths;
 mod path_separation;
 mod platform;
 mod private_input;
@@ -24,10 +25,13 @@ pub use identity_selection::{
 pub use local_state::{
     LockedPrincipalState, LockedVaultState, MAX_AUDIT_BYTES, MAX_CHECKPOINT_BYTES,
     MAX_POLICY_CATALOG_BYTES, MAX_RECEIPTS_BYTES, PrincipalStateDirectory, PrincipalStateFile,
-    StatePathError, VaultStateDirectory, VaultStateFile, resolve_linux_state_root,
-    resolve_state_root_from_environment,
+    VaultStateDirectory, VaultStateFile,
 };
 pub use lock::{ExclusiveStateLock, LockError};
+pub use native_paths::{
+    StatePathError, resolve_linux_state_root, resolve_platform_state_root,
+    resolve_state_root_from_environment,
+};
 pub use path_separation::validate_path_separation;
 pub use private_input::{read_private_file, read_public_file};
 pub use private_output::{

@@ -1,0 +1,13 @@
+[package]
+name = "libproc-region"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+description = "Maintained safe Darwin region-vnode query provider for Jury"
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+bindgen = { version = "=0.72.1", default-features = false, features = ["runtime"] }
+
+[workspace]

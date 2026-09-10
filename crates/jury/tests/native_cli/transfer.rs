@@ -201,7 +201,9 @@ fn assert_export_destination_is_rejected_without_mutation(
             destination.to_str().ok_or("non-UTF-8 transfer path")?,
             "--overwrite",
         ],
-        b"ExamplePass1234\n",
+        // Containment must reject before passphrase capture. Supplying input
+        // races the intentional early exit and can spuriously break the pipe.
+        b"",
     )?;
     assert!(!rejected.status.success());
     assert!(rejected.stdout.is_empty());

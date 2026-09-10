@@ -33,8 +33,10 @@ mod tests {
     #[test]
     fn witness_store_commits_and_marks_one_pending_candidate() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("witness.sqlite3");
+        let path = root.join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([1; 32])?;
         SqliteWitnessStore::initialize(&path, witness_id)?;
         let mut store = SqliteWitnessStore::open(&path, witness_id)?;
@@ -67,10 +69,12 @@ mod tests {
     #[test]
     fn backup_and_restore_are_validated_atomic_and_no_clobber() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let source = directory.path().join("source.sqlite3");
-        let backup = directory.path().join("backup.sqlite3");
-        let restored = directory.path().join("restored.sqlite3");
+        let source = root.join("source.sqlite3");
+        let backup = root.join("backup.sqlite3");
+        let restored = root.join("restored.sqlite3");
         let witness_id = PrincipalId::from_bytes([5; 32])?;
         SqliteWitnessStore::initialize(&source, witness_id)?;
 
@@ -103,8 +107,10 @@ mod tests {
     #[test]
     fn offline_audit_is_value_free_and_never_claims_external_freshness() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("witness.sqlite3");
+        let path = root.join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([6; 32])?;
         SqliteWitnessStore::initialize(&path, witness_id)?;
         drop(SqliteWitnessStore::open(&path, witness_id)?);
@@ -149,8 +155,10 @@ mod tests {
     #[test]
     fn initialization_and_open_are_distinct_lifecycle_operations() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("witness.sqlite3");
+        let path = root.join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([9; 32])?;
 
         assert!(SqliteWitnessStore::open(&path, witness_id).is_err());
@@ -195,8 +203,10 @@ mod tests {
     #[test]
     fn persisted_state_loader_rejects_malformed_and_mismatched_rows() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("witness.sqlite3");
+        let path = root.join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([11; 32])?;
 
         for state_json in [
@@ -226,8 +236,10 @@ mod tests {
     #[test]
     fn database_lock_wait_cannot_outlive_the_operation_deadline() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("witness.sqlite3");
+        let path = root.join("witness.sqlite3");
         let witness_id = PrincipalId::from_bytes([10; 32])?;
         SqliteWitnessStore::initialize(&path, witness_id)?;
         let mut store = SqliteWitnessStore::open(&path, witness_id)?;

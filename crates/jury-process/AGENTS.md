@@ -3,6 +3,7 @@
 Own Jury's neutral child-process containment, bounded capture, and
 streaming-redaction boundary. Linux is the active `0.x` platform. The macOS
 backend is provisional, deferred, and not release-supported. This crate
+also supplies running-image identity snapshots on Linux and macOS. It
 contains no vault-domain policy.
 
 ## Key entrypoints
@@ -11,12 +12,14 @@ contains no vault-domain policy.
 - `src/process.rs`: spawn, observe, signal, timeout, cleanup, and capture flow
 - `src/process/output.rs`: bounded nonblocking pipe drains and redaction
 - `src/unix.rs`: safe-provider Unix process-group and membership operations
+- `src/running_image.rs`: kernel-backed current executable identity evidence
 
 ## Edit here for X
 
 - Add process lifecycle behavior in `src/process.rs`.
 - Add output bounds or redaction behavior in `src/process/output.rs`.
 - Keep platform-specific membership proofs in `src/unix.rs`.
+- Keep running-image evidence separate from pathname discovery and launch authority.
 
 ## Invariants
 

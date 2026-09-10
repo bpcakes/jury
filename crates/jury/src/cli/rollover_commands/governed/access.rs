@@ -115,7 +115,7 @@ impl<'a> RolloverAccess<'a> {
             let endpoints = entry
                 .witnesses
                 .iter()
-                .map(|spec| WitnessEndpointClient::parse(spec, entry.allow_insecure_loopback))
+                .map(|spec| WitnessEndpointClient::load(spec, entry.allow_insecure_loopback))
                 .collect::<Result<Vec<_>, _>>()?;
             entries.insert(
                 key,

@@ -292,12 +292,7 @@ impl RolloverTargets {
                 path.parent().ok_or_else(rollover_target_error)?
             }
         };
-        let state_root = resolve_linux_state_root(
-            environment.jury_state_home.as_deref(),
-            environment.xdg_state_home.as_deref(),
-            environment.user_home.as_deref(),
-        )
-        .map_err(|_| filesystem_error())?;
+        let state_root = state_root(environment)?;
         let backup_parent = arguments
             .backup_out
             .parent()

@@ -75,7 +75,7 @@ fn help_preserves_active_scope() -> Result<(), Box<dyn std::error::Error>> {
         Err(error) => error,
     };
     let help = error.to_string();
-    assert!(help.contains("Native Linux support only"));
+    assert!(help.contains("macOS non-child commands (exec/run unavailable)"));
     assert!(!help.contains("PRE-ALPHA"));
     assert!(!help.contains("managed service"));
     assert!(!help.contains("semantic merge"));

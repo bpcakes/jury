@@ -6,6 +6,7 @@ cross-worktree locks, and private atomic publication.
 ## Key entrypoints
 
 - `src/repository.rs`: hardened repository discovery and `.jury` access
+- `src/native_paths.rs`: pure platform state-root selection and the retained explicit Linux resolver
 - `src/state_root.rs`: owner-only state-root capability
 - `src/private_output.rs`: identity-bound private atomic publication
 - `src/platform.rs`: descriptor ACL policy, APFS publication boundary, and native full-sync

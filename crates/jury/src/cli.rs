@@ -1,4 +1,4 @@
-//! Native Linux command-line boundary.
+//! Native command-line boundary.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -65,7 +65,7 @@ use jury_filesystem::{
     PreparedPrivateFile, PreparedPublicFile, PrincipalStateFile, PrivateFileCleanupOutcome,
     PublicFilePrecondition, PublicationOutcome, PublicationPolicy, RepositoryLocation,
     VaultStateDirectory, VaultStateFile, list_named_identities, preview_public_file,
-    read_private_file, read_public_file, resolve_linux_state_root, validate_path_separation,
+    read_private_file, read_public_file, validate_path_separation,
 };
 use jury_protected::{OsRandom, ProtectedMemory, ProtectionPolicy, RandomSource};
 use jury_protocol::backup_v1::{BackupEnvelopeV1, MAX_BACKUP_ENVELOPE_BYTES};
@@ -97,11 +97,11 @@ pub use self::dispatch::execute;
 pub use self::output::{CliError, CliErrorKind, CommandOutput, FieldSummary, IdentitySummary};
 pub use self::rollover_arguments::*;
 use self::{
-    access_commands::*, backup_commands::*, context::*, environment::*, execution_commands::*,
-    identity_commands::*, item_commands::*, mutation_commands::*, policy_commands::*,
-    principal_commands::*, receipt_commands::*, request_commands::*, support::*,
-    template_commands::*, transfer_commands::*, transfer_state::*, trust_confirmation::*,
-    vault_commands::*, witness_commands::*, witness_transport::*,
+    access_commands::*, backup_commands::*, context::*, environment::*, identity_commands::*,
+    item_commands::*, mutation_commands::*, policy_commands::*, principal_commands::*,
+    receipt_commands::*, request_commands::*, support::*, template_commands::*,
+    transfer_commands::*, transfer_state::*, trust_confirmation::*, vault_commands::*,
+    witness_commands::*, witness_transport::*,
 };
 
 mod access_commands;
@@ -111,7 +111,10 @@ mod backup_commands;
 mod context;
 mod dispatch;
 mod environment;
+#[cfg(target_os = "linux")]
 mod execution_commands;
+#[cfg(target_os = "linux")]
+use execution_commands::*;
 mod field_input;
 mod field_reference;
 mod identity_commands;
@@ -125,6 +128,8 @@ mod receipt_commands;
 mod request_commands;
 mod rollover_arguments;
 mod rollover_commands;
+mod roots;
+use roots::{identity_root, selected_home, state_root};
 mod support;
 mod template_commands;
 mod transfer_commands;
@@ -143,7 +148,7 @@ include!("cli/witness_args.rs");
     version,
     about = jury_core::PRODUCT_TAGLINE,
     long_about = jury_core::PRODUCT_TAGLINE,
-    after_help = "Native Linux support only."
+    after_help = "Linux CLI; macOS non-child commands (exec/run unavailable)."
 )]
 pub struct Cli {
     /// Emit JSON results and errors; explicit help/version remain text.
@@ -159,7 +164,7 @@ pub struct Cli {
     )]
     pub home: Option<PathBuf>,
 
-    /// Select the Linux global vault home.
+    /// Select the platform global vault home.
     #[arg(long = "global", global = true)]
     pub global_home: bool,
 

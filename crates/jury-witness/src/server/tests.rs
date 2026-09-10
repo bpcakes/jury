@@ -52,8 +52,10 @@ mod tests {
     #[tokio::test]
     async fn anchor_work_runs_on_the_deadline_aware_owner_thread() -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("anchor.sqlite3");
+        let path = root.join("anchor.sqlite3");
         let witness_id = PrincipalId::from_bytes([11; 32])?;
         SqliteAnchorRepository::initialize(&path)?;
         let repository = SqliteAnchorRepository::open(&path, witness_id)?;

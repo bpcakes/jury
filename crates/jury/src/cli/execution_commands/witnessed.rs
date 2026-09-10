@@ -27,7 +27,7 @@ fn execute_witnessed_prepared(
         .witnesses
         .iter()
         .map(|specification| {
-            WitnessEndpointClient::parse(specification, files.allow_insecure_loopback)
+            WitnessEndpointClient::load(specification, files.allow_insecure_loopback)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let references = execution_references(&prepared);

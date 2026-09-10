@@ -202,7 +202,7 @@ pub(super) fn request_execute(
         .witnesses
         .iter()
         .map(|specification| {
-            WitnessEndpointClient::parse(specification, arguments.allow_insecure_loopback)
+            WitnessEndpointClient::load(specification, arguments.allow_insecure_loopback)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let action_output = arguments

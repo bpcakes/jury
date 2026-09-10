@@ -26,12 +26,7 @@ pub(super) fn backup_create(
         IdentitySelector::Named(_) => identity_home.as_path(),
         IdentitySelector::ExplicitFile(path) => path.parent().ok_or_else(invalid_restore_target)?,
     };
-    let state_home = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_home = state_root(environment)?;
     let additional_identity_parents = [
         arguments.approver_identity_file.as_deref(),
         arguments.witness_identity_file.as_deref(),
@@ -786,6 +781,6 @@ fn backup_capacity_error(class: BackupCapacityClass) -> CliError {
     CliError::new(CliErrorKind::InvalidArguments, code, message)
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 #[path = "backup_commands/tests.rs"]
 mod tests;

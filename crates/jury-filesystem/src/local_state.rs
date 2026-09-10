@@ -1,6 +1,5 @@
-use std::ffi::OsStr;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jury_protected::ProtectedMemory;
 
@@ -13,80 +12,6 @@ pub const MAX_CHECKPOINT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_AUDIT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_RECEIPTS_BYTES: usize = 256 * 1024;
 pub const MAX_POLICY_CATALOG_BYTES: usize = 4 * 1024 * 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StatePathError {
-    Unsupported,
-    MissingHome,
-    NotAbsolute,
-    Nul,
-}
-
-impl fmt::Display for StatePathError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Unsupported => "the platform state root is unsupported",
-            Self::MissingHome => "the platform state root has no home directory",
-            Self::NotAbsolute => "the platform state root is not absolute",
-            Self::Nul => "the platform state root contains a NUL byte",
-        })
-    }
-}
-
-impl std::error::Error for StatePathError {}
-
-/// Resolves the Linux state-root contract from caller-supplied environment
-/// values. This function does not read process-global environment state.
-pub fn resolve_linux_state_root(
-    jury_state_home: Option<&OsStr>,
-    xdg_state_home: Option<&OsStr>,
-    user_home: Option<&OsStr>,
-) -> Result<PathBuf, StatePathError> {
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (jury_state_home, xdg_state_home, user_home);
-        Err(StatePathError::Unsupported)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let path = if let Some(path) = jury_state_home.filter(|value| !value.is_empty()) {
-            PathBuf::from(path)
-        } else if let Some(path) = xdg_state_home.filter(|value| !value.is_empty()) {
-            PathBuf::from(path).join("jury/vaults")
-        } else {
-            PathBuf::from(user_home.ok_or(StatePathError::MissingHome)?)
-                .join(".local/state/jury/vaults")
-        };
-        validate_resolved_path(path)
-    }
-}
-
-/// Reads the state-root inputs once and applies [`resolve_linux_state_root`].
-pub fn resolve_state_root_from_environment() -> Result<PathBuf, StatePathError> {
-    let jury = std::env::var_os("JURY_STATE_HOME");
-    let xdg = std::env::var_os("XDG_STATE_HOME");
-    let home = std::env::var_os("HOME");
-    resolve_linux_state_root(jury.as_deref(), xdg.as_deref(), home.as_deref())
-}
-
-#[cfg(target_os = "linux")]
-fn validate_resolved_path(path: PathBuf) -> Result<PathBuf, StatePathError> {
-    if !path.is_absolute() {
-        return Err(StatePathError::NotAbsolute);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-        if path.as_os_str().as_bytes().contains(&0) {
-            return Err(StatePathError::Nul);
-        }
-    }
-    #[cfg(not(unix))]
-    if path.to_string_lossy().contains('\0') {
-        return Err(StatePathError::Nul);
-    }
-    Ok(path)
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrincipalStateFile {

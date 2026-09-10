@@ -1543,6 +1543,7 @@ version = "0.0.1"
 dependencies = [
  "jury-protected",
  "libproc",
+ "libproc-region",
  "rustix",
  "tempfile",
  "wait-timeout",
@@ -1655,6 +1656,13 @@ dependencies = [
  "bindgen",
  "errno",
  "libc",
+]
+
+[[package]]
+name = "libproc-region"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
 ]
 
 [[package]]

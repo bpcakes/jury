@@ -253,6 +253,13 @@ impl OwnedProcessOutputDrains {
                 }
             }
         }
+        // The deadline bounds waiting, not inspection of already-ready bytes.
+        // Scheduling may consume the remaining budget before EOF is polled.
+        // Make one final bounded nonblocking poll, without another sleep or
+        // flushing redaction overlap unless the pipe actually reports EOF.
+        if !self.is_terminal() {
+            self.poll(observer)?;
+        }
         // Dropping an open reader closes the local pipe promptly. Dropping its
         // redactor also zeroizes any incomplete overlap.
         let stdout = self.stdout.map(OutputDrain::finish);

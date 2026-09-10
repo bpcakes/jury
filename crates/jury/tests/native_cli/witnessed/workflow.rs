@@ -1,48 +1,3 @@
-fn assert_protected_value_not_persisted(paths: [&Path; 4]) -> TestResult {
-    for path in paths {
-        assert_tree_omits(path, b"ExampleFieldValue")?;
-    }
-    Ok(())
-}
-
-fn append_witness_arguments(
-    arguments: &mut Vec<String>,
-    checkpoint: &Path,
-    request: &Path,
-    approval: &Path,
-    receipt: &Path,
-    endpoints: &[String],
-) -> TestResult {
-    arguments.extend([
-        "--checkpoint".to_owned(),
-        checkpoint
-            .to_str()
-            .ok_or("non-UTF-8 checkpoint")?
-            .to_owned(),
-        "--request-out".to_owned(),
-        request.to_str().ok_or("non-UTF-8 request")?.to_owned(),
-        "--approval".to_owned(),
-        approval.to_str().ok_or("non-UTF-8 approval")?.to_owned(),
-        "--receipt".to_owned(),
-        receipt.to_str().ok_or("non-UTF-8 receipt")?.to_owned(),
-        "--allow-insecure-loopback".to_owned(),
-        "--wait-seconds".to_owned(),
-        "30".to_owned(),
-    ]);
-    for endpoint in endpoints {
-        arguments.extend(["--witness".to_owned(), endpoint.clone()]);
-    }
-    Ok(())
-}
-
-struct WorkflowContext<'a> {
-    approval: ApprovalRunContext<'a>,
-    artifacts: &'a Path,
-    private_output: &'a Path,
-    checkpoint: &'a Path,
-    endpoints: &'a [String],
-}
-
 fn assert_existing_receipt_prevents_authorization(context: &WorkflowContext<'_>) -> TestResult {
     let denied_marker = context.artifacts.join("existing-receipt-child-marker");
     let request = context.artifacts.join("existing-receipt.request.json");
@@ -144,97 +99,6 @@ fn assert_pending_approval_prevents_spawn(context: &WorkflowContext<'_>) -> Test
     assert!(!denied_marker.exists());
     assert!(!receipt.exists());
     Ok(())
-}
-
-fn exercise_witnessed_read(context: &WorkflowContext<'_>) -> TestResult<PathBuf> {
-    let request = context.artifacts.join("read.request.json");
-    let approval = context.artifacts.join("read.approval.json");
-    let receipt = context.artifacts.join("read.receipt.json");
-    let output = context.private_output.join("read.output");
-    let mut arguments = vec![
-        "--json".to_owned(),
-        "--passphrase-stdin".to_owned(),
-        "--allow-degraded-protection".to_owned(),
-        "read".to_owned(),
-        "ExampleWitnessedItem".to_owned(),
-        "ExampleWitnessedField".to_owned(),
-        "--out".to_owned(),
-        output.to_str().ok_or("non-UTF-8 read output")?.to_owned(),
-    ];
-    append_witness_arguments(
-        &mut arguments,
-        context.checkpoint,
-        &request,
-        &approval,
-        &receipt,
-        context.endpoints,
-    )?;
-    let (result, review) =
-        run_with_async_approval(&context.approval, &arguments, &request, &approval)?;
-    if !result.status.success() {
-        return Err(format!(
-            "witnessed read failed after request={}, approval={}, receipt={}, output={}: {}",
-            request.exists(),
-            approval.exists(),
-            receipt.exists(),
-            output.exists(),
-            String::from_utf8_lossy(&result.stderr),
-        )
-        .into());
-    }
-    let result = success_json(result)?;
-    assert_eq!(result["authority"], "witnessed-approved");
-    assert_eq!(fs::read(&output)?, b"ExampleFieldValue");
-    assert!(review.contains("ExampleWitnessedItem"));
-    assert!(review.contains("ExampleWitnessedField"));
-    assert!(review.contains(output.to_str().ok_or("non-UTF-8 output")?));
-    Ok(receipt)
-}
-
-fn exercise_witnessed_injection(context: &WorkflowContext<'_>) -> TestResult<PathBuf> {
-    let template = context.artifacts.join("ExampleTemplate.txt");
-    fs::write(
-        &template,
-        b"prefix={{ExampleWitnessedItem.ExampleWitnessedField}}",
-    )?;
-    fs::set_permissions(&template, fs::Permissions::from_mode(0o644))?;
-    let request = context.artifacts.join("inject.request.json");
-    let approval = context.artifacts.join("inject.approval.json");
-    let receipt = context.artifacts.join("inject.receipt.json");
-    let output = context.private_output.join("inject.output");
-    let mut arguments = vec![
-        "--json".to_owned(),
-        "--passphrase-stdin".to_owned(),
-        "--allow-degraded-protection".to_owned(),
-        "inject".to_owned(),
-        "--template".to_owned(),
-        template.to_str().ok_or("non-UTF-8 template")?.to_owned(),
-        "--out".to_owned(),
-        output.to_str().ok_or("non-UTF-8 inject output")?.to_owned(),
-    ];
-    append_witness_arguments(
-        &mut arguments,
-        context.checkpoint,
-        &request,
-        &approval,
-        &receipt,
-        context.endpoints,
-    )?;
-    let (result, review) =
-        run_with_async_approval(&context.approval, &arguments, &request, &approval)?;
-    assert_eq!(success_json(result)?["authority"], "witnessed-approved");
-    assert_eq!(fs::read(&output)?, b"prefix=ExampleFieldValue");
-    assert!(
-        review.contains(
-            context
-                .approval
-                .repository
-                .to_str()
-                .ok_or("non-UTF-8 repository")?
-        )
-    );
-    assert!(review.contains(output.to_str().ok_or("non-UTF-8 output")?));
-    Ok(receipt)
 }
 
 fn exercise_witnessed_run(context: &WorkflowContext<'_>) -> TestResult<PathBuf> {
@@ -383,163 +247,33 @@ fn witnessed_rollover_refuses_checkpoint_advance_during_preparation() -> TestRes
 }
 
 fn exercise_witnessed_workflow(migration: bool, freshness_only: bool) -> TestResult {
-    let temporary = tempfile::tempdir()?;
-    let repository = temporary.path().join("repository");
-    let data = temporary.path().join("data");
-    let state = temporary.path().join("state");
-    let artifacts = temporary.path().join("artifacts");
-    let private_output = temporary.path().join("private-output");
-    fs::create_dir_all(repository.join(".git"))?;
-    fs::write(repository.join(".git/HEAD"), b"ref: refs/heads/main\n")?;
-    fs::create_dir(&artifacts)?;
-    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700))?;
-    fs::create_dir(&private_output)?;
-    fs::set_permissions(&private_output, fs::Permissions::from_mode(0o700))?;
-
-    let actors = initialize_policy_actors(&repository, &data, &state, &artifacts)?;
-    let policy_output = success_json(run(
-        &repository,
-        &data,
-        &state,
-        &[
-            "--json",
-            "--passphrase-stdin",
-            "--allow-degraded-protection",
-            "policy",
-            "require",
-            "witnessed",
-            "--item",
-            "ExampleWitnessedItem",
-            "--approver",
-            &actors.approver_id,
-            "--witness",
-            &actors.witness_one_id,
-            "--witness",
-            &actors.witness_two_id,
-            "--approvals",
-            "1",
-            "--witness-quorum",
-            "2",
-            "--operation",
-            "read-stdout",
-            "--operation",
-            "write-private-file",
-            "--operation",
-            "template-injection",
-            "--operation",
-            "child-environment",
-            "--operation",
-            "recovery",
-            "--review-label",
-            "ExampleWitnessedItem",
-            "--field-review-label",
-            "ExampleField=ExampleWitnessedField",
-            "--request-lifetime",
-            "300",
-        ],
-        format!("{OWNER_PASSPHRASE}\n").as_bytes(),
-    )?)?;
-    assert_eq!(policy_output["operation"], "policy-require-witnessed");
-    assert_eq!(policy_output["vault_changed"], true);
-
-    let material_path = artifacts.join("ExamplePolicyMaterial.json");
-    success_json(run(
-        &repository,
-        &data,
-        &state,
-        &[
-            "--json",
-            "witness",
-            "policy-material",
-            "--output",
-            material_path.to_str().ok_or("non-UTF-8 material path")?,
-        ],
-        b"",
-    )?)?;
-    let material_bytes = fs::read(&material_path)?;
-    let policy_material = PolicyMaterialBytes::new(material_bytes)?;
-    let policy = ReceiptPolicyMaterialV1::decode(&policy_material)?.replay()?;
-    let checkpoint_path = artifacts.join("ExampleCheckpoint.json");
-    success_json(run(
-        &repository,
-        &data,
-        &state,
-        &[
-            "--json",
-            "--passphrase-stdin",
-            "--allow-degraded-protection",
-            "witness",
-            "checkpoint",
-            "--output",
-            checkpoint_path.to_str().ok_or("non-UTF-8 checkpoint")?,
-        ],
-        format!("{OWNER_PASSPHRASE}\n").as_bytes(),
-    )?)?;
-    let checkpoint: VaultPolicyCheckpointV1 = serde_json::from_slice(&fs::read(&checkpoint_path)?)?;
-
-    let witness_one = unlock_witness(&data, "witness-one", WITNESS_ONE_PASSPHRASE)?;
-    let witness_two = unlock_witness(&data, "witness-two", WITNESS_TWO_PASSPHRASE)?;
-    let approver = unlock_approver(&data, "approver", APPROVER_PASSPHRASE)?;
-    let endpoint_one = spawn_engine_endpoint(
-        witness_one,
-        policy.clone(),
-        checkpoint.clone(),
-        policy_material.clone(),
-    )?;
-    let endpoint_two = spawn_engine_endpoint(
-        witness_two,
-        policy.clone(),
-        checkpoint.clone(),
-        policy_material,
-    )?;
-    let credential = artifacts.join("client.token");
-    fs::write(&credential, CLIENT_TOKEN)?;
-    fs::set_permissions(&credential, fs::Permissions::from_mode(0o600))?;
-    assert_eq!(
-        jury_filesystem::read_private_file(&credential, 258)?,
-        CLIENT_TOKEN.as_bytes()
-    );
-    let endpoints = [
-        endpoint_one.specification(&credential)?,
-        endpoint_two.specification(&credential)?,
-    ];
-    let approval_context = ApprovalRunContext {
-        repository: &repository,
-        data: &data,
-        state: &state,
-        policy: &policy,
-        approver: &approver,
-    };
-    let workflow = WorkflowContext {
-        approval: approval_context,
-        artifacts: &artifacts,
-        private_output: &private_output,
-        checkpoint: &checkpoint_path,
-        endpoints: &endpoints,
-    };
-    if !migration && !freshness_only {
-    assert_existing_receipt_prevents_authorization(&workflow)?;
-    assert_pending_approval_prevents_spawn(&workflow)?;
-    let read_receipt = exercise_witnessed_read(&workflow)?;
-    let inject_receipt = exercise_witnessed_injection(&workflow)?;
-    let run_receipt = exercise_witnessed_run(&workflow)?;
-    let exec_receipt = exercise_witnessed_exec(&workflow)?;
-    exercise_too_late_cancellation(&workflow)?;
-    verify_receipts(
-        &repository,
-        &data,
-        &state,
-        &[&read_receipt, &inject_receipt, &run_receipt, &exec_receipt],
-    )?;
-    assert_protected_value_not_persisted([&repository, &data, &state, &artifacts])?;
-
-    }
-    if freshness_only {
-        refuse_checkpoint_advanced_during_preparation(&workflow, &actors, [&endpoint_one, &endpoint_two], migration)?;
-    } else {
-        exercise_witnessed_rollover(&workflow, &actors, [&endpoint_one, &endpoint_two], migration)?;
-    }
-    endpoint_one.finish()?;
-    endpoint_two.finish()?;
-    Ok(())
+    with_witnessed_workflow(|workflow, actors, endpoints| {
+        if !migration && !freshness_only {
+            assert_existing_receipt_prevents_authorization(workflow)?;
+            assert_pending_approval_prevents_spawn(workflow)?;
+            let read_receipt = exercise_witnessed_read(workflow)?;
+            let inject_receipt = exercise_witnessed_injection(workflow)?;
+            let run_receipt = exercise_witnessed_run(workflow)?;
+            let exec_receipt = exercise_witnessed_exec(workflow)?;
+            exercise_too_late_cancellation(workflow)?;
+            verify_receipts(
+                workflow.approval.repository,
+                workflow.approval.data,
+                workflow.approval.state,
+                &[&read_receipt, &inject_receipt, &run_receipt, &exec_receipt],
+            )?;
+            assert_protected_value_not_persisted([
+                workflow.approval.repository,
+                workflow.approval.data,
+                workflow.approval.state,
+                workflow.artifacts,
+            ])?;
+        }
+        if freshness_only {
+            refuse_checkpoint_advanced_during_preparation(workflow, actors, endpoints, migration)?;
+        } else {
+            exercise_witnessed_rollover(workflow, actors, endpoints, migration)?;
+        }
+        Ok(())
+    })
 }

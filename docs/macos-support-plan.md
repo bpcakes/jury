@@ -26,7 +26,9 @@ observations in Git, not a second permanent certification ledger.
   `c5e40d166763b74c12d2434948b04e857bed3a21` on 2026-09-05.
 - [x] Audit M01 for implementation closure and bind its Darwin protection,
   provider ownership, failure tests, and native-run contract on 2026-09-05.
-- [ ] Implement the macOS work after the Linux release prerequisite.
+- [x] Implement and close M01 strict memory and M02 filesystem boundaries.
+- [x] M03 explicitly activated and implemented on 2026-09-08: native non-child CLI and owning validation.
+- [ ] Implement remaining M04-M10 work under their separate activation/release scope.
 - [ ] Pass native minimum-version and current-version acceptance.
 - [ ] Prepare installable artifacts and complete the release binding.
 
@@ -131,19 +133,22 @@ Unchecked implementation items stay open after the planning session ends.
 
 ## Outcomes & Retrospective
 
-The current tree cannot deliver a native macOS Jury CLI. It does contain a
-working initial process backend and a largely reusable portable core. The
-largest uncertainties are strict memory protection and preserving the existing
-execution identity and anonymous-file contracts on Darwin. Resolve those before
-advertising support or allocating effort to distribution polish.
+M01 strict Darwin memory and M02 APFS publication are implemented and closed.
+M03 supplies native workspace compilation, and strict default-home
+identity/vault, read/inject, transfer/import, and absent-target recovery pass
+through real CLI subprocesses on macOS 26.6.2 arm64 and Linux arm64. Native
+workspace gates and the full Linux workspace regression pass. The remaining
+implementation uncertainties are
+preserving execution identity and anonymous immutable-file delivery on Darwin;
+full native release support remains M04-M10.
 
 Four initial planning review rounds reached steady state. An additional
 acceptance-recipe review tightened two test oracles. The M01 closure audit then
 selected the Darwin strict profile and assigned its provider and test work.
 Beads epic `jury-2bg` holds nine new tasks and the reused deferred J12M task,
-with 18 prerequisite edges matching the plan. Native
-compilation/protection/publication blockers remain; no application code or
-existing Linux release requirements changed.
+with 18 prerequisite edges in the original plan. Its initial compilation,
+protection, and publication observations below are historical; the Linux
+release requirements remain unchanged.
 No implementation task is complete merely because it has been written down.
 
 ## Context and orientation
@@ -711,14 +716,54 @@ typed commit outcome and identity-bound cleanup contract.
 
 ### M03 — Make native non-child CLI workflows usable
 
-**Purpose and rationale.** Default identity and state roots currently fail on
-Darwin, and the whole CLI does not compile. A port must deliver actual identity,
+**Activation (2026-09-08).** The operator explicitly activated M03 after M01
+and M02 closed, without changing the Linux release scope or activating
+M04-M10. Earlier deferral and compilation observations below are historical.
+The implementation selects native roots, separates the Linux execution
+module, and rejects macOS child commands before environment capture or any
+private work. M03 acceptance passes through `native_basic_cli`, resolver
+tests, existing output-name tests, and the workspace gates. Existing
+backup fault tests now run on Darwin. The full-workspace check also exposed
+SQLite fixtures using aliased temporary roots; they now use physical owned
+roots, with production NOFOLLOW checks and test assertions unchanged.
+
+**Review fixes (2026-09-09).** Native witnessed injection now binds its
+in-process renderer identity to kernel evidence: a Darwin main-executable-header vnode
+through the maintained `libproc-region` provider, or Linux `/proc/self/exe`.
+Path discovery only supplies a name that must match that evidence; it cannot
+substitute metadata from a replacement file. The descriptor format remains
+unchanged and capture precedes private context loading. This is a metadata
+snapshot, not immutable content attestation or child-launch authority. The
+macOS regression runs real CLI read/inject, approval, and witness-engine
+operations and verifies receipts and the actual CLI's renderer descriptor.
+A test-only loader barrier replaces the actual CLI pathname before `main`
+and checks that approval still binds the original running image at its kernel
+pathname. Deleting the original image requires `renderer-identity-unavailable`
+before passphrase or witness-credential reads and before a witness request.
+The process crate tests replacement, deletion and hard links on Linux and macOS.
+Its shared adapter fixture uses in-memory
+persistence and explicit emergency protection; it does not establish strict
+juryd persistence/TLS or full M08 acceptance. Identity/state override errors
+retain specific CLI codes, default-root tests are independent of TMPDIR's Git
+ancestry, and unsupported-child preflight tests use initialized state.
+All CLI root adapters now own their diagnostic mapping in `cli/roots.rs`;
+Linux and macOS tests cover invalid/missing roots and explicit overrides.
+The clearer exit-2 diagnostics are an intentional unreleased cutover, while
+Linux's empty identity/state-override fallbacks remain intact.
+
+Hidden terminal field-value entry remains unimplemented on macOS; use
+`--value-stdin`. Witness database/anchor paths still require physical ancestors
+without symbolic links; the CLI's fixed-system-alias handling does not apply
+to SQLite stores. These limits remain M08 follow-up scope.
+
+**Purpose and rationale.** At the planning baseline, default identity and state
+roots failed on Darwin and the CLI did not compile. M03 must deliver identity,
 vault, read/inject, transfer, and recovery behavior with the platform defaults.
 
 **Ownership.** `jury/src/home.rs`, `cli/dispatch.rs`, `cli/environment.rs`,
 `cli/context.rs`, `cli/output_path.rs`, `cli.rs`,
-`jury-filesystem/src/local_state.rs`, their public
-exports/callers, and `jury/src/cli/execution_commands.rs` platform imports.
+`jury-filesystem/src/native_paths.rs` (extracted from `local_state.rs`),
+their public exports/callers, and `jury/src/cli/execution_commands.rs` platform imports.
 
 **Implementation.** Add one platform-selected root resolver with pure injected
 environment inputs. Retain the existing Linux resolver's behavior for callers
@@ -1981,3 +2026,14 @@ This revision selected the exact Darwin core/fork contract, moved enforcement
 to the shared constructor boundary, assigned provider ownership, separated
 provider and Jury fault tests, and named native closure lanes. Remove this note
 when maintained executable tests and the closed M01 record supersede it.
+
+The `libproc-region` extension currently requires a native macOS build host,
+Apple SDK and libclang. Linux-to-Darwin cross compilation is unsupported; M10
+packaging must use a native host unless a separate cross-build lane is validated.
+
+The shared `native_cli` suite now runs its non-child command workflows on macOS,
+including backup/recovery, transfer, direct rollover/suite migration, policy actors,
+passphrase handling and diagnostics. Linux-only child execution/redaction and the
+full witnessed rollover orchestration remain outside those native cases. The
+separate native witnessed fixture retains actual read/inject and image replacement
+coverage; neither fixture is production juryd persistence/TLS acceptance.

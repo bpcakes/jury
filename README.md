@@ -75,6 +75,47 @@ and the terminal UI are outside the tested release scope. For reproducible
 packaging and later binary installation, see
 [Linux release preparation](docs/linux-release.md).
 
+### Native macOS development
+
+The source tree supports non-child CLI commands on macOS: identity and vault
+management, read/inject, transfer, backup, and recovery. Build `jury` with
+`cargo build --locked -p jury`. This is partial native support, outside the
+Linux release package scope. Jury remains pre-alpha; do not use real secrets.
+`exec`, `run`, and their internal launch helper return
+`child-execution-unsupported` before private input or witness contact. Full
+witness lifecycle validation, child execution, and macOS distribution remain
+follow-on work.
+
+Hidden terminal entry for field values is not yet implemented on macOS. Use
+`--value-stdin` for field mutations; terminal entry remains part of M08.
+Witness SQLite databases and anchor repositories require physical paths with
+no symlinked ancestors (for example, `/private/tmp` rather than `/tmp`). The
+CLI filesystem's fixed-system-alias support does not extend to those stores.
+
+Default roots on macOS are:
+
+| Purpose | Path under the user's home | Override |
+| --- | --- | --- |
+| Global vault | `Library/Application Support/Jury/vaults/default` | `--home` or `JURY_HOME` |
+| Identities | `Library/Application Support/Jury/identities` | `JURY_IDENTITY_HOME` |
+| Local state | `Library/Application Support/Jury/state/vaults` | `JURY_STATE_HOME` |
+
+Vault selection remains `--home`, `--global`, nonempty `JURY_HOME`, repository
+`.jury`, then the global default. `--home` conflicts with `--global`. macOS
+ignores XDG variables; explicit Jury paths must be absolute and validated.
+Empty identity/state overrides are errors (`invalid-identity-selection` or
+`invalid-state-selection`); an empty `JURY_HOME` retains the fallback order
+above. No existing state is migrated or
+searched automatically. Native publication requires APFS and empty extended
+ACLs; see [filesystem semantics](docs/macos-filesystem.md).
+
+In the development source after v0.0.1, invalid or missing vault, identity, and state root
+selections use `invalid-home-selection`, `invalid-identity-selection`, and
+`invalid-state-selection` with exit status 2 on both platforms. This replaces
+the earlier generic filesystem/state-home errors. State roots containing `..`
+are rejected on both platforms. Linux retains its existing
+empty `JURY_IDENTITY_HOME` and `JURY_STATE_HOME` fallbacks. These diagnostics never echo root values.
+
 ### Try a direct vault
 
 Use a disposable shell and synthetic values only. This creates a new Git

@@ -372,6 +372,7 @@ fn explicit_stdin_owns_backup_and_restored_identity_prompts() -> TestResult {
     );
     Ok(())
 }
+#[cfg(target_os = "linux")]
 #[test]
 fn passphrase_read_leaves_exact_inherited_stdin_for_exec_child() -> TestResult {
     let temporary = tempfile::tempdir()?;

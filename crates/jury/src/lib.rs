@@ -12,7 +12,7 @@ mod secret_input;
 pub fn help_text(version: &str) -> String {
     format!(
         "{name} {version}\n{tagline}\n\n\
-         Native Linux CLI. Run `jury --help` for commands.\n",
+         Native Linux CLI; macOS supports non-child commands. Run `jury --help` for commands.\n",
         name = jury_core::PRODUCT_NAME,
         tagline = jury_core::PRODUCT_TAGLINE,
     )
