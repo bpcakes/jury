@@ -1,4 +1,3 @@
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn injected_wait_failure_still_cleans_descendants() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,6 +14,7 @@ fn injected_wait_failure_still_cleans_descendants() -> Result<(), Box<dyn std::e
     let error = finish_owned_process_wait(
         &mut process,
         Err(std::io::Error::other("injected wait failure")),
+        OwnedProcess::terminate_and_reap,
     )
     .err()
     .ok_or("injected wait failure unexpectedly succeeded")?;
@@ -144,36 +144,35 @@ fn a_terminal_signal_error_prevents_membership_proof() -> Result<(), Box<dyn std
         proofs: usize,
     }
 
-    let now = Instant::now();
-    let mut state = Injected::default();
-    let error = confirm_process_group_quiescent_with(
-        &mut state,
-        ProcessGroupQuiescence {
-            process_group: 73,
-            deadline: now + Duration::from_secs(1),
-            required_consecutive_proofs: REQUIRED_CONSECUTIVE_PROCESS_GROUP_PROOFS,
-            timeout_phase: "injected terminal error",
-        },
-        |state, _, _| {
-            state.signals += 1;
-            Err(std::io::Error::from(rustix::io::Errno::CHILD))
-        },
-        |state, _, _| {
-            state.proofs += 1;
-            Ok(true)
-        },
-        || now,
-        |_| {},
-    )
-    .err()
-    .ok_or("the injected signal failure unexpectedly succeeded")?;
+    for terminal_error in [rustix::io::Errno::CHILD, rustix::io::Errno::PERM] {
+        let now = Instant::now();
+        let mut state = Injected::default();
+        let error = confirm_process_group_quiescent_with(
+            &mut state,
+            ProcessGroupQuiescence {
+                process_group: 73,
+                deadline: now + Duration::from_secs(1),
+                required_consecutive_proofs: REQUIRED_CONSECUTIVE_PROCESS_GROUP_PROOFS,
+                timeout_phase: "injected terminal error",
+            },
+            |state, _, _| {
+                state.signals += 1;
+                Err(std::io::Error::from(terminal_error))
+            },
+            |state, _, _| {
+                state.proofs += 1;
+                Ok(true)
+            },
+            || now,
+            |_| {},
+        )
+        .err()
+        .ok_or("the injected signal failure unexpectedly succeeded")?;
 
-    assert_eq!(
-        error.raw_os_error(),
-        Some(rustix::io::Errno::CHILD.raw_os_error())
-    );
-    assert_eq!(state.signals, 1);
-    assert_eq!(state.proofs, 0);
+        assert_eq!(error.raw_os_error(), Some(terminal_error.raw_os_error()));
+        assert_eq!(state.signals, 1);
+        assert_eq!(state.proofs, 0);
+    }
     Ok(())
 }
 
@@ -248,4 +247,34 @@ fn platform_support_is_explicit() {
         process_tree_platform_support(),
         ProcessTreePlatformSupport::Unsupported
     );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn non_quiescent_members_keep_signalling_until_the_absolute_deadline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let start = Instant::now();
+    let now = std::cell::Cell::new(start);
+    let signals = std::cell::Cell::new(0);
+    let error = confirm_process_group_quiescent_with(
+        &mut (),
+        ProcessGroupQuiescence {
+            process_group: 73,
+            deadline: start + Duration::from_millis(20),
+            required_consecutive_proofs: REQUIRED_CONSECUTIVE_PROCESS_GROUP_PROOFS,
+            timeout_phase: "Example surviving member",
+        },
+        |_, _, _| {
+            signals.set(signals.get() + 1);
+            Ok(ProcessGroupSignalResult::Delivered)
+        },
+        |_, _, _| Ok(false),
+        || now.get(),
+        |_| now.set(now.get() + Duration::from_millis(10)),
+    )
+    .err()
+    .ok_or("a remaining member incorrectly proved quiescence")?;
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(signals.get(), 2, "cleanup stopped after its first signal");
+    Ok(())
 }

@@ -62,6 +62,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "darwin-process-info"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -96,13 +103,6 @@ checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
 dependencies = [
  "cfg-if",
  "windows-link",
-]
-
-[[package]]
-name = "libproc-region"
-version = "0.1.0"
-dependencies = [
- "bindgen",
 ]
 
 [[package]]

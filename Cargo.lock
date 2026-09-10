@@ -663,6 +663,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "darwin-process-info"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+]
+
+[[package]]
 name = "der"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1541,9 +1548,8 @@ dependencies = [
 name = "jury-process"
 version = "0.0.1"
 dependencies = [
+ "darwin-process-info",
  "jury-protected",
- "libproc",
- "libproc-region",
  "rustix",
  "tempfile",
  "wait-timeout",
@@ -1645,24 +1651,6 @@ checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
 dependencies = [
  "cfg-if",
  "windows-link",
-]
-
-[[package]]
-name = "libproc"
-version = "0.14.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a54ad7278b8bc5301d5ffd2a94251c004feb971feba96c971ea4063645990757"
-dependencies = [
- "bindgen",
- "errno",
- "libc",
-]
-
-[[package]]
-name = "libproc-region"
-version = "0.1.0"
-dependencies = [
- "bindgen",
 ]
 
 [[package]]

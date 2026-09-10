@@ -17,7 +17,7 @@ Fast jump index for agent-facing guidance in this repository.
 - [jury-filesystem](./crates/jury-filesystem/AGENTS.md)
 
 - [maintained sanitization provider](./third_party/sanitization/AGENTS.md)
-- [native region identity provider](./third_party/libproc-region/AGENTS.md)
+- [native Darwin process information provider](./third_party/darwin-process-info/AGENTS.md)
 
 ## Suggested usage pattern
 

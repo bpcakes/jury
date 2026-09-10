@@ -1,7 +1,11 @@
-//! Owned metadata for the vnode backing a Darwin process memory region.
+//! Bounded, checked Darwin process information queries.
 
 #![cfg(target_os = "macos")]
 #![deny(unsafe_op_in_unsafe_fn)]
+
+mod groups;
+
+pub use groups::process_group_has_only_leader;
 
 #[allow(warnings)]
 mod bindings {

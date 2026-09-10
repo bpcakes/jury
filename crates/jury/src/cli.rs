@@ -115,6 +115,8 @@ mod environment;
 mod execution_commands;
 #[cfg(target_os = "linux")]
 use execution_commands::*;
+#[cfg(any(target_os = "linux", test))]
+mod execution_outcome;
 mod field_input;
 mod field_reference;
 mod identity_commands;

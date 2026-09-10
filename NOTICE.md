@@ -32,14 +32,14 @@ hashes bind the maintained provider bytes. The fork adds macOS mapping fork
 exclusion, final guarded canary cleanup, and native tests; it does not imply
 upstream endorsement.
 
-## macOS running-image provider
+## macOS process information provider
 
-Jury maintains the MIT-licensed `libproc-region` provider in
-`third_party/libproc-region`. Its build script derives from
+Jury maintains the MIT-licensed `darwin-process-info` provider in
+`third_party/darwin-process-info`. Its build script derives from
 [andrewdavidmackenzie/libproc-rs](https://github.com/andrewdavidmackenzie/libproc-rs)
 0.14.11 at `9c5b669ca414918eadc81e70ec654505a0c8a93f`.
 The original MIT license and copyright notice are retained in
-`third_party/libproc-region/LICENSE` and accompany the source distribution.
+`third_party/darwin-process-info/LICENSE` and accompany the source distribution.
 That license applies to this provider; Jury's Elastic-2.0 license does not
 replace it. The maintained extension does not imply upstream endorsement.
 

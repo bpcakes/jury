@@ -77,8 +77,12 @@ packaging and later binary installation, see
 
 ### Native macOS development
 
-The source tree supports non-child CLI commands on macOS: identity and vault
-management, read/inject, transfer, backup, and recovery. Build `jury` with
+macOS development and planned releases target Apple Silicon only
+(`aarch64-apple-darwin`), with macOS 15 as the planned minimum. Intel Macs are
+outside Jury's support scope.
+
+The source tree supports non-child CLI commands on Apple Silicon macOS:
+identity and vault management, read/inject, transfer, backup, and recovery. Build `jury` with
 `cargo build --locked -p jury`. This is partial native support, outside the
 Linux release package scope. Jury remains pre-alpha; do not use real secrets.
 `exec`, `run`, and their internal launch helper return

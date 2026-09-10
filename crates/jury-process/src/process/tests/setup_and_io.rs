@@ -42,6 +42,11 @@ fn shell_quote(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_file(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let deadline = Instant::now() + Duration::from_secs(5);
+    wait_for_file_until(path, deadline)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn wait_for_file_until(path: &Path, deadline: Instant) -> Result<(), Box<dyn std::error::Error>> {
     while !path.exists() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }

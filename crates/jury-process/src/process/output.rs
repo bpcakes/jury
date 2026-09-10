@@ -9,6 +9,10 @@ use super::{
     ProcessOutputLimits, ProcessOutputRedaction, ProcessPipe, TRUNCATED_OUTPUT_POLL_INTERVAL,
 };
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "output_tests.rs"]
+mod tests;
+
 pub(super) struct OutputDrain {
     reader: Option<ProcessPipe>,
     redactor: Option<StreamingRedactor>,

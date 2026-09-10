@@ -38,8 +38,11 @@ fn main() {
         .rust_edition(RustEdition::Edition2024)
         .allowlist_type("proc_regionwithpathinfo")
         .allowlist_function("proc_pidinfo")
+        .allowlist_function("proc_listpids")
+        .allowlist_function("__error")
         .allowlist_function("_NSGetMachExecuteHeader")
         .allowlist_var("PROC_PIDREGIONPATHINFO")
+        .allowlist_var("PROC_PGRP_ONLY")
         .layout_tests(true)
         // CargoCallbacks::new() enables top-level wrapper.h tracking in 0.72.1,
         // as well as every transitive SDK header (including in-place upgrades).
@@ -60,6 +63,6 @@ fn main() {
     assert_ne!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("macos"),
-        "libproc-region requires a native macOS build host with the Apple SDK"
+        "darwin-process-info requires a native macOS build host with the Apple SDK"
     );
 }

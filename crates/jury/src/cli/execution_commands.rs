@@ -14,9 +14,9 @@ use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Duration;
 
 use jury_process::{
-    BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,
-    OwnedProcessTreeOptions, ProcessOutputLimits, ProcessOutputOverflowPolicy,
-    ProcessOutputRedaction, ProcessSignal, run_owned_process_tree_with_options,
+    BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeOptions,
+    ProcessOutputLimits, ProcessOutputOverflowPolicy, ProcessOutputRedaction, ProcessSignal,
+    run_owned_process_tree_with_options,
 };
 use jury_protected::{ProtectedMemory, StreamingRedactor};
 use rustix::fs::{MemfdFlags, Mode, SealFlags, fchmod, fcntl_add_seals, memfd_create};
@@ -24,6 +24,7 @@ use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2};
 use signal_hook::iterator::Signals;
 
+use super::execution_outcome::{map_process_error, process_audit_outcome};
 use super::field_reference::{FieldReference, parse as parse_field_reference};
 use super::*;
 
@@ -580,11 +581,7 @@ fn run_resolved(
     // until the complete owned process group is terminal.
     let process_result = run_owned_process_tree_with_options(&mut command, options, &mut observer);
     drop(environment_values);
-    let outcome = match &process_result {
-        Ok(_) => AuditOutcome::Success,
-        Err(error) if error.is_cancellation() => AuditOutcome::Cancelled,
-        Err(_) => AuditOutcome::Failed(jury_core::local_state::AuditFailureStage::Execution),
-    };
+    let outcome = process_audit_outcome(&process_result);
     let local_audit_recorded = append_operational_audit_outcome(
         context,
         AuditAction::ExecuteOrInject,

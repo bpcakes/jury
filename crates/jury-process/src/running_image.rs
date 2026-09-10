@@ -56,7 +56,7 @@ impl RunningImage {
         let (candidate, identity) = {
             // Darwin identifies the main executable header; the kernel query
             // supplies its backing vnode identity and current name.
-            let region = libproc_region::main_image_region()?;
+            let region = darwin_process_info::main_image_region()?;
             let identity = FileIdentity {
                 device: region.device,
                 inode: region.inode,

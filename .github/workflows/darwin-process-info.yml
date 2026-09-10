@@ -1,4 +1,4 @@
-name: Native region identity provider
+name: Native Darwin process provider
 
 on:
   pull_request:
@@ -18,8 +18,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel]
+        os: [macos-15]
         toolchain: [1.90.0, 1.98.1]
+        include:
+          - os: macos-26
+            toolchain: 1.98.1
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
@@ -28,15 +31,20 @@ jobs:
           cache: false
           rustflags: ""
           components: rustfmt, clippy
+      - name: Identify native test host
+        run: |
+          sw_vers
+          uname -m
+          rustc -vV
       - name: Check provider formatting
-        run: cargo fmt --manifest-path third_party/libproc-region/Cargo.toml -- --check
+        run: cargo fmt --manifest-path third_party/darwin-process-info/Cargo.toml -- --check
       - name: Check provider Clippy
-        run: cargo clippy --manifest-path third_party/libproc-region/Cargo.toml --locked --all-targets -- -D warnings
+        run: cargo clippy --manifest-path third_party/darwin-process-info/Cargo.toml --locked --all-targets -- -D warnings
       - name: Check native workspace Clippy
         if: matrix.toolchain == '1.98.1'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::mod_module_files
       - name: Run native provider regressions
-        run: cargo test --manifest-path third_party/libproc-region/Cargo.toml --locked
+        run: cargo test --manifest-path third_party/darwin-process-info/Cargo.toml --locked
       - name: Run native consumer regressions
         if: matrix.toolchain == '1.98.1'
         env:
