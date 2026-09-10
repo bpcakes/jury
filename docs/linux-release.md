@@ -10,6 +10,19 @@ development vaults and identities instead of migrating them.
 
 ## Current status
 
+The development source after v0.0.1 changes root-selection diagnostics to exit status 2
+with `invalid-home-selection`, `invalid-identity-selection`, or
+`invalid-state-selection`. They replace the previous generic filesystem and
+`state-home-unavailable` errors. State roots containing `..`, including
+`JURY_STATE_HOME` and `XDG_STATE_HOME`, are now rejected during selection.
+Linux's empty Jury root-variable fallbacks are preserved. These changes are
+covered by Linux CLI tests and require a new bound release candidate. They do
+not describe the already-published v0.0.1 binary.
+
+Witnessed template injection reports `renderer-identity-unavailable` when
+kernel-backed renderer identity cannot be established. Replacing the executable
+pathname cannot substitute another file's metadata into its action manifest.
+
 The 2026-09-08 audit findings QA-20 through QA-23 are addressed after pulling
 upstream `635f078`. The maintainer explicitly included J18 rollover and suite
 migration in Linux 0.0.1; both now gate J26 under their full acceptance criteria.
@@ -191,6 +204,13 @@ The existing native CLI integration suite can also run against the extracted
 The self-hosted suite accepts the extracted `juryd` binary and exercises real
 SQLite, anchor processes, TLS, restart, and shutdown. Supply absolute paths;
 an invalid supplied path fails instead of falling back to Cargo's binary.
+The renderer replacement regressions require `/usr/bin/cc`, `/bin/cp`, and
+a dynamically linked GNU/Linux executable that permits `LD_PRELOAD`.
+The Ubuntu CI runners supply the compiler; local development and release
+validation hosts must also install it (for example, Debian's `build-essential`).
+The loader barrier must actually run: missing prerequisites or a static or
+privileged executable fail the regression rather than silently skipping it.
+These are test-host requirements, not requirements on installed Jury users.
 
 ```sh
 JURY_TEST_BINARY="$JURY_BIN" CARGO_PROFILE_TEST_OPT_LEVEL=1 \

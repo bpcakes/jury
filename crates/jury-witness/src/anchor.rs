@@ -537,8 +537,10 @@ mod tests {
     #[test]
     fn repository_allows_only_exact_monotonic_compare_and_swap() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let path = directory.path().join("anchors.sqlite3");
+        let path = root.join("anchors.sqlite3");
         let witness_id = PrincipalId::from_bytes([1; 32])?;
         SqliteAnchorRepository::initialize(&path)?;
         let mut repository = SqliteAnchorRepository::open(&path, witness_id)?;
@@ -579,10 +581,12 @@ mod tests {
     #[test]
     fn anchor_backup_restores_independently_without_overwrite() -> TestResult {
         let directory = tempfile::tempdir()?;
+        // SQLite NOFOLLOW requires the physical path, including on Darwin.
+        let root = directory.path().canonicalize()?;
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let source = directory.path().join("source.sqlite3");
-        let backup = directory.path().join("backup.sqlite3");
-        let restored = directory.path().join("restored.sqlite3");
+        let source = root.join("source.sqlite3");
+        let backup = root.join("backup.sqlite3");
+        let restored = root.join("restored.sqlite3");
         let witness_id = PrincipalId::from_bytes([6; 32])?;
         SqliteAnchorRepository::initialize(&source)?;
         let mut repository = SqliteAnchorRepository::open(&source, witness_id)?;

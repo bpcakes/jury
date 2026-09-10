@@ -19,9 +19,10 @@ const CONFIGS: [(&str, &str); 2] = [
 fn malformed_configuration_never_initializes_a_database() -> TestResult {
     for (service, example) in CONFIGS {
         let directory = tempfile::tempdir()?;
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let database = directory.path().join("ExampleDatabase.sqlite3");
-        let path = directory.path().join("ExampleConfig.json");
+        let root = fs::canonicalize(directory.path())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let database = root.join("ExampleDatabase.sqlite3");
+        let path = root.join("ExampleConfig.json");
         let mut config: Value = serde_json::from_str(example)?;
         config["database"]["path"] = serde_json::to_value(&database)?;
         let document = serde_json::to_string(&config)?;

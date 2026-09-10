@@ -49,9 +49,12 @@ versioned contracts; HTTP and database adapters do not enter the witness engine.
 
 `jury-process` owns the child-process boundary used by `jury exec` and `jury run`.
 The active `0.x` contract supports Linux only. A provisional
-macOS backend remains in source for deferred post-`0.x` work; it is not a
-supported release surface, required CI evidence, or a shipped artifact. Targets
-without an implemented containment guarantee reject the operation before
+Apple Silicon macOS backend remains in source with M04 native containment
+validation complete;
+it is not a supported release surface or a shipped artifact. Native tests
+validate the follow-on work without changing the Linux release contract. Intel
+Mac support is outside the product scope. Targets without an implemented
+containment guarantee reject the operation before
 spawning a child instead of silently weakening cleanup. The crate has no Jig
 dependency; its design was checked against
 `jig-sh` revision `eed70cee337b0067ed92deb9fa05017b0b284605`, then implemented
@@ -59,7 +62,8 @@ with pinned `rustix` and `wait-timeout` providers rather than retaining the
 `jig-owned-process` package identity, its unsafe libc boundary, or any Jig
 runtime dependency. The pinned external providers report MIT/Apache-family
 license options; Jury itself uses [Elastic License 2.0](../LICENSE.md).
-Provisional macOS-only `libproc` remains deferred with that backend.
+The maintained macOS-only `darwin-process-info` provider owns checked native
+running-image and bounded process-group queries.
 
 Each child starts as leader of a new process group. Jury keeps the leader's
 wait status unconsumed while it may still signal that numeric group, forwards
@@ -67,8 +71,11 @@ the supported portable signal set only after a fresh non-reaping identity
 check, terminates the group on success and failure paths, proves two consecutive
 quiescent group snapshots, and only then reaps the leader. The active Linux
 membership proof requires readable `/proc` process metadata. The provisional
-macOS path uses a native libproc process-group snapshot but contributes no
-active release evidence. Failure to establish those guarantees is an explicit
+macOS path uses a fixed two-PID native query: only an exact leader singleton
+proves sole membership; a saturated or invalid response cannot prove cleanup.
+The leader must also be observed exited with its wait status unconsumed.
+Absolute deadlines include time spent querying, and late proofs are rejected.
+The synchronous kernel call itself cannot be preempted. Failure to establish those guarantees is an explicit
 cleanup error, not evidence that cleanup succeeded.
 
 Captured stdout and stderr have separate configured retention bounds and are
@@ -77,8 +84,14 @@ before observers or retained captures and maintains independent stream state.
 Truncation can continue draining without retaining more bytes; a fatal overflow
 instead initiates tree cleanup. Spawn failure, pre-spawn cancellation, runtime
 cancellation, timeout, signal-forwarding failure, output failure, and cleanup
-failure remain distinguishable outcomes. Exit status exposes both an ordinary
+failure remain distinguishable outcomes. When an operation and its cleanup both
+fail, the compound error retains the primary cause and is classified as failed
+cleanup, including when cancellation initiated it. A final output-drain failure
+cannot overwrite that earlier failure. Exit status exposes both an ordinary
 code and a terminating signal where the platform reports one.
+The CLI intentionally maps compound cleanup failures to `process-failed` and
+records a failed execution audit outcome. Its ordinary timeout/cancellation
+messages assert successful termination, which a cleanup failure cannot promise.
 
 The containment guarantee covers descendants that remain in the created
 process group. A deliberately detached descendant that calls `setsid` or moves

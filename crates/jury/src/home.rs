@@ -107,7 +107,7 @@ pub fn resolve_vault_home(
     }
     if global {
         return Ok(VaultHomeLocation::Detached {
-            path: linux_global_vault_home(xdg_data_home, user_home)?,
+            path: platform_global_vault_home(xdg_data_home, user_home)?,
             source: HomeSource::GlobalFlag,
         });
     }
@@ -125,7 +125,7 @@ pub fn resolve_vault_home(
         }),
         Err(error) if error.kind() == jury_filesystem::FilesystemErrorKind::NotFound => {
             Ok(VaultHomeLocation::Detached {
-                path: linux_global_vault_home(xdg_data_home, user_home)?,
+                path: platform_global_vault_home(xdg_data_home, user_home)?,
                 source: HomeSource::PlatformDefault,
             })
         }
@@ -138,38 +138,44 @@ pub fn resolve_identity_root(
     xdg_data_home: Option<&OsStr>,
     user_home: Option<&OsStr>,
 ) -> Result<PathBuf, HomeSelectionError> {
-    if let Some(path) = jury_identity_home.filter(|value| !value.is_empty()) {
+    // Preserve Linux empty-override compatibility. macOS rejects an explicitly
+    // empty private root; JURY_HOME separately retains its established selector
+    // fallback semantics (it selects a vault, not a private storage root).
+    if let Some(path) =
+        jury_identity_home.filter(|value| cfg!(target_os = "macos") || !value.is_empty())
+    {
         let path = PathBuf::from(path);
         validate_absolute_direct(&path)?;
         return Ok(path);
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (xdg_data_home, user_home);
-        Err(HomeSelectionError::UnsupportedPlatform)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let base = if let Some(xdg) = xdg_data_home.filter(|value| !value.is_empty()) {
-            PathBuf::from(xdg)
-        } else {
-            PathBuf::from(user_home.ok_or(HomeSelectionError::MissingUserHome)?)
-                .join(".local/share")
-        };
-        let path = base.join("jury/identities");
-        validate_absolute_direct(&path)?;
-        Ok(path)
-    }
+    platform_data_home(xdg_data_home, user_home).map(|base| base.join("identities"))
 }
 
-fn linux_global_vault_home(
+fn platform_global_vault_home(
     xdg_data_home: Option<&OsStr>,
     user_home: Option<&OsStr>,
 ) -> Result<PathBuf, HomeSelectionError> {
-    #[cfg(not(target_os = "linux"))]
+    platform_data_home(xdg_data_home, user_home).map(|base| base.join("vaults/default"))
+}
+
+fn platform_data_home(
+    xdg_data_home: Option<&OsStr>,
+    user_home: Option<&OsStr>,
+) -> Result<PathBuf, HomeSelectionError> {
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (xdg_data_home, user_home);
         Err(HomeSelectionError::UnsupportedPlatform)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = xdg_data_home;
+        let home = user_home
+            .filter(|value| !value.is_empty())
+            .ok_or(HomeSelectionError::MissingUserHome)?;
+        let home = PathBuf::from(home);
+        validate_absolute_direct(&home)?;
+        Ok(home.join("Library/Application Support/Jury"))
     }
     #[cfg(target_os = "linux")]
     {
@@ -179,14 +185,15 @@ fn linux_global_vault_home(
             PathBuf::from(user_home.ok_or(HomeSelectionError::MissingUserHome)?)
                 .join(".local/share")
         };
-        let path = base.join("jury/vaults/default");
+        let path = base.join("jury");
         validate_absolute_direct(&path)?;
         Ok(path)
     }
 }
 
 fn validate_absolute_direct(path: &Path) -> Result<(), HomeSelectionError> {
-    if !path.is_absolute()
+    if path.as_os_str().as_encoded_bytes().contains(&0)
+        || !path.is_absolute()
         || path
             .components()
             .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
@@ -204,108 +211,5 @@ impl From<FilesystemError> for HomeSelectionError {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::*;
-
-    #[test]
-    fn precedence_is_explicit_global_environment_repository_default()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let root = tempfile::tempdir()?;
-        let repository = root.path().join("repository");
-        fs::create_dir_all(repository.join(".git"))?;
-        fs::write(
-            repository.join(".git").join("HEAD"),
-            [b"ref: refs".as_slice(), b"/heads/main\n"].concat(),
-        )?;
-        let nested = repository.join("nested");
-        fs::create_dir(&nested)?;
-        let explicit = root.path().join("explicit");
-        let environment = root.path().join("environment");
-        let xdg = root.path().join("xdg");
-
-        let selected = resolve_vault_home(
-            &nested,
-            Some(explicit.clone()),
-            false,
-            Some(environment.as_os_str()),
-            Some(xdg.as_os_str()),
-            Some(root.path().as_os_str()),
-        )?;
-        assert_eq!(selected.source(), HomeSource::Explicit);
-        assert_eq!(selected.detached_path(), Some(explicit.as_path()));
-        assert!(matches!(
-            resolve_vault_home(
-                &nested,
-                Some(explicit),
-                true,
-                None,
-                Some(xdg.as_os_str()),
-                Some(root.path().as_os_str()),
-            ),
-            Err(HomeSelectionError::Ambiguous)
-        ));
-
-        let selected = resolve_vault_home(
-            &nested,
-            None,
-            true,
-            Some(environment.as_os_str()),
-            Some(xdg.as_os_str()),
-            Some(root.path().as_os_str()),
-        )?;
-        assert_eq!(selected.source(), HomeSource::GlobalFlag);
-        assert!(
-            selected
-                .detached_path()
-                .is_some_and(|path| path.ends_with("jury/vaults/default"))
-        );
-
-        let selected = resolve_vault_home(
-            &nested,
-            None,
-            false,
-            Some(environment.as_os_str()),
-            Some(xdg.as_os_str()),
-            Some(root.path().as_os_str()),
-        )?;
-        assert_eq!(selected.source(), HomeSource::Environment);
-        let selected = resolve_vault_home(
-            &nested,
-            None,
-            false,
-            None,
-            Some(xdg.as_os_str()),
-            Some(root.path().as_os_str()),
-        )?;
-        assert_eq!(selected.source(), HomeSource::Repository);
-
-        let selected = resolve_vault_home(
-            Path::new("/"),
-            None,
-            false,
-            None,
-            Some(xdg.as_os_str()),
-            Some(root.path().as_os_str()),
-        )?;
-        assert_eq!(selected.source(), HomeSource::PlatformDefault);
-        Ok(())
-    }
-
-    #[test]
-    fn relative_and_parent_paths_fail_without_disclosing_them() {
-        for path in [PathBuf::from("relative"), PathBuf::from("/tmp/../escape")] {
-            let error = resolve_vault_home(
-                Path::new("/tmp"),
-                Some(path),
-                false,
-                None,
-                None,
-                Some(OsStr::new("/tmp")),
-            )
-            .err();
-            assert_eq!(error, Some(HomeSelectionError::InvalidPath));
-        }
-    }
-}
+#[path = "home_tests.rs"]
+mod tests;

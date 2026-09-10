@@ -1,12 +1,19 @@
 use super::*;
 
 pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
-    if !cfg!(target_os = "linux") {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return Err(CliError::new(
             CliErrorKind::UnsupportedPlatform,
             "unsupported-platform",
-            "native vault commands currently support Linux only",
+            "native vault commands support Linux and macOS",
         ));
+    }
+    #[cfg(not(target_os = "linux"))]
+    if matches!(
+        cli.command,
+        Command::Exec(_) | Command::Run(_) | Command::InternalExec(_)
+    ) {
+        return Err(unsupported_child_execution());
     }
     let environment = Environment::capture();
     let current = env::current_dir().map_err(|_| filesystem_error())?;
@@ -245,12 +252,28 @@ pub fn execute(cli: Cli) -> Result<CommandOutput, CliError> {
         Command::Inject(arguments) => {
             template_inject(&cli, arguments, &environment, &current, protection)
         }
+        #[cfg(target_os = "linux")]
         Command::Exec(arguments) => {
             transparent_exec(&cli, arguments, &environment, &current, protection)
         }
+        #[cfg(target_os = "linux")]
         Command::Run(arguments) => {
             brokered_run(&cli, arguments, &environment, &current, protection)
         }
+        #[cfg(target_os = "linux")]
         Command::InternalExec(arguments) => internal_exec(arguments),
+        #[cfg(not(target_os = "linux"))]
+        Command::Exec(_) | Command::Run(_) | Command::InternalExec(_) => {
+            Err(unsupported_child_execution())
+        }
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn unsupported_child_execution() -> CliError {
+    CliError::new(
+        CliErrorKind::UnsupportedPlatform,
+        "child-execution-unsupported",
+        "native child execution and delivery are not implemented on this platform",
+    )
 }

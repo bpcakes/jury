@@ -369,38 +369,6 @@ fn update_digest_bytes(digest: &mut Sha256, bytes: &[u8]) -> Result<(), CliError
     Ok(())
 }
 
-fn map_process_error(error: OwnedProcessTreeError) -> CliError {
-    match error {
-        OwnedProcessTreeError::Output => CliError::new(
-            CliErrorKind::Process,
-            "process-output-failed",
-            "child output could not be delivered safely",
-        ),
-        OwnedProcessTreeError::TimedOut => CliError::new(
-            CliErrorKind::Process,
-            "process-timeout",
-            "the brokered process tree timed out and was terminated",
-        ),
-        OwnedProcessTreeError::Stdin => CliError::new(
-            CliErrorKind::Process,
-            "process-stdin-failed",
-            "the selected stdin value could not be delivered completely",
-        ),
-        OwnedProcessTreeError::Cancelled | OwnedProcessTreeError::CancelledBeforeStart => {
-            CliError::new(
-                CliErrorKind::Process,
-                "process-cancelled",
-                "the process tree was cancelled and terminated",
-            )
-        }
-        _ => CliError::new(
-            CliErrorKind::Process,
-            "process-failed",
-            "the process tree failed or could not be cleaned up safely",
-        ),
-    }
-}
-
 const fn invalid_execution_arguments() -> CliError {
     CliError::new(
         CliErrorKind::InvalidArguments,

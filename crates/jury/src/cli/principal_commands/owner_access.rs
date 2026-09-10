@@ -113,7 +113,7 @@ fn open_owner_change_items(
         let endpoints = entry
             .witnesses
             .iter()
-            .map(|spec| WitnessEndpointClient::parse(spec, entry.allow_insecure_loopback))
+            .map(|spec| WitnessEndpointClient::load(spec, entry.allow_insecure_loopback))
             .collect::<Result<Vec<_>, _>>()?;
         let checkpoint = read_checkpoint(&entry.checkpoint)?;
         entries.insert(

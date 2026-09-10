@@ -64,6 +64,6 @@ suite covers inherited allow/deny ACL rejection before writing, competing
 publishers, Unicode/case aliases, temporary replacement and cleanup, retained
 parent renames, file/parent sync failures, and before/after-rename restart cases.
 Use synthetic fixtures only. The current host run does not establish macOS 15
-or Intel acceptance; those native release lanes belong to subsequent macOS
-integration/release work. Native workspace compilation still requires M03's
-CLI portability changes, and strict filesystem fixtures require M01.
+Apple Silicon acceptance; that native release lane belongs to subsequent macOS
+integration/release work. M03 supplies native non-child CLI compilation and platform defaults; child
+execution and full native release acceptance remain separate work.

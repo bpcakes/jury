@@ -15,9 +15,12 @@ use crate::unix::{
     ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, observe_unreaped_child,
     signal_process_group,
 };
+mod error;
 mod input;
 pub mod interaction;
 mod output;
+
+pub use error::OwnedProcessTreeError;
 
 use input::{ProtectedInputDrain, prepare_process_input};
 use output::{OutputDrain, OwnedProcessOutputDrains};
@@ -218,76 +221,6 @@ impl BoundedProcessOutput {
     }
 }
 
-#[derive(Debug)]
-pub enum OwnedProcessTreeError {
-    Start(std::io::Error),
-    InvalidTimeout,
-    TimedOut,
-    CancelledBeforeStart,
-    Cancelled,
-    OutputLimitExceeded(OwnedProcessOutputStream),
-    SignalForward(ProcessSignal),
-    Stdin,
-    Output,
-    Await,
-    Cleanup,
-}
-
-impl OwnedProcessTreeError {
-    pub const fn is_cancellation(&self) -> bool {
-        match self {
-            Self::CancelledBeforeStart | Self::Cancelled => true,
-            Self::Start(_)
-            | Self::InvalidTimeout
-            | Self::TimedOut
-            | Self::OutputLimitExceeded(_)
-            | Self::SignalForward(_)
-            | Self::Stdin
-            | Self::Output
-            | Self::Await
-            | Self::Cleanup => false,
-        }
-    }
-}
-
-impl std::fmt::Display for OwnedProcessTreeError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Start(error) => write!(formatter, "the process tree could not start: {error}"),
-            Self::InvalidTimeout => {
-                formatter.write_str("the process-tree timeout is not representable")
-            }
-            Self::TimedOut => formatter.write_str("the process tree timed out"),
-            Self::CancelledBeforeStart => {
-                formatter.write_str("the process tree was cancelled before it started")
-            }
-            Self::Cancelled => formatter.write_str("the process tree was cancelled"),
-            Self::OutputLimitExceeded(stream) => {
-                write!(
-                    formatter,
-                    "the process tree exceeded its {stream} output limit"
-                )
-            }
-            Self::SignalForward(signal) => {
-                write!(formatter, "the process tree could not receive {signal:?}")
-            }
-            Self::Stdin => formatter.write_str("the process input could not be delivered safely"),
-            Self::Output => formatter.write_str("the process output could not be captured safely"),
-            Self::Await => formatter.write_str("the process tree could not be awaited"),
-            Self::Cleanup => formatter.write_str("the process tree could not be cleaned up safely"),
-        }
-    }
-}
-
-impl std::error::Error for OwnedProcessTreeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Start(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
 pub fn run_owned_process_tree_with_output(
     command: &mut Command,
     timeout: Duration,
@@ -458,6 +391,26 @@ pub fn run_owned_process_tree_with_options(
     options: OwnedProcessTreeOptions,
     observer: &mut dyn OwnedProcessObserver,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
+    run_owned_process_tree_with_io_and_cleanup(
+        command,
+        options,
+        observer,
+        OwnedProcessOutputDrains::start,
+        OwnedProcess::terminate_and_reap,
+    )
+}
+
+fn run_owned_process_tree_with_io_and_cleanup(
+    command: &mut Command,
+    options: OwnedProcessTreeOptions,
+    observer: &mut dyn OwnedProcessObserver,
+    start_output: impl FnOnce(
+        &mut Child,
+        ProcessOutputLimits,
+        Option<ProcessOutputRedaction>,
+    ) -> std::io::Result<OwnedProcessOutputDrains>,
+    cleanup: impl FnOnce(&mut OwnedProcess) -> std::io::Result<ExitStatus>,
+) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
     if observer.cancelled() {
         return Err(OwnedProcessTreeError::CancelledBeforeStart);
     }
@@ -471,18 +424,20 @@ pub fn run_owned_process_tree_with_options(
     let input = match prepare_process_input(&mut process.child, options.stdin) {
         Ok(input) => input,
         Err(_) => {
-            return match process.terminate_and_reap() {
+            return match cleanup(&mut process) {
                 Ok(_) => Err(OwnedProcessTreeError::Stdin),
-                Err(_) => Err(OwnedProcessTreeError::Cleanup),
+                Err(_) => Err(OwnedProcessTreeError::CleanupAfterFailure(Box::new(
+                    OwnedProcessTreeError::Stdin,
+                ))),
             };
         }
     };
-    let Ok(mut drains) =
-        OwnedProcessOutputDrains::start(&mut process.child, options.limits, options.redaction)
-    else {
-        return match process.terminate_and_reap() {
+    let Ok(mut drains) = start_output(&mut process.child, options.limits, options.redaction) else {
+        return match cleanup(&mut process) {
             Ok(_) => Err(OwnedProcessTreeError::Output),
-            Err(_) => Err(OwnedProcessTreeError::Cleanup),
+            Err(_) => Err(OwnedProcessTreeError::CleanupAfterFailure(Box::new(
+                OwnedProcessTreeError::Output,
+            ))),
         };
     };
     let wait_result = wait_for_owned_process(
@@ -493,11 +448,13 @@ pub fn run_owned_process_tree_with_options(
         &mut drains,
         input,
     );
-    let status = finish_owned_process_wait(&mut process, wait_result);
-    let (stdout, stderr) = drains
-        .finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer)
-        .map_err(|_| OwnedProcessTreeError::Output)?;
-    finalize_owned_process_output(status, stdout, stderr, options.overflow_policy)
+    let status = finish_owned_process_wait(&mut process, wait_result, cleanup);
+    let drained = drains.finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer);
+    // Attempt the bounded drain on every outcome, but do not let a secondary
+    // output failure erase the operation/cleanup failure that ended execution.
+    let status = status?;
+    let (stdout, stderr) = drained.map_err(|_| OwnedProcessTreeError::Output)?;
+    finalize_owned_process_output(Ok(status), stdout, stderr, options.overflow_policy)
 }
 
 fn finalize_owned_process_output(
@@ -837,10 +794,29 @@ fn update_owned_process_identity_after_wait_error(
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn terminate_owned_process_fallback(process: &mut OwnedProcess) -> std::io::Result<()> {
+    terminate_owned_process_fallback_with(process, observe_owned_process)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminate_owned_process_fallback_with(
+    process: &mut OwnedProcess,
+    observe: impl FnOnce(&mut OwnedProcess) -> std::io::Result<UnreapedChildObservation>,
+) -> std::io::Result<()> {
     if process.process_group.is_none() {
         return Err(std::io::Error::other(
             "owned child identity is no longer pinned; refusing direct fallback",
         ));
+    }
+    // A failed tree operation may have been followed by another wait consumer.
+    // Direct fallback needs the same fresh ownership check as group signaling.
+    if let Err(error) = observe(process) {
+        update_owned_process_identity_after_wait_error(process, &error);
+        if process.process_group.is_none() {
+            return Err(error);
+        }
+        // Other observation errors do not consume the owned wait status.
+        // Keep the direct-child fallback available when the native wait
+        // operation is unsupported; tree cleanup still reports its failure.
     }
     match process.child.kill() {
         Ok(()) => Ok(()),
@@ -879,6 +855,7 @@ fn wait_for_owned_process(
 fn finish_owned_process_wait(
     process: &mut OwnedProcess,
     wait_result: std::io::Result<OwnedProcessWait>,
+    cleanup: impl FnOnce(&mut OwnedProcess) -> std::io::Result<ExitStatus>,
 ) -> std::result::Result<ExitStatus, OwnedProcessTreeError> {
     let outcome = match wait_result {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -905,9 +882,12 @@ fn finish_owned_process_wait(
     };
     // A owned process leader can exit while a background descendant keeps running.
     // End the owned tree on every outcome before reading captured output.
-    let cleanup = process.terminate_and_reap();
+    let cleanup = cleanup(process);
     if cleanup.is_err() {
-        return Err(OwnedProcessTreeError::Cleanup);
+        return Err(match outcome {
+            Some(Err(primary)) => OwnedProcessTreeError::CleanupAfterFailure(Box::new(primary)),
+            _ => OwnedProcessTreeError::Cleanup,
+        });
     }
     match outcome {
         Some(outcome) => outcome,
@@ -1212,21 +1192,27 @@ fn confirm_process_group_quiescent(
             timeout_phase: "while confirming the macOS process group",
         },
         signal_pinned_process_group,
-        |process, process_group, deadline| {
-            pinned_process_group_for_retry(process, process_group)?;
-            let leader_exited = observe_owned_process(process)? == UnreapedChildObservation::Exited;
-            ensure_owned_process_cleanup_budget(deadline, "after macOS leader observation")?;
-            if !leader_exited {
-                return Ok(false);
-            }
-            let sole_pinned_leader =
-                macos_process_group_contains_only_pinned_leader(process_group)?;
-            ensure_owned_process_cleanup_budget(deadline, "after macOS process-group snapshot")?;
-            Ok(sole_pinned_leader)
-        },
+        prove_macos_process_group_quiescent,
         Instant::now,
         std::thread::sleep,
     )
+}
+
+#[cfg(target_os = "macos")]
+fn prove_macos_process_group_quiescent(
+    process: &mut OwnedProcess,
+    process_group: i32,
+    deadline: Instant,
+) -> std::io::Result<bool> {
+    pinned_process_group_for_retry(process, process_group)?;
+    let leader_exited = observe_owned_process(process)? == UnreapedChildObservation::Exited;
+    ensure_owned_process_cleanup_budget(deadline, "after macOS leader observation")?;
+    if !leader_exited {
+        return Ok(false);
+    }
+    let sole_pinned_leader = macos_process_group_contains_only_pinned_leader(process_group)?;
+    ensure_owned_process_cleanup_budget(deadline, "after macOS process-group snapshot")?;
+    Ok(sole_pinned_leader)
 }
 
 #[cfg(target_os = "macos")]

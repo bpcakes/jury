@@ -1,0 +1,55 @@
+name: Native Darwin process provider
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15]
+        toolchain: [1.90.0, 1.98.1]
+        include:
+          - os: macos-26
+            toolchain: 1.98.1
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          cache: false
+          rustflags: ""
+          components: rustfmt, clippy
+      - name: Identify native test host
+        run: |
+          sw_vers
+          uname -m
+          rustc -vV
+      - name: Check provider formatting
+        run: cargo fmt --manifest-path third_party/darwin-process-info/Cargo.toml -- --check
+      - name: Check provider Clippy
+        run: cargo clippy --manifest-path third_party/darwin-process-info/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Check native workspace Clippy
+        if: matrix.toolchain == '1.98.1'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings -D clippy::mod_module_files
+      - name: Run native provider regressions
+        run: cargo test --manifest-path third_party/darwin-process-info/Cargo.toml --locked
+      - name: Run native consumer regressions
+        if: matrix.toolchain == '1.98.1'
+        env:
+          CARGO_PROFILE_TEST_OPT_LEVEL: "1"
+        run: |
+          cargo test -p jury-filesystem -p jury-witness -p jury-process --locked
+          cargo test -p jury --locked --lib
+          cargo test -p jury --locked --test native_basic_cli --test native_cli --test native_witnessed_inject

@@ -5,6 +5,12 @@ experimental release. Jury remains pre-alpha, does not yet protect secrets,
 and must not be used with real credentials. Nothing in this plan is an
 independent security review or certification.
 
+The macOS target is Apple Silicon only (`aarch64-apple-darwin`), with macOS 15
+as the planned minimum. The operator removed Intel Mac support from the product
+scope on 2026-09-10. Intel builds, CI lanes, release artifacts and acceptance
+requirements are no longer planned. Historical Intel observations do not imply
+an ongoing support commitment.
+
 The consumer is the engineer implementing the macOS CLI and its release
 maintainer. The gated feature is usable direct and witnessed CLI workflows on
 native macOS. The observed defects are a native compilation failure,
@@ -26,7 +32,10 @@ observations in Git, not a second permanent certification ledger.
   `c5e40d166763b74c12d2434948b04e857bed3a21` on 2026-09-05.
 - [x] Audit M01 for implementation closure and bind its Darwin protection,
   provider ownership, failure tests, and native-run contract on 2026-09-05.
-- [ ] Implement the macOS work after the Linux release prerequisite.
+- [x] Implement and close M01 strict memory and M02 filesystem boundaries.
+- [x] M03 explicitly activated and implemented on 2026-09-08: native non-child CLI and owning validation.
+- [x] M04 containment implemented and validated on native Apple Silicon macOS 15/26 and Linux on 2026-09-10.
+- [ ] Implement remaining M05-M10 work under their separate activation/release scope.
 - [ ] Pass native minimum-version and current-version acceptance.
 - [ ] Prepare installable artifacts and complete the release binding.
 
@@ -86,8 +95,8 @@ Unchecked implementation items stay open after the planning session ends.
   requires explicit future activation. J26 completion is a prerequisite, not
   automatic reactivation; this planning request authorizes the plan and tracker
   conversion, while implementation scheduling remains deferred.
-- Plan for macOS 15 and newer on both Apple Silicon and Intel, with separate
-  architecture artifacts. This is a proposed product floor chosen for native
+- Plan for macOS 15 and newer on Apple Silicon only. This is a proposed product
+  floor chosen for native
   CI availability, not a support claim inferred from Rust's lower OS floor.
   Tests on macOS 26 alone cannot establish macOS 15 support.
 - Keep `unsafe_code = "forbid"` in Jury. Required Mach/BSD integration must
@@ -131,19 +140,22 @@ Unchecked implementation items stay open after the planning session ends.
 
 ## Outcomes & Retrospective
 
-The current tree cannot deliver a native macOS Jury CLI. It does contain a
-working initial process backend and a largely reusable portable core. The
-largest uncertainties are strict memory protection and preserving the existing
-execution identity and anonymous-file contracts on Darwin. Resolve those before
-advertising support or allocating effort to distribution polish.
+M01 strict Darwin memory and M02 APFS publication are implemented and closed.
+M03 supplies native workspace compilation, and strict default-home
+identity/vault, read/inject, transfer/import, and absent-target recovery pass
+through real CLI subprocesses on macOS 26.6.2 arm64 and Linux arm64. Native
+workspace gates and the full Linux workspace regression pass. The remaining
+implementation uncertainties are
+preserving execution identity and anonymous immutable-file delivery on Darwin;
+full native release support remains M04-M10.
 
 Four initial planning review rounds reached steady state. An additional
 acceptance-recipe review tightened two test oracles. The M01 closure audit then
 selected the Darwin strict profile and assigned its provider and test work.
 Beads epic `jury-2bg` holds nine new tasks and the reused deferred J12M task,
-with 18 prerequisite edges matching the plan. Native
-compilation/protection/publication blockers remain; no application code or
-existing Linux release requirements changed.
+with 18 prerequisite edges in the original plan. Its initial compilation,
+protection, and publication observations below are historical; the Linux
+release requirements remain unchanged.
 No implementation task is complete merely because it has been written down.
 
 ## Context and orientation
@@ -250,8 +262,10 @@ planning-session gate; the existing session remains open.
   fork, guard, and canary controls in strict mode.
 - `crates/jury-protected/src/process_protection.rs` uses `rlimit` to set hard
   and soft `RLIMIT_CORE` to zero before the private callback.
-- `crates/jury-process/src/unix.rs` calls `libproc` 0.14.11 for process-group
-  snapshots and rejects malformed or incomplete observations.
+- `crates/jury-process/src/unix.rs` uses the maintained `darwin-process-info`
+  fixed two-slot group query. Only an exact leader singleton proves sole
+  membership; valid other members keep cleanup retrying, and malformed
+  observations fail.
 - `crates/jury-process/src/process.rs` retains the unreaped leader, signals,
   confirms consecutive quiescence, and only then consumes wait status.
 - `crates/jury/src/cli/execution_commands.rs` owns Linux memfd delivery,
@@ -281,8 +295,8 @@ of implementation and before freezing a release toolchain.
    documents Apple targets and `MACOSX_DEPLOYMENT_TARGET`. Rust's supported
    target list does not prove Jury's providers or workflows on those targets.
 3. [GitHub hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
-   currently lists `macos-15`/`macos-26` arm64 and
-   `macos-15-intel`/`macos-26-intel`. Runner availability must be rechecked;
+   lists the selected `macos-15`/`macos-26` arm64 runners.
+   Runner availability must be rechecked;
    `macos-latest` is not an architecture or minimum-OS contract.
 4. [rustix 1.1.4 source](https://docs.rs/crate/rustix/1.1.4/source/src/fs/at.rs)
    and its `src/backend/libc/fs/types.rs` and `syscalls.rs` establish Apple's
@@ -297,7 +311,7 @@ of implementation and before freezing a release toolchain.
    documents `VM_INHERIT_NONE`; [XNU's ordinary fork-map implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_map.c)
    skips entries with that inheritance value when building the child map. M01
    must establish it through the safe provider before initialization and verify
-   the behavior natively on both architectures.
+   the behavior natively on Apple Silicon.
 7. [Apple madvise manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/madvise.2.html)
    lists Darwin's supported advice values and supplies no per-mapping
    `MADV_DONTDUMP`/`MADV_NOCORE` equivalent. M01 must not invent one or reuse a
@@ -320,7 +334,7 @@ of implementation and before freezing a release toolchain.
 
 ### Installation and first use
 
-An operator can install the artifact for their native architecture, run
+An operator can install the Apple Silicon artifact on a supported Mac, run
 `jury --help`, and see truthful supported features without a repeated release
 status banner.
 They can initialize `ExamplePrincipal` and `ExampleVault` in strict mode using
@@ -562,8 +576,8 @@ selected-feature suite
 `cargo test --all-targets --no-default-features --features std,profile-guarded-native,require-fork-exclusion`
 and
 `cargo test --locked -p jury-protected --all-targets` on native macOS 15
-Apple Silicon, native macOS 15 Intel, and the then-current macOS release on at
-least Apple Silicon. Use Rust 1.90 for at least the minimum-version lanes and
+Apple Silicon and the then-current macOS release on Apple Silicon.
+Use Rust 1.90 for at least the minimum-version lane and
 record the exact OS build, architecture, Rust version, provider revision, and
 test/ignored counts. Run the same provider selected-feature suite,
 `cargo test --locked -p jury-protected --all-targets`, and
@@ -577,7 +591,7 @@ limits and runs exactly once; its status reports mapping/lock/fork/guards/canary
 established, per-mapping dump unsupported, process suppression true, and
 `is_degraded() == false`. An injected failure of every mandatory owning-layer
 step prevents the private marker. The provider child oracle proves the mapping
-absent after fork on both architectures. Linux still reports and requires
+absent after fork on Apple Silicon. Linux still reports and requires
 per-mapping dump/fork establishment. The implementation and
 `docs/security/protected-primitives.md` agree on the existing 1 MiB compact and
 16 MiB large ceilings without changing protocol limits. The dependency is
@@ -711,14 +725,54 @@ typed commit outcome and identity-bound cleanup contract.
 
 ### M03 — Make native non-child CLI workflows usable
 
-**Purpose and rationale.** Default identity and state roots currently fail on
-Darwin, and the whole CLI does not compile. A port must deliver actual identity,
+**Activation (2026-09-08).** The operator explicitly activated M03 after M01
+and M02 closed, without changing the Linux release scope or activating
+M04-M10. Earlier deferral and compilation observations below are historical.
+The implementation selects native roots, separates the Linux execution
+module, and rejects macOS child commands before environment capture or any
+private work. M03 acceptance passes through `native_basic_cli`, resolver
+tests, existing output-name tests, and the workspace gates. Existing
+backup fault tests now run on Darwin. The full-workspace check also exposed
+SQLite fixtures using aliased temporary roots; they now use physical owned
+roots, with production NOFOLLOW checks and test assertions unchanged.
+
+**Review fixes (2026-09-09).** Native witnessed injection now binds its
+in-process renderer identity to kernel evidence: a Darwin main-executable-header vnode
+through the maintained `darwin-process-info` provider (formerly `libproc-region`), or Linux `/proc/self/exe`.
+Path discovery only supplies a name that must match that evidence; it cannot
+substitute metadata from a replacement file. The descriptor format remains
+unchanged and capture precedes private context loading. This is a metadata
+snapshot, not immutable content attestation or child-launch authority. The
+macOS regression runs real CLI read/inject, approval, and witness-engine
+operations and verifies receipts and the actual CLI's renderer descriptor.
+A test-only loader barrier replaces the actual CLI pathname before `main`
+and checks that approval still binds the original running image at its kernel
+pathname. Deleting the original image requires `renderer-identity-unavailable`
+before passphrase or witness-credential reads and before a witness request.
+The process crate tests replacement, deletion and hard links on Linux and macOS.
+Its shared adapter fixture uses in-memory
+persistence and explicit emergency protection; it does not establish strict
+juryd persistence/TLS or full M08 acceptance. Identity/state override errors
+retain specific CLI codes, default-root tests are independent of TMPDIR's Git
+ancestry, and unsupported-child preflight tests use initialized state.
+All CLI root adapters now own their diagnostic mapping in `cli/roots.rs`;
+Linux and macOS tests cover invalid/missing roots and explicit overrides.
+The clearer exit-2 diagnostics are an intentional unreleased cutover, while
+Linux's empty identity/state-override fallbacks remain intact.
+
+Hidden terminal field-value entry remains unimplemented on macOS; use
+`--value-stdin`. Witness database/anchor paths still require physical ancestors
+without symbolic links; the CLI's fixed-system-alias handling does not apply
+to SQLite stores. These limits remain M08 follow-up scope.
+
+**Purpose and rationale.** At the planning baseline, default identity and state
+roots failed on Darwin and the CLI did not compile. M03 must deliver identity,
 vault, read/inject, transfer, and recovery behavior with the platform defaults.
 
 **Ownership.** `jury/src/home.rs`, `cli/dispatch.rs`, `cli/environment.rs`,
 `cli/context.rs`, `cli/output_path.rs`, `cli.rs`,
-`jury-filesystem/src/local_state.rs`, their public
-exports/callers, and `jury/src/cli/execution_commands.rs` platform imports.
+`jury-filesystem/src/native_paths.rs` (extracted from `local_state.rs`),
+their public exports/callers, and `jury/src/cli/execution_commands.rs` platform imports.
 
 **Implementation.** Add one platform-selected root resolver with pure injected
 environment inputs. Retain the existing Linux resolver's behavior for callers
@@ -770,6 +824,25 @@ identity as a recovery shortcut.
 
 ### M04 / J12M — Validate and finish native process containment
 
+**Completion update (2026-09-10).** M04 is complete under `jury-qv4.3.4`.
+The maintained provider is now `third_party/darwin-process-info`: its fixed
+two-PID query replaces `libproc`'s count-then-allocate snapshot. Only a complete
+exact singleton can prove sole membership; invalid responses fail and saturated
+responses remain non-quiescent. See its README for pinned XNU research and the
+uninterruptible kernel-call limitation. The supervisor checks fresh wait
+ownership before direct fallback and retains the original operation error when
+cleanup also fails. Native handshake, churn and consumed-status regressions
+accompany these changes. The controlled native churn test adds acknowledged
+members between cleanup proofs from outside the signalled group, verifies
+saturated snapshots reset the proof streak, and requires SIGKILL status for
+each added member. Native Apple Silicon macOS 15.7.9 and 26.6.2 passed the
+provider, containment and selected CLI suites in
+[CI run 34501541365](https://github.com/bpcakes/jury/actions/runs/34501541365)
+for implementation commit `362b209`; native Linux workspace tests and Clippy
+also passed. Public support status remains
+provisional. Recovery and exact evidence live in
+`.agent/plans/plan_01M25NJ23YMHZ050J0GSR4C07Q.md`.
+
 **Purpose and rationale.** The initial native suite already passes on one
 arm64 host. Confirm the real guarantees across supported hosts and fix only
 observed deficiencies; do not replace the backend merely to generate work.
@@ -790,7 +863,7 @@ ECHILD, consumed status, or loss of group ownership. Wait, scan, and drain
 deadlines remain absolute and include time spent in native provider calls.
 Actual uninterruptible provider-call limits must be documented honestly.
 
-**Tests in the same change.** Run the current 36 cases on both architectures,
+**Tests in the same change.** Run the current containment suite on Apple Silicon,
 plus targeted gaps found by native inspection. Cover successful leader exit
 with descendants, timeout, cancellation before/after spawn, signal status,
 partial setup, stdin refusal, output overflow, streaming redaction, observer
@@ -863,7 +936,7 @@ launch failure, forwarded status, and test-helper cleanup.
 
 **Acceptance.** The native prototype becomes the production launch path with
 the retained-object guarantees substantiated. It launches synthetic children
-through the process owner on both architectures. No `/proc` dependency remains
+through the process owner on Apple Silicon. No `/proc` dependency remains
 in the macOS path, and no pathname-only workaround is described as pinned exec.
 
 **Dependencies and recovery.** Blocked by M03/M04; unblocks M07. Experiments cannot
@@ -1037,7 +1110,7 @@ alone do not run it. M09 owns automating these checks in CI.
 
 **Acceptance.** The complete portable workflow corpus executes on native macOS
 and Linux; OS-excluded counts are inspected and explained. Current-version and
-minimum-version runs cover both architectures. CLI-to-Linux-witness behavior
+minimum-version macOS runs use Apple Silicon. CLI-to-Linux-witness behavior
 is exercised as a separate interoperability case from local Darwin juryd.
 J25's applicable regressions, named leak surfaces, and native measurement
 cases execute with their existing oracles; any required unrun case stays open.
@@ -1058,9 +1131,9 @@ where appropriate, `.jig.toml`, shell scripts, and development documentation.
 Respect generated Jig ownership; add a focused repo-owned macOS workflow if
 the configured single-runner template cannot express the matrix cleanly.
 
-**Implementation.** Use explicit `macos-15`, `macos-15-intel`, `macos-26`, and
-`macos-26-intel` labels after verifying availability. Run the full lifecycle
-on the minimum OS for each architecture and current OS checks at the chosen
+**Implementation.** Use explicit Apple Silicon `macos-15` and `macos-26`
+labels after verifying availability. Run the full lifecycle
+on the minimum OS and current OS checks at the chosen
 regular cadence. Keep native Linux required coverage. A Linux job must not
 become an accidental dependency on macOS runtime artifacts.
 
@@ -1120,13 +1193,13 @@ the master-plan support summary, recovery documentation, and relevant `web/`
 claims if any. Reuse the release control established by J26; do not overwrite
 its historical Linux binding.
 
-**Implementation.** Build separate `aarch64-apple-darwin` and
-`x86_64-apple-darwin` release candidates from one exact revision and lockfile.
+**Implementation.** Build `aarch64-apple-darwin` release candidates from one
+exact revision and lockfile.
 Set the chosen deployment target explicitly. Inspect Mach-O load commands,
 architecture, SDK/minimum-OS metadata, dynamic dependencies, and runtime
 provider linkage. Do not embed a developer's Homebrew library paths.
 
-Prepare a source-install path and per-architecture binary packages with
+Prepare a source-install path and Apple Silicon binary packages with
 checksums and existing release provenance/SBOM conventions.
 
 Follow the landed repository licensing metadata: Jury's license identifier is
@@ -1134,7 +1207,7 @@ Follow the landed repository licensing metadata: Jury's license identifier is
 open source. Package Jury's complete `LICENSE.md` and `NOTICE.md` alongside
 the applicable third-party license texts and notices; an SBOM by itself does
 not satisfy the repository's distribution requirements. Check the extracted
-source and per-architecture binary packages, including any shipped provider
+source and Apple Silicon binary packages, including any shipped provider
 or helper, for readable notices and matching metadata. Preserve crate-local
 license/notice payloads when packaging source. These requirements come from
 the checked-in `NOTICE.md`, Cargo metadata, and `docs/open-source.md`.
@@ -1168,7 +1241,7 @@ than assuming a path or schema for its currently unfinished implementation.
 Re-run runtime tests on the signed candidate because signing/entitlements can
 affect launch and loader behavior. Preserve the witnessed defining path.
 
-**Acceptance.** A clean native Mac for each supported architecture/minimum OS
+**Acceptance.** A clean native Apple Silicon Mac on the minimum supported OS
 can install, run the synthetic strict direct/witnessed lifecycle, upgrade the
 binary without moving state, and uninstall the binary without deleting user
 state. Documentation names exact support, installation limits, state roots,
@@ -1863,8 +1936,8 @@ recovery class keeps this acceptance open.
 
 Owner: M09. Consumer: maintainers relying on native required checks.
 
-Arrange a clean job for each declared architecture/minimum-OS pair. Verify its
-host architecture, OS, compiler, SDK, lockfile, and deployment target before
+Arrange clean Apple Silicon jobs for the minimum and current macOS versions.
+Verify each host's architecture, OS, compiler, SDK, lockfile, and deployment target before
 reporting native results. Use explicit runner labels and isolated caches.
 
 Run the selected workspace/integration/conformance commands and record their
@@ -1954,14 +2027,13 @@ defects. The planning baseline used one thread for focused failure diagnosis;
 ordinary required native suites must also execute in their documented normal
 configuration after the defects are fixed.
 
-For each future architecture artifact, use the matching target explicitly:
+For the future Apple Silicon artifact, use the target explicitly:
 
 ```sh
 MACOSX_DEPLOYMENT_TARGET=15.0 cargo build --locked --release -p jury --target aarch64-apple-darwin
-MACOSX_DEPLOYMENT_TARGET=15.0 cargo build --locked --release -p jury --target x86_64-apple-darwin
 ```
 
-Run each command on its corresponding native build host for the release
+Run this command on a native Apple Silicon build host for the release
 rehearsal. A cross-compiled artifact is useful for compilation diagnosis but
 does not satisfy native execution acceptance. Inspect the emitted binary's
 actual deployment metadata and dynamic linkage rather than assuming the
@@ -1981,3 +2053,14 @@ This revision selected the exact Darwin core/fork contract, moved enforcement
 to the shared constructor boundary, assigned provider ownership, separated
 provider and Jury fault tests, and named native closure lanes. Remove this note
 when maintained executable tests and the closed M01 record supersede it.
+
+The `darwin-process-info` provider (formerly `libproc-region`) currently requires a native macOS build host,
+Apple SDK and libclang. Linux-to-Darwin cross compilation is unsupported; M10
+packaging must use a native host unless a separate cross-build lane is validated.
+
+The shared `native_cli` suite now runs its non-child command workflows on macOS,
+including backup/recovery, transfer, direct rollover/suite migration, policy actors,
+passphrase handling and diagnostics. Linux-only child execution/redaction and the
+full witnessed rollover orchestration remain outside those native cases. The
+separate native witnessed fixture retains actual read/inject and image replacement
+coverage; neither fixture is production juryd persistence/TLS acceptance.

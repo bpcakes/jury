@@ -64,12 +64,7 @@ pub(super) fn backup_restore_with_observer(
     };
     let state_root = match &arguments.state_out {
         Some(path) => path.clone(),
-        None => resolve_linux_state_root(
-            environment.jury_state_home.as_deref(),
-            environment.xdg_state_home.as_deref(),
-            environment.user_home.as_deref(),
-        )
-        .map_err(|_| filesystem_error())?,
+        None => state_root(environment)?,
     };
     let restored = restore_archive_with_observer(
         RestoreRequest {

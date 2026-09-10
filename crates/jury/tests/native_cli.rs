@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::fs;
 use std::io::Write as _;
@@ -20,9 +20,11 @@ mod native_cli_additional;
 #[path = "native_cli/backup.rs"]
 mod native_cli_backup;
 
+#[cfg(target_os = "linux")]
 #[path = "native_cli/execution.rs"]
 mod native_cli_execution;
 
+#[cfg(target_os = "linux")]
 #[path = "native_cli/field_redaction.rs"]
 mod native_cli_field_redaction;
 
@@ -47,6 +49,7 @@ mod native_cli_transfer;
 #[path = "native_cli/rollover.rs"]
 mod native_cli_rollover;
 
+#[cfg(target_os = "linux")]
 #[path = "native_cli/witnessed.rs"]
 mod native_cli_witnessed;
 

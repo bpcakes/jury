@@ -142,7 +142,7 @@ pub(super) fn check_new_item_name(
         let endpoints = entry
             .witnesses
             .iter()
-            .map(|spec| WitnessEndpointClient::parse(spec, entry.allow_insecure_loopback))
+            .map(|spec| WitnessEndpointClient::load(spec, entry.allow_insecure_loopback))
             .collect::<Result<Vec<_>, _>>()?;
         let files = WitnessActionFiles {
             checkpoint: &entry.checkpoint,

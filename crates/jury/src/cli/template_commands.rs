@@ -176,11 +176,12 @@ fn witnessed_template_inject(
         .transpose()
         .map_err(|_| invalid_template())?;
     let receipt_destination = prepare_witness_receipt_destination(receipt_path)?;
+    let executable_identity = template_executable_identity()?;
     let endpoints = arguments
         .witnesses
         .iter()
         .map(|specification| {
-            WitnessEndpointClient::parse(specification, arguments.allow_insecure_loopback)
+            WitnessEndpointClient::load(specification, arguments.allow_insecure_loopback)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let context = load_vault_principal(cli, environment, current, protection)?;
@@ -230,7 +231,7 @@ fn witnessed_template_inject(
         item_id,
         field_ids,
         operation_context: OperationContextV1::TemplateInjection,
-        executable_identity: Some(template_executable_identity()?),
+        executable_identity: Some(executable_identity),
         arguments: manifest_arguments,
         working_directory: Some(
             OperationBytes::new(working_directory).map_err(|_| invalid_template())?,
@@ -367,19 +368,37 @@ fn append_public_manifest_bytes(
 }
 
 fn template_executable_identity() -> Result<jury_protocol::witness_v1::OperationBytes, CliError> {
-    use std::os::unix::fs::MetadataExt as _;
-    let path = std::fs::canonicalize("/proc/self/exe").map_err(|_| invalid_template())?;
-    let metadata = std::fs::metadata(&path).map_err(|_| invalid_template())?;
-    let path = path.to_str().ok_or_else(invalid_template)?;
+    let image =
+        jury_process::RunningImage::capture().map_err(|_| renderer_identity_unavailable())?;
+    let path = image
+        .path()
+        .to_str()
+        .ok_or_else(renderer_identity_encoding_unavailable)?;
     let descriptor = format!(
         "jury-template-renderer-v1|{path}|{}|{}|{}|{}",
-        metadata.dev(),
-        metadata.ino(),
-        metadata.mode(),
-        metadata.len()
+        image.device(),
+        image.inode(),
+        image.mode(),
+        image.length()
     );
     jury_protocol::witness_v1::OperationBytes::new(descriptor.into_bytes())
-        .map_err(|_| invalid_template())
+        .map_err(|_| renderer_identity_encoding_unavailable())
+}
+
+fn renderer_identity_encoding_unavailable() -> CliError {
+    CliError::new(
+        CliErrorKind::Filesystem,
+        "renderer-identity-unavailable",
+        "the renderer identity requires a shorter UTF-8 executable path; move Jury to such a path and restart",
+    )
+}
+
+fn renderer_identity_unavailable() -> CliError {
+    CliError::new(
+        CliErrorKind::Filesystem,
+        "renderer-identity-unavailable",
+        "the running renderer identity could not be established; restart Jury from an intact installation",
+    )
 }
 
 fn normalized_private_output(path: &Path) -> Result<Vec<u8>, CliError> {
@@ -494,6 +513,27 @@ pub(super) fn append_bounded_output(output: &mut Vec<u8>, bytes: &[u8]) -> Resul
 #[cfg(test)]
 mod parser_tests {
     use super::*;
+
+    #[test]
+    fn renderer_identity_preserves_the_manifest_descriptor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::MetadataExt as _;
+        let path = std::fs::canonicalize(std::env::current_exe()?)?;
+        let metadata = std::fs::metadata(&path)?;
+        let expected = format!(
+            "jury-template-renderer-v1|{}|{}|{}|{}|{}",
+            path.to_str().ok_or("non-UTF-8 fixture executable")?,
+            metadata.dev(),
+            metadata.ino(),
+            metadata.mode(),
+            metadata.len(),
+        );
+        assert_eq!(
+            template_executable_identity()?,
+            jury_protocol::witness_v1::OperationBytes::new(expected.into_bytes())?,
+        );
+        Ok(())
+    }
 
     #[test]
     fn template_parser_rejects_malformed_delimiters_and_excess_references() {

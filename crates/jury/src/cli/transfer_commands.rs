@@ -364,12 +364,7 @@ fn preview_existing_import_read_only(
     {
         return Err(identity_not_registered());
     }
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_root = state_root(environment)?;
     validate_detached_separation(&state_root, &unlocked.home)?;
     let repositories = repository_refs(&unlocked.home);
     match probe_principal_state(&state_root, local_vault, &principal_id, &repositories)? {
@@ -456,12 +451,7 @@ fn import_absent(
         &transfer.vault().items,
     )
     .map_err(|_| invalid_vault())?;
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_root = state_root(environment)?;
     validate_detached_separation(&state_root, &unlocked.home)?;
     if arguments.dry_run {
         let repositories = repository_refs(&unlocked.home);
@@ -610,12 +600,7 @@ fn reject_transfer_destination(
     path: &Path,
 ) -> Result<(), CliError> {
     let identity = identity_root(environment)?;
-    let state = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state = state_root(environment)?;
     if overlaps(path, &identity)
         || overlaps(path, &state)
         || cli.identity_file.as_ref().is_some_and(|file| file == path)

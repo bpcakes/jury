@@ -437,12 +437,7 @@ fn load_principal_context_with_passphrase(
     let home = selected_home(cli, environment, current)?;
     let bytes = read_vault(&home)?;
     let vault = VaultFileV1::parse(&bytes).map_err(|_| invalid_vault())?;
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_root = state_root(environment)?;
     validate_detached_separation(&state_root, &home)?;
     let early_repositories = repository_refs(&home);
     let (catalog, catalog_before_bytes) = match VaultStateDirectory::open_existing(

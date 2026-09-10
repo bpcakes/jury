@@ -17,7 +17,7 @@ wait-timeout = "=0.2.1"
 rustix = { version = "=1.1.4", features = ["fs", "process", "std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libproc = "=0.14.11"
+darwin-process-info = { version = "=0.1.0", path = "../../third_party/darwin-process-info" }
 
 [dev-dependencies]
 tempfile = "=3.23.0"

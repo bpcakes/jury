@@ -265,43 +265,9 @@ impl std::error::Error for ProcessScanContext {
 pub(crate) fn macos_process_group_contains_only_pinned_leader(
     process_group: ProcessGroupId,
 ) -> std::io::Result<bool> {
-    use libproc::processes::{ProcFilter, pids_by_type};
-
     let raw_group = u32::try_from(process_group.as_raw())
         .map_err(|_| std::io::Error::other("macOS process-group identity was invalid"))?;
-    let members = pids_by_type(ProcFilter::ByProgramGroup { pgrpid: raw_group })?;
-    classify_macos_process_group_snapshot(process_group, &members)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn classify_macos_process_group_snapshot(
-    process_group: ProcessGroupId,
-    members: &[u32],
-) -> std::io::Result<bool> {
-    let raw_group = u32::try_from(process_group.as_raw())
-        .map_err(|_| std::io::Error::other("macOS process-group identity was invalid"))?;
-    if members.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "macOS process-group snapshot omitted the pinned leader",
-        ));
-    }
-    if members.contains(&0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "macOS process-group snapshot returned a non-positive member identifier",
-        ));
-    }
-    if members.len() == 1 && members[0] == raw_group {
-        return Ok(true);
-    }
-    if members.contains(&raw_group) {
-        return Ok(false);
-    }
-    // XNU may list live members ahead of the zombie leader. A non-empty
-    // snapshot without the leader therefore proves only that the group is not
-    // quiescent; the retained wait status still pins the numeric generation.
-    Ok(false)
+    darwin_process_info::process_group_has_only_leader(raw_group)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -344,21 +310,6 @@ mod tests {
         assert!(ProcessGroupId::new(0).is_err());
         assert!(ProcessGroupId::new(-1).is_err());
         assert!(ProcessGroupId::try_from(u32::MAX).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn macos_snapshot_requires_the_exact_sole_pinned_leader() -> std::io::Result<()> {
-        let process_group = ProcessGroupId::new(73)?;
-        assert!(classify_macos_process_group_snapshot(process_group, &[73])?);
-        for members in [&[73, 74][..], &[74, 73], &[74, 75], &[73, 73]] {
-            assert!(!classify_macos_process_group_snapshot(
-                process_group,
-                members
-            )?);
-        }
-        assert!(classify_macos_process_group_snapshot(process_group, &[]).is_err());
-        assert!(classify_macos_process_group_snapshot(process_group, &[0]).is_err());
         Ok(())
     }
 

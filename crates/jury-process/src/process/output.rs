@@ -9,6 +9,10 @@ use super::{
     ProcessOutputLimits, ProcessOutputRedaction, ProcessPipe, TRUNCATED_OUTPUT_POLL_INTERVAL,
 };
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+#[path = "output_tests.rs"]
+mod tests;
+
 pub(super) struct OutputDrain {
     reader: Option<ProcessPipe>,
     redactor: Option<StreamingRedactor>,
@@ -252,6 +256,13 @@ impl OwnedProcessOutputDrains {
                     std::thread::sleep(Duration::from_millis(2));
                 }
             }
+        }
+        // The deadline bounds waiting, not inspection of already-ready bytes.
+        // Scheduling may consume the remaining budget before EOF is polled.
+        // Make one final bounded nonblocking poll, without another sleep or
+        // flushing redaction overlap unless the pipe actually reports EOF.
+        if !self.is_terminal() {
+            self.poll(observer)?;
         }
         // Dropping an open reader closes the local pipe promptly. Dropping its
         // redactor also zeroizes any incomplete overlap.

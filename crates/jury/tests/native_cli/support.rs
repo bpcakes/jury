@@ -22,6 +22,10 @@ pub(super) fn jury_command(repository: &Path, data: &Path, state: &Path) -> Comm
         .env("HOME", data)
         .env("XDG_DATA_HOME", data)
         .env("XDG_STATE_HOME", state);
+    #[cfg(target_os = "macos")]
+    command
+        .env("JURY_IDENTITY_HOME", data.join("jury/identities"))
+        .env("JURY_STATE_HOME", state.join("jury/vaults"));
     command
 }
 
@@ -41,7 +45,8 @@ pub(super) fn run_with_environment(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let output = collect_after_input(child, input)?;
+    let output = collect_after_input(child, input)
+        .inspect_err(|_| eprintln!("jury test input failed: {arguments:?}"))?;
     if !output.status.success() {
         eprintln!("jury test command failed: {arguments:?}");
     }

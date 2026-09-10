@@ -72,10 +72,12 @@ fn populated_state() -> Result<PersistedWitnessState, Box<dyn std::error::Error>
 #[test]
 fn nonempty_replay_survives_sqlite_reopen_backup_and_restore() -> TestResult {
     let directory = tempfile::tempdir()?;
+    // SQLite NOFOLLOW requires the physical path, including on Darwin.
+    let root = directory.path().canonicalize()?;
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-    let source = directory.path().join("ExampleWitness.sqlite3");
-    let backup = directory.path().join("ExampleBackup.sqlite3");
-    let restored = directory.path().join("ExampleRestored.sqlite3");
+    let source = root.join("ExampleWitness.sqlite3");
+    let backup = root.join("ExampleBackup.sqlite3");
+    let restored = root.join("ExampleRestored.sqlite3");
     let expected = populated_state()?;
     let witness_id = expected.logical.witness_id;
     SqliteWitnessStore::initialize(&source, witness_id)?;

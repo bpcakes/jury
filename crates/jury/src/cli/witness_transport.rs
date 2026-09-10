@@ -123,7 +123,8 @@ enum RefusalReason {
 }
 
 impl WitnessEndpointClient {
-    pub(super) fn parse(
+    /// Parse the endpoint and load its trust roots and private bearer credential.
+    pub(super) fn load(
         specification: &str,
         allow_insecure_loopback: bool,
     ) -> Result<Self, CliError> {
@@ -461,7 +462,7 @@ mod tests {
             "00,https://example.invalid,/absent,/absent-ca".to_owned(),
             format!("{id},https://example.invalid,/absent,/absent-ca,extra"),
         ] {
-            assert!(WitnessEndpointClient::parse(&specification, true).is_err());
+            assert!(WitnessEndpointClient::load(&specification, true).is_err());
         }
     }
 

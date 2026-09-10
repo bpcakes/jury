@@ -10,7 +10,7 @@ members = [
     "crates/jury-witness",
 ]
 resolver = "3"
-exclude = ["third_party/sanitization"]
+exclude = ["third_party/sanitization", "third_party/darwin-process-info"]
 
 [workspace.package]
 version = "0.0.1"

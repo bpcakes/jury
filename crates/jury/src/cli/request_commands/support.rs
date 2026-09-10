@@ -31,7 +31,7 @@ pub(super) fn request_cancel(
         .witnesses
         .iter()
         .map(|specification| {
-            WitnessEndpointClient::parse(specification, arguments.allow_insecure_loopback)
+            WitnessEndpointClient::load(specification, arguments.allow_insecure_loopback)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let artifact = read_request_artifact(&arguments.request)?;

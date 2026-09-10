@@ -42,36 +42,6 @@ pub(super) fn mutation_output<I>(
     }
 }
 
-pub(super) fn selected_home(
-    cli: &Cli,
-    environment: &Environment,
-    current: &Path,
-) -> Result<VaultHomeLocation, CliError> {
-    resolve_vault_home(
-        current,
-        cli.home.clone(),
-        cli.global_home,
-        environment.jury_home.as_deref(),
-        environment.xdg_data_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|error| match error {
-        crate::home::HomeSelectionError::Ambiguous
-        | crate::home::HomeSelectionError::InvalidPath => CliError::new(
-            CliErrorKind::InvalidArguments,
-            "invalid-home-selection",
-            "vault home selection is invalid",
-        ),
-        crate::home::HomeSelectionError::UnsupportedPlatform => CliError::new(
-            CliErrorKind::UnsupportedPlatform,
-            "unsupported-platform",
-            "native vault homes currently support Linux only",
-        ),
-        crate::home::HomeSelectionError::MissingUserHome
-        | crate::home::HomeSelectionError::Repository => filesystem_error(),
-    })
-}
-
 pub(super) fn selected_identity(
     cli: &Cli,
     command_name: Option<&str>,
@@ -118,15 +88,6 @@ pub(super) fn selected_identity(
         )
     })?;
     Ok((selector, display.to_owned()))
-}
-
-pub(super) fn identity_root(environment: &Environment) -> Result<PathBuf, CliError> {
-    resolve_identity_root(
-        environment.jury_identity_home.as_deref(),
-        environment.xdg_data_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())
 }
 
 pub(super) fn validate_explicit_identity_separation(
@@ -262,12 +223,7 @@ pub(super) fn load_policy_and_catalog_for_vault(
     home: &VaultHomeLocation,
     vault: &VaultFileV1,
 ) -> Result<(PolicyCatalogV1, PolicyState), CliError> {
-    let state_root = resolve_linux_state_root(
-        environment.jury_state_home.as_deref(),
-        environment.xdg_state_home.as_deref(),
-        environment.user_home.as_deref(),
-    )
-    .map_err(|_| filesystem_error())?;
+    let state_root = state_root(environment)?;
     validate_detached_separation(&state_root, home)?;
     let catalog = match VaultStateDirectory::open_existing(
         &state_root,

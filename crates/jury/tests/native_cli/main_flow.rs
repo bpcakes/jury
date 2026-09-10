@@ -1,12 +1,63 @@
 use super::*;
 
+fn prepare_classified_fields(paths: NativePaths<'_>) -> TestResult {
+    let NativePaths {
+        repository,
+        data,
+        state,
+    } = paths;
+    let concealed_set = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "vault",
+            "field",
+            "set",
+            "ExampleItem",
+            "ExampleSecret",
+            "--concealed",
+            "--value-stdin",
+        ],
+        b"ExamplePass1234\nConcealedValue",
+    )?)?;
+    assert_eq!(concealed_set["operation"], "field-set");
+    assert!(!concealed_set.to_string().contains("ConcealedValue"));
+
+    let binary_set = success_json(run(
+        repository,
+        data,
+        state,
+        &[
+            "--json",
+            "--passphrase-stdin",
+            "--allow-degraded-protection",
+            "vault",
+            "field",
+            "set",
+            "ExampleItem",
+            "ExampleBinary",
+            "--value-stdin",
+        ],
+        b"ExamplePass1234\n\xff\x01\x02\x03",
+    )?)?;
+    assert_eq!(binary_set["operation"], "field-set");
+
+    Ok(())
+}
+
 fn exercise_execution_and_plaintext(temporary: &Path, paths: NativePaths<'_>) -> TestResult {
     let NativePaths {
         repository,
         data,
         state,
     } = paths;
+    #[cfg(target_os = "linux")]
     native_cli_execution::exercise_successful_execution(temporary, repository, data, state)?;
+    #[cfg(target_os = "linux")]
     native_cli_execution::exercise_adversarial_execution(temporary, repository, data, state)?;
     native_cli_plaintext::exercise_plaintext_sinks(temporary, repository, data, state)
 }
@@ -79,6 +130,7 @@ fn fresh_repository_identity_vault_and_public_status_flow() -> TestResult {
     assert_human_access_inspection(paths, &identity, &candidate)?;
     change_and_revoke_candidate_access(paths, &candidate)?;
     set_example_field(paths)?;
+    prepare_classified_fields(paths)?;
     exercise_execution_and_plaintext(temporary.path(), paths)?;
     cover_and_remove_fields(paths)?;
     change_identity_passphrase(paths, &identity)
