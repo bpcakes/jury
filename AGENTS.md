@@ -8,13 +8,10 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Use this file for repo-wide defaults.
 - Open [agent-map.md](./agent-map.md) before backend work.
 - Read the nearest backend-level `AGENTS.md` before changing a package or crate when one exists.
-- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
 - Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
 - On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
-- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
-- A plan captures an exact Git baseline. Default `work check` runs required gates whose configured path policy applies and records explicit not-applicable evidence for the rest; use `--gate <id>` only when deliberately force-running one gate.
 - `jig-contract` validates Jig harness wiring, not the application's API contract.
-- Treat `.agent/state/*.jsonl` as append-only repo memory.
+- Keep active `.agent/state` run history and loop receipts as append-only evidence.
 
 ## Compatibility And Cutovers
 
@@ -54,11 +51,6 @@ No web apps are configured in `.jig.toml`.
 
 
 - `scripts/jig check clippy`
-
-- `scripts/jig work status`
-- `scripts/jig work evidence`
-
-
 
 - `scripts/jig check contract`
 
