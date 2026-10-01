@@ -65,10 +65,9 @@ secrets. Preserve frozen files under `docs/security` and `conformance` unless
 the corresponding construction gate is explicitly being reopened.
 
 Use the repository's `br` tracker and the scoped release workflow in
-`AGENTS.md`. For substantial changes, connect the plan and required checks with
-`scripts/jig work start`, `work check`, `work evidence`, `work gates`, and
-`work finish`. Source changes, verification and tracker updates belong in the
-same reviewable change.
+`AGENTS.md`. Run the relevant `scripts/jig check` targets directly; the former
+`jig work` lifecycle has been retired. Source changes, verification and tracker
+updates belong in the same reviewable change.
 
 See [the licensing guide](docs/open-source.md) for self-hosting and commercial
 service boundaries.
